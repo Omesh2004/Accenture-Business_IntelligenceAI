@@ -56,3 +56,5 @@ ENV/
 *.pid
 *.seed
 *.stackdump
+
+/Docs/*
