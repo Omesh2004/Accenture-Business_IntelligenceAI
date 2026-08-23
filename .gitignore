@@ -58,4 +58,6 @@ ENV/
 *.seed
 *.stackdump
 
-/Docs/*
+# Development Related Agent Files
+/docs/*
+!/docs/*.md
