@@ -57,3 +57,7 @@ ENV/
 *.pid
 *.seed
 *.stackdump
+
+# Development Related Agent Files
+/docs/*
+!/docs/*.md

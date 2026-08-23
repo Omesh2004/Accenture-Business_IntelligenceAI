@@ -1,0 +1,54 @@
+# The worked example. Author the other two chain KPIs (loan_approval_volume, pro_revenue)
+# against this shape. See docs/KPI_CONTRACT.md.
+
+id: kyc_completion_rate
+name: KYC Completion Rate
+definition: >
+  The share of started loan-KYC journeys that reach KYC completion within the session.
+formula: kyc_completed_users / kyc_started_users
+grain: daily
+additivity: non-additive        # it is a ratio; never sum across days
+
+source:
+  name: nexabank_clickstream
+  system: ClickHouse.events_raw
+  cadence: real-time
+
+# Localize runs on these additive fundamentals, never on the rate itself.
+ratio:
+  numerator:
+    metric: kyc_completed_users
+    event: loan.kyc_completed.success
+    additivity: additive
+  denominator:
+    metric: kyc_started_users
+    event: loan.kyc.started       # confirm this exact name in all 3 taxonomy dialects
+    additivity: additive
+
+dimensions: [device_type, country, tier, channel]
+
+drivers:
+  - loan_apply_volume             # fewer applies -> fewer starts
+  - kyc_step_dropoff              # which KYC step leaks users
+  - marketing_campaign            # weekly source; drives applies
+
+thresholds:
+  warn:     { direction: down, pct_change: 8 }
+  critical: { direction: down, pct_change: 15 }
+
+strategic_weight: 0.9             # KYC gates loan approvals and revenue; high business weight
+
+owner: growth_analytics
+
+lineage:
+  events:   [loan.kyc.started, loan.kyc_completed.success]
+  endpoint: /funnels?steps=loan.kyc.started,loan.kyc_completed.success
+  tables:   [events_raw, daily_feature_usage]
+
+access_restriction:
+  visible_to: [cfo, ops_manager, analyst]   # the rate is not sensitive; margin KPIs would be
+
+freshness_sla_minutes: 15
+
+interconnection:
+  drives: loan_approval_volume
