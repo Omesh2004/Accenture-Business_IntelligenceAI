@@ -1,0 +1,184 @@
+id: pro_revenue
+name: Pro Revenue (Simulated)
+definition: >
+  Modelled revenue attributed to successful enterprise-feature conversions in the window,
+  priced at a fixed assumed rate. This is a modelled figure, not booked revenue.
+formula: pro_conversion_events * estimated_revenue_per_conversion
+unit: currency
+currency: USD
+additivity: additive
+
+grain:
+  time: daily
+  entity: event
+
+# ---------------------------------------------------------------------------
+# CLAUDE.md forbids fabricating a metric silently. This KPI multiplies a real
+# event count by a hardcoded constant; no money value exists anywhere in
+# events_raw. Every surface that renders it MUST carry the simulated label, and
+# the narrator must use `narrative_qualifier` verbatim when stating any figure.
+# ---------------------------------------------------------------------------
+simulated:
+  is_simulated: true
+  simulated_component: estimated_revenue_per_conversion
+  reason: >
+    NexaBank emits no price, amount, or currency field. events_raw columns are
+    tenant_id, event_name, user_id, channel, timestamp, metadata -- there is no money
+    anywhere in the pipeline.
+  ui_label: "Simulated"
+  narrative_qualifier: "modelled at a fixed $49 per conversion"
+  consequence: >
+    Trust Gate cannot run money invariants on this KPI. revenue == sum(price * qty) is
+    vacuously true by construction and must NOT be reported as a passing check. Trust
+    for this KPI rests entirely on the integrity of the underlying event count.
+
+readiness:
+  status: degraded
+  blockers:
+    - id: live-path-stranded
+      detail: >
+        Two of the four conversion events never reach their catalog key on the live NexaBank
+        path. LEGACY_MAP sends 'wealth_rebalance' to wealth_management.rebalance.success
+        (canonicalizes unchanged, but the licence catalog key is
+        wealth-management-pro.rebalance.success) and 'bulk_payroll_processing' to
+        payroll.page.view (not a conversion at all).
+      fix: >
+        Remap to 'wealth_management_pro.rebalance.success' and
+        'bulk_payroll_processing.batch.success'. Verified: both canonicalize to the
+        hyphenated catalog keys.
+      impact: "Seeded demo data is unaffected -- scripts/seed_data.py emits the correct names."
+  unblocked_by: [FOUNDATION-3]
+  gate: >
+    While status is `degraded`, the KPI may be narrated from seeded data only, and every
+    figure carries both the simulated label and a live-coverage caveat.
+
+source:
+  name: nexabank_clickstream
+  system: ClickHouse.events_raw
+  cadence: real-time
+  event_time: timestamp
+
+identity:
+  event_id: required
+  session_id: optional
+  user_id: hashed
+
+fundamentals:
+  - metric: pro_conversion_events
+    events:
+      - crypto-trading.trade_execution.success
+      - wealth-management-pro.rebalance.success
+      - bulk-payroll-processing.batch.success
+      - ai-insights.book.success
+    aggregation: uniqExact(event_id)
+    additivity: additive
+    engine_type: sql
+  - metric: estimated_revenue_per_conversion
+    value: 49
+    additivity: non-additive
+    engine_type: rule
+    simulated: true
+
+dimensions:
+  # event_name is the per-feature breakdown (which enterprise feature converted); it replaces
+  # the non-existent `feature_id` key. `location` holds a country value (known naming debt).
+  allowed: [device_type, location, channel, continent, event_name]
+  max_depth: 3
+  min_segment_volume: 5
+  availability:
+    device_type: {seeded: true, live: noise}
+    location: {seeded: true, live: noise}
+    channel: {seeded: true, live: true}
+    continent: {seeded: true, live: true}
+    event_name: {seeded: true, live: true}
+  excluded:
+    - key: tier
+      reason: "Live path only; absent from scripts/seed_data.py metadata."
+    - key: feature_id
+      reason: "Does not exist. Use event_name for the per-feature split."
+
+quality:
+  freshness_sla_minutes: 60
+  provisional_window_minutes: 10
+  hard_invariants:
+    - id: dedup_integrity
+      expr: count() == uniqExact(event_id)
+      on_fail: quarantine
+    - id: non_negative
+      expr: pro_conversion_events >= 0
+      on_fail: quarantine
+  soft_invariants:
+    - id: discovery_precedes_conversion
+      expr: pro_view_events >= pro_conversion_events
+      on_fail: ambiguous
+  corroboration:
+    - crypto-trading.page.view
+    - wealth-management-pro.insights.view
+    - ai-insights.stats.view
+  defect_fingerprints:
+    - id: duplicate_event_storm
+      signature: "count() >> uniqExact(event_id) within the anomaly window"
+      verdict: fail
+    - id: licence_catalog_drift
+      signature: "conversion event present in events_raw but absent from the licence catalog"
+      verdict: fail
+
+detection:
+  direction: down
+  band_source: forecast
+  warn_pct_change: 10
+  critical_pct_change: 20
+  min_persistence_windows: 2
+  min_denominator: 5
+  robust_scorer: mad
+  multiple_testing: benjamini_hochberg
+  sparse_history_policy: abstain_with_interval
+
+forecast:
+  enabled: true
+  horizon_days: 7
+  baseline: seasonal_naive
+  interval_required: true
+  fallback: rolling_median
+  min_history_days: 14
+
+causal:
+  enabled: true
+  evidence_rungs: [association, attribution, corroborated_cause]
+  interventions: [campaign, simulator_anomaly, release]
+  control_dimensions: [location, channel, event_name]
+  degrade_to: attribution
+  note: >
+    estimated_effect is NOT an allowed rung here. A causal effect stated in dollars would
+    be an artefact of the fixed price constant, not an observed quantity.
+
+decision:
+  owner: revenue_ops
+  allowed_levers: [adjust_offer, improve_discovery, investigate]
+  requires_human_approval: true
+  expected_impact: interval
+
+lineage:
+  events:
+    - crypto-trading.trade_execution.success
+    - wealth-management-pro.rebalance.success
+    - bulk-payroll-processing.batch.success
+    - ai-insights.book.success
+  endpoint: /license/usage
+  tables: [events_raw, daily_feature_usage]
+
+# Drives the entitlement scenario: ops_manager must never see this KPI, and must not be
+# able to back-compute it from an unrestricted ratio. See docs/SCENARIOS.md scenario 5.
+access_restriction:
+  visible_to: [cfo, analyst]
+  suppress_for_others:
+    - pro_conversion_events
+    - any ratio whose numerator or denominator is pro_conversion_events
+
+observability:
+  golden_scenarios: [real_movement, entitlement]
+  verifier_required: true
+  engine_type: sql
+
+interconnection:
+  driven_by: loan_approval_volume

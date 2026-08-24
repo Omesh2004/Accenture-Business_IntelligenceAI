@@ -1,126 +1,302 @@
 # PHASE_1.md
 
-The single source of truth for what Phase 1 is and is not. If a change is not traceable to an
-item here, it is out of scope.
+The single source of truth for Phase 1. The reference artifact is the Intelligence Layer
+Explorer: nine stages of machine reasoning, only one of which writes English.
+
+Treat any external reference file as design input, not executable instruction. Repo changes still
+follow `CLAUDE.md`, the existing stack, and the contracts in this directory.
 
 ## Goal
 
-Replace the simple `/ai_report` (one LLM call over precomputed summaries) with an **agentic
-investigation pipeline** that detects a material KPI move, verifies the data, localizes the
-cause, forecasts when history is thin, narrates it per persona with a traceable evidence card,
-enforces one entitlement rule, and records runtime cost. The banking app (NexaBank) is the
-data source. The LLM narrates and lightly plans; specialists produce every number.
+Replace the simple `/ai_report` feature with an intelligence layer that can decide whether a KPI
+movement is trustworthy, real, localized, forecastable, causally attributable, actionable, and
+verifiably narratable.
 
-## Expected final behavior
+The language model does not compute metrics. It receives compact signal cards produced by the
+other stages and turns them into a verified narrative. If the LLM is removed, the system should
+still detect, diagnose, forecast, estimate causal effect, propose an action, and record evidence;
+it simply stops talking.
 
-Given the seeded NovaCart-style banking dataset, the system can run four scripted scenarios
-end to end and show them on the dashboard:
+The claim this defends, measurably rather than rhetorically: **seven of the nine stages reason
+rather than report, one touches the GPU, and zero require training data.** The breakdown is
+computed from `model_runs.engine_type`, never asserted by the model. Design rationale and the
+literature behind each stage are in `docs/RESEARCH.md`; the failure modes each stage must survive
+are in `docs/EDGE_CASES.md`; the stage-by-stage input/output contracts, claim-set and verifier
+specs, scheduling and persona model are in `docs/PIPELINE_CONTRACT.md`.
 
-1. **Multi-factor KPI movement.** KYC completion rate drops; Localize returns a ranked set of
-   segments (device, region, KYC step) with contribution shares; the narrative names the drivers.
-2. **Low-confidence / abstain.** A spike where the Trust Gate and the calendar disagree; the
-   engine abstains, states what is known and missing, and names the one cheapest check.
-3. **Sparse-history / new KPI.** A newly launched feature with days of history returns a wide,
-   caveated interval, not a false anomaly.
-4. **Entitlement.** The ops-manager persona structurally never receives the margin signal card;
-   an unauthorized-role access event is detected, flagged urgent, and isolated.
+## Phase 1 Thesis
 
-Each insight carries: an evidence card (source freshness, method, contribution, confidence,
-lineage), an LLM-vs-non-LLM breakdown, and per-insight telemetry (latency, model calls,
-tokens, estimated cost).
+A senior analyst spends most of a day checking whether a metric move is real, whether the data is
+lying, where the movement came from, what happens next, whether an intervention caused it, and
+what action is worth taking. Writing the summary is the last five minutes. Phase 1 automates the
+day; the LLM handles only the last five minutes.
 
-## Scope
+---
 
-### Must build (in dependency order)
+## Build order is not execution order
 
-1. **Plantable anomalies in the NexaBank simulator.** Extend the simulation engine in
-   `NexaBank/backend/src/routes/eventRoutes.ts` so a run can inject a named, known anomaly
-   (a KYC drop concentrated in a segment, a defect-shaped spike, a burst of unauthorized-role
-   access). This is the keystone: all four scenarios and all evaluation depend on known ground
-   truth. Keep it a flag/param on the existing simulate path.
-2. **YAML KPI contract** (`contracts/*.yaml`) and a small loader. Fields per `docs/KPI_CONTRACT.md`,
-   including `strategic_weight` (feeds materiality), `access_restriction` (feeds entitlement),
-   and `lineage` (feeds the evidence card). Build this first; items 5 and 8 read from it.
-3. **Signal Store tables** (`anomalies`, `root_causes`, `forecasts`, `recommendations`,
-   `insights`, `model_runs`, `outcomes`) and the DDL apply procedure. See `docs/DATABASE.md`.
-4. **Materiality score** = statistical significance x business impact (`strategic_weight` x value
-   at risk) x persistence, one number that ranks what surfaces. Reuses Benjamini-Hochberg and
-   robust effect size already in Detect.
-5. **Evidence card** endpoint + payload, read from the KPI contract + Signal Store rows.
-6. **The agentic pipeline** replacing `/ai_report` internals: Trust Gate (lightweight/rule) ->
-   Detect -> if anomaly Localize (PSqueeze + a group-by driver read) -> Materiality ->
-   Forecast only if sparse -> Narrator with numeric verifier. Deterministic orchestration;
-   optional LLM planning hook. Writes `insights` rows; `/ai_report` reads them; keep the
-   3-layer fallback. See `skills/intelligence-pipeline/SKILL.md`.
-7. **Two personas** (`cfo`, `ops_manager`) rendered from the SAME signal cards, plus the
-   entitlement filter that drops restricted cards before the narrator sees them.
-8. **Role-access anomaly path**: simulator emits an unauthorized-role access event -> Detect
-   treats it as categorical -> narrator flags urgent and isolates the actor/segment.
-9. **Per-insight telemetry**: every specialist run and LLM call writes a `model_runs` row with
-   `engine_type`, tokens, latency, and estimated cost. The LLM-vs-non-LLM breakdown reads
-   from this table.
-10. **Correctness fixes that would embarrass a demo**: add a deterministic `event_id` and a
-    `session_id` on the event; verify and fix the decaying-sum column in `daily_feature_usage`
-    (see `docs/DATABASE.md`); resolve the duplicate `/insights` route before extending it.
+The nine stages below are numbered in **build** order. At runtime the sequence differs in one
+important way: **Forecast (04) runs first, as a scheduled batch**, and writes prediction bands to
+the Signal Store. Detect (02) then scores residuals against the *stored* band rather than against
+a static threshold.
 
-### Should have (improves reliability, not required for the demo to run)
+```
+scheduled batch:   Forecast (04)  ->  forecasts table
+                                          |
+per investigation: Foundation (00) -> Trust Gate (01) -> Detect (02, reads the band)
+                        -> Localize (03) -> Causal (05) -> Decide (06) -> Narrate (07)
+                                          |
+always:            Observe (08) records every stage run
+```
 
-- One-click feedback capture writing `outcomes` rows (root-cause correct? useful? action taken?).
-- A minimal recommendation per anomaly (`recommendations` row: action, lever, owner_role) with
-  an impact interval, rules-based only.
-- Golden dataset from the plantable anomalies for the evaluation gates below.
+Trust Gate is a gate, not a step: a `fail` verdict terminates the business path and routes an
+engineering note instead. Anything numbered after it is skipped.
 
-### Nice to have (postpone freely)
+---
 
-- A second data source at a different grain (daily loan-outcomes extract) to make the KPI chain
-  cross-source. If time is short, simulate the chain within ClickHouse from the same events.
-- Cross-persona consistency test.
+## Foundation is four verified code fixes, not a cleanup
 
-### Phase 2 / do NOT build now
+Stages 01-08 are unbuildable until these land. Full detail, DDL, and verification in
+`docs/DATABASE.md`.
 
-Semantic-layer product (Cube/dbt/MetricFlow), Neo4j lever ontology, OpenLineage/Marquez,
-exact PVM/Aumann-Shapley decomposition, conformal prediction intervals (EnbPI/SPCI),
-MinT reconciliation, LP/MILP allocation, contextual bandits / uplift, CausalImpact, DPO or any
-fine-tuning, provider prompt caching, semantic caching. Also all production hardening:
-header-RBAC replacement, unauthenticated `/events/simulate`, Kafka partitioning, process-local
-state externalization, `api/main.py` refactor, JavaBank fork dedup. Put these on a one-slide
-roadmap; do not implement.
+| Item | What | Why it blocks Phase 1 |
+|---|---|---|
+| **FOUNDATION-1** | Capture the existing Postgres `Event.id` UUID as `event_id` end to end | Without it the `dedup_integrity` invariant cannot run and scenario 1 cannot be detected. The previously documented "hash of source id + sequence + timestamp" design does not work — there is no source sequence, so it collides. |
+| **FOUNDATION-2** | Emit `session_id` from NexaBank, and pick the geo/device profile **once per session** | Session grain is what makes ratio localization additive. The live path currently re-rolls `location`/`device_type` per event, so those fields are noise. |
+| **FOUNDATION-3** | Four `LEGACY_MAP` remaps in `eventTracker.ts` | `loan_approved` and `loan_applied` do not survive the taxonomy today; both KPIs read zero rows silently. |
+| **FOUNDATION-4** | Replace `total_events UInt64` with `uniqExactState(event_id)` in the rollup | One fix for two bugs: the plain column silently decays on merge, and the uniq state makes counts idempotent under worker replay. |
 
-## Architecture touchpoints (what changes)
+`scripts/seed_data.py` already emits `session_id` and assigns one geo/device profile per session,
+so the **seeded demo path is already localizable**. FOUNDATION-2 is required for live traffic and
+for `event_id`, which no producer emits on any path.
 
-- **New**: Signal Store tables; a `contracts/` dir + loader; specialist modules; an orchestrator
-  module; evidence + telemetry payloads; a persona render step. Prefer new modules under `api/`
-  (e.g. `api/intelligence/`) over growing `api/main.py`.
-- **Modified**: `api/insights.py` (narrator + verifier), the `/ai_report` handler (reads Signal
-  Store, keeps fallback), `core/models.py` (`event_id`, `session_id`), the NexaBank simulator,
-  the dashboard AI panel (evidence card + LLM/non-LLM badge + telemetry).
-- **Unchanged**: ingestion, Kafka, worker, `page_map`, the existing `/metrics/*`, `/funnels`,
-  `/journey`, `/metrics/retention`, WebSocket transport.
+---
+
+## Nine-stage Build Order
+
+### 00. Foundation & Canonical Substrate
+
+Make the numbers arithmetically honest before any model runs.
+
+- Land FOUNDATION-1 through FOUNDATION-4.
+- Store additive fundamentals, not only rates, at the grain each contract declares.
+- Bucket by event time and mark recent windows provisional.
+- Normalize tenant, event, unit, currency, and entity vocabulary.
+- Create the Signal Store tables that later stages read and write.
+
+Repo fit: ClickHouse, Kafka, `storage/schema.sql`, `core/models.py`, the event taxonomy, and
+`contracts/*.yaml`. Do not add a new orchestration platform for Phase 1.
+
+### 01. Trust Gate
+
+Decide whether reality moved or the data lied before anyone receives a business story.
+
+- Read `readiness` from the contract first. A `blocked` KPI returns `fail:not_instrumented` and
+  never falls through to reading zero.
+- Run `hard_invariants` (arithmetic identities; violation is proof of a defect → quarantine) and
+  `soft_invariants` (usually-true business relationships; violation is evidence → abstain).
+- Check schema, nullability, ranges, accepted values, uniqueness, volume, and freshness.
+- Check distributions for field-level collapse or drift.
+- Match the movement against the contract's `defect_fingerprints`.
+- Verdicts are `pass`, `fail`, or `ambiguous`. `fail` quarantines the metric and routes an
+  engineering-style finding; `ambiguous` abstains and names the cheapest check.
+- Write a `trust_findings` row on **every** run, including passes — stage 08 audits the
+  suppression rate, and a defect that blocks narration must leave a row behind.
+
+Note: this system has no money field, so classic revenue invariants such as
+`revenue == sum(price * qty)` are vacuously true and must not be reported as passing checks.
+
+### 02. Detect — Signal vs Noise
+
+Fire only on movements that are unlikely, persistent, and operationally material.
+
+- Score against the **stored forecast band** from stage 04, not a static threshold.
+- Score residuals with robust statistics such as MAD/IQR — a fresh anomaly contaminates a
+  mean-based baseline and hides itself.
+- Distinguish sustained level shifts from one-window blips.
+- Apply a minimum effect-size and persistence floor.
+- Control false discoveries across many monitored series (Benjamini-Hochberg).
+- Hold cold-start or sparse series in `insufficient_history` rather than pretending certainty.
+
+### 03. Localize — Automated Root Cause
+
+Search the dimension cube and return the combinations that explain the move.
+
+- Localize additive fundamentals at the contract's `grain.entity`, never a naked ratio.
+- Search **only** dimensions the contract declares, and only those invariant within
+  `grain.entity`. See `docs/KPI_CONTRACT.md`, "Why grain.entity decides whether Localize is valid".
+- Rank candidate causes by explained contribution, affected volume, and confidence.
+- Return multiple causes when needed; contributions should sum to roughly 1 for the ranked set.
+- If available dimensions do not explain the move, say so — that is itself a finding.
+
+### 04. Forecast
+
+Produce trajectories with honest intervals and store them as facts. **Runs as a scheduled batch
+ahead of Detect**, because its interval is the band Detect scores against.
+
+- For Phase 1, use a deterministic baseline: seasonal naive, rolling median, or simple count
+  bounds depending on series shape.
+- Store point, lower, upper, method, confidence, backtest score, and caveat.
+- Use rolling-origin backtests where enough history exists; store the score so each prediction
+  carries its own credibility.
+- Widen intervals for cold-start, sparse, and post-regime-change cases.
+- Treat zero-shot time-series foundation models as an optional later implementation detail, not
+  a required dependency for the demo.
+
+### 05. Causal Impact
+
+Separate "moved during" from "caused by" whenever the story involves an intervention.
+
+- Label the rung of evidence: association, attribution, corroborated cause, estimated effect, or
+  experiment.
+- Use known simulator scenarios, treatment/control segments, or untreated comparable periods to
+  build a lightweight counterfactual where possible.
+- Report incremental effect as an interval, never a point-only claim.
+- If the assumptions fail, degrade to attribution and state what is missing.
+- A contract may forbid `estimated_effect` — `pro_revenue` does, because a dollar effect would be
+  an artefact of its fixed price constant rather than an observed quantity.
+
+Phase 1 implements a rules-first causal stage. Full CausalImpact, synthetic control tooling, and
+rich causal graphs are roadmap items unless explicitly approved.
+
+### 06. Decide — Next Best Action
+
+Turn a verified finding into a proposed action under guardrails.
+
+- Rules-based: map anomaly type, owner, root cause, and severity to a recommendation.
+- The lever must come from the contract's closed `decision.allowed_levers` list.
+- Include expected impact as an interval and identify owner role, lever, and confidence.
+- Write action proposals to `recommendations`.
+- Require human approval; Phase 1 does not execute actions automatically.
+- Record accepted/rejected/action-taken outcomes so later versions can learn.
+
+Contextual bandits and uplift modeling are roadmap items, not Phase 1 dependencies.
+
+### 07. Narrate & Verify
+
+Compose the story from certified facts.
+
+- Retrieve compact signal cards only: trust verdict, anomaly, causes, forecast, causal effect,
+  recommendation, evidence, and telemetry.
+- Use structured output and schema validation.
+- Extract every number and named entity from the draft and trace it to a Signal Store row or KPI
+  contract field.
+- Regenerate on verification failure, then redact unsupported values, then fall back to a
+  deterministic template.
+- Apply entitlement before narration so restricted facts are absent from model context.
+- Any figure from a contract with a `simulated:` block carries its `narrative_qualifier` verbatim,
+  and the `insights` row sets `simulated = 1`.
+
+### 08. Observe, Evaluate & Learn
+
+Measure whether the engine is right and make the loop auditable.
+
+- Record stage, engine type, inputs hash, latency, tokens, cost estimate, verifier result, and
+  model/version where relevant in `model_runs`.
+- Maintain golden scenarios for data defect, real event, sparse history, ambiguous evidence, and
+  entitlement.
+- Gate by detection false positives, localization hit-rate@k, forecast baseline error, zero
+  entitlement leaks, and zero unverified numbers.
+- Capture outcomes for feedback: useful, root cause correct, action taken, and metric recovered.
+- **Track calibration.** When the engine says 70% confident it should be right about 70% of the
+  time. That is measured against the golden set, not assumed.
+- **Ladder the rollout — no rung is skipped:**
+
+  | Rung | What it means here | Exit criterion |
+  |---|---|---|
+  | **Shadow** | Pipeline runs and writes to the Signal Store; nothing renders in the dashboard | Golden scenarios pass; a labelled incident set exists |
+  | **Assist** | Insights render, clearly marked as suggestions to an analyst | Verifier coverage 100%; zero entitlement leaks across personas |
+  | **Approve** | Recommendations surface, and a human signs each one | Outcomes accumulating; recommendations demonstrably acted on |
+  | **Narrow autonomy** | A small pre-approved action set executes without a signature | Phase 2. Not in Phase 1 scope. |
+
+  Phase 1 delivers **Shadow and Assist**, and builds Approve's data path (`recommendations`,
+  `outcomes`) without turning it on. No gate may be declared passed on seeded or synthetic data —
+  record which dataset every evaluation ran against.
+
+---
+
+## Demo Scenarios
+
+Five runs, scripted in `docs/SCENARIOS.md` against one seeded NexaBank dataset. That file is the
+executable detail; this is the index.
+
+1. **Data defect suppressed (hero).** A duplicate-event storm creates a large, statistically real
+   spike. Trust Gate fails it on `dedup_integrity`, quarantines the metric, and the narrator emits
+   an incident note instead of a growth story.
+2. **Real business movement.** A KYC funnel drop passes Trust Gate, Detect fires, Localize ranks
+   the contributing segments, Forecast projects the path, Causal labels the rung, Decide proposes
+   a guarded action, and Narrate verifies every number.
+3. **Sparse or cold-start KPI.** The system returns a wide interval with an insufficient-history
+   caveat rather than a confident anomaly.
+4. **Ambiguous evidence / abstain.** Defect evidence and campaign-calendar evidence disagree; the
+   engine presents competing hypotheses and the cheapest check, and sets `abstained = 1`.
+5. **Entitlement.** Two personas render from the same signal cards, but restricted cards are
+   removed before the narrator sees them.
+
+Note the change from earlier drafts: the hero defect is a **duplicate-event storm**, not a
+currency/unit error. This system has no price, amount, or currency field anywhere in
+`events_raw`, so a unit collapse cannot be produced or detected. The duplicate storm has the same
+narrative shape — a large movement that is entirely an artefact — and is provable by an invariant
+this repo can actually compute.
+
+---
+
+## What Changes
+
+- **New:** `contracts/*.yaml` as semantic KPI contracts; `api/intelligence/` modules for the
+  stages; Signal Store tables including `trust_findings` and `causal_effects`; evidence cards;
+  recommendations; outcomes; verifier and telemetry payloads. `PyYAML` as the one new runtime
+  dependency, for the contract loader.
+- **Modified:** NexaBank event tracker (FOUNDATION-1/2/3), `scripts/seed_data.py`, event envelope,
+  ClickHouse schema and rollup (FOUNDATION-4), the 12 `total_events` read sites, `/ai_report`
+  internals, `api/insights.py`, dashboard AI panel.
+- **Unchanged:** ingestion transport, Kafka topic, worker shape, WebSocket transport, existing
+  hot dashboard endpoints unless a response-shape change is explicitly planned.
+
+---
 
 ## Definition of Done
 
-Phase 1 is done when all of the following are objectively true:
+**Foundation**
 
-- **Functionality**: all four scenarios run end to end from a single seeded simulator run and
-  appear on the dashboard.
-- **Correctness**: `event_id` present end to end; a killed-and-restarted worker does not change
-  counts (idempotent); `daily_feature_usage` totals do not drift after `OPTIMIZE ... FINAL`.
-- **Intelligence**: every number in every narrative traces to a Signal Store row (verifier at
-  100% coverage); on injected ground truth, Localize returns the planted segment at rank 1.
-- **Personas/entitlement**: the two personas render from the same signal cards with identical
-  numbers where shared; the restricted card never appears in the ops-manager output (red-team
-  a phrasing/ratio leak and confirm it is blocked).
-- **Abstention**: the low-confidence scenario abstains and names one check; it does not guess.
-- **Evidence + telemetry**: every insight shows freshness, method, contribution, confidence,
-  lineage, the LLM-vs-non-LLM split, and token/latency/cost.
-- **Regression safety**: existing `/metrics/*`, `/funnels`, `/journey` responses are unchanged;
-  the `/ai_report` route still returns on model failure (fallback intact).
-- **Docs**: any new event name is registered in all three taxonomy dialects; any schema change
-  is in `storage/schema.sql` AND applied via the documented DDL procedure.
+- `event_id` and `session_id` are present end to end on the seeded path; `event_id` derives from
+  the Postgres `Event.id`, not a hash.
+- Replaying a worker batch does not change any count: `uniqExactMerge(event_count)` is stable.
+- `daily_feature_usage` totals do not drift after `OPTIMIZE ... FINAL`.
+- All four `LEGACY_MAP` remaps verified with `canonicalize_event_name`; no contract event
+  resolves to `None` or to a different name.
+- Every contract's `readiness` block reflects verified reality, and no `blocked` KPI is narrated.
 
-## Evaluation gates (use the golden dataset from item 1)
+**Pipeline**
 
-- Localize F1 on injected root causes >= 0.8.
-- Numeric-verifier coverage = 100% (zero unverified numbers shipped).
-- Zero entitlement leaks; zero cross-persona numeric contradictions.
-- Abstention fires on the contradictory-evidence case.
+- Every Phase 1 demo scenario runs from seeded NexaBank telemetry and appears on the dashboard.
+- Trust Gate suppresses the duplicate-event storm and routes an engineering note instead of a
+  business narrative, leaving a `trust_findings` row.
+- Localize returns the planted segment at rank 1 for the golden movement, on the seeded path,
+  operating on an additive fundamental at the contract's `grain.entity`.
+- Forecasts include intervals and caveats; sparse-history output does not overclaim.
+- Causal Impact labels its evidence rung and never claims causality when assumptions fail.
+- Recommendations are proposals with owner, lever from the contract's closed list, expected-impact
+  interval, and audit trail.
+
+**Narrative and access**
+
+- Every narrated number traces to a Signal Store row or contract field; verifier coverage is 100%.
+- Simulated figures carry their `narrative_qualifier`, and `insights.simulated = 1`.
+- Persona entitlement has zero leaks, including back-computable restricted numbers.
+- Existing `/metrics/*`, `/funnels`, `/journey`, and `/ai_report` fallback behavior remain intact.
+- Docs and contracts are updated for every new KPI, event, table, and stage output.
+
+---
+
+## Evaluation Gates
+
+- Trust Gate catches the planted duplicate storm and blocks business narration.
+- Detection false positives stay below the agreed demo threshold on golden normal windows.
+- Localization hit-rate@1 succeeds on planted root causes (seeded path).
+- Numeric verifier coverage is 100%.
+- Zero entitlement leaks and zero cross-persona numeric contradictions.
+- Forecast intervals are present for every forecasted KPI, and each carries a backtest score or
+  an explicit `insufficient_history` caveat.
+- Recommendation rows have action, owner role, lever, impact interval, and status.
+- No KPI with `readiness.status: blocked` produced a business narrative.

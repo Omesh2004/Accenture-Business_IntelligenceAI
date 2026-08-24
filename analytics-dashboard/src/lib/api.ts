@@ -102,10 +102,7 @@ apiClient.interceptors.request.use(
     try {
       const session = await getCachedSession();
       if (session?.user) {
-        const appAliasMap: Record<string, string> = {
-          ...TENANT_TO_APP,
-          javabank: 'javabank',
-        };
+        const appAliasMap: Record<string, string> = { ...TENANT_TO_APP };
         if (session.user.email) {
           setRequestHeader(config, 'X-User-Email', session.user.email);
         }
@@ -551,8 +548,6 @@ export const dashboardAPI = {
       return [
         { id: "nexabank", name: "NexaBank", eventCount: 0, uniqueUsers: 0 },
         { id: "safexbank", name: "SafexBank", eventCount: 0, uniqueUsers: 0 },
-        { id: "jbank", name: "JBank", eventCount: 0, uniqueUsers: 0 },
-        { id: "obank", name: "OBank", eventCount: 0, uniqueUsers: 0 }
       ];
     }
   },
