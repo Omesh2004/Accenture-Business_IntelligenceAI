@@ -1,54 +1,184 @@
-# The worked example. Author the other two chain KPIs (loan_approval_volume, pro_revenue)
-# against this shape. See docs/KPI_CONTRACT.md.
-
 id: kyc_completion_rate
 name: KYC Completion Rate
 definition: >
-  The share of started loan-KYC journeys that reach KYC completion within the session.
-formula: kyc_completed_users / kyc_started_users
-grain: daily
-additivity: non-additive        # it is a ratio; never sum across days
+  The share of loan-KYC sessions that reach KYC completion within the same session.
+formula: kyc_completed_sessions / kyc_started_sessions
+unit: ratio
+additivity: non-additive     # the RATE is not additive; its fundamentals are. Localize the fundamentals.
+
+# Grain has two axes. `entity` is the unit of analysis and is what makes the
+# fundamentals additive across `dimensions.allowed`. See docs/KPI_CONTRACT.md
+# "Why grain.entity decides whether Localize is valid".
+grain:
+  time: daily
+  entity: session
+
+readiness:
+  status: degraded
+  seeded_path: ready          # scripts/seed_data.py -- the path the Phase 1 demo runs on
+  live_path: blocked          # NexaBank/backend/src/middleware/eventTracker.ts
+  blockers:
+    - id: no-event-id
+      affects: [seeded, live]
+      detail: >
+        No producer emits event_id and FeatureEvent has no such field, so the dedup_integrity
+        invariant below cannot run and the duplicate-event-storm scenario cannot be detected.
+      fix: "FOUNDATION-1. NexaBank Postgres Event.id (uuid) is already minted; capture and forward it."
+    - id: live-no-session-id
+      affects: [live]
+      detail: >
+        eventTracker.ts emits no session_id, so the live stream has no session grain and this
+        ratio is not localizable from it. scripts/seed_data.py DOES emit a stable per-session
+        session_id, so seeded data is unaffected.
+      fix: "FOUNDATION-2."
+    - id: live-dimensions-are-noise
+      affects: [live]
+      detail: >
+        forwardToIngestionAPI calls selectGeoProfile() and selectDevice() PER EVENT, so
+        location and device_type are re-rolled on every event and are statistically
+        independent of user, session, and outcome. Localize cannot recover a planted segment
+        from live traffic. seed_data.generate_session_events picks one profile per session and
+        reuses it, so seeded dimensions are session-invariant and localization is valid there.
+      fix: "FOUNDATION-2: derive the geo/device profile once per session, not per event."
+  gate: >
+    Narrate from the seeded path only while live_path is blocked. If a run's data came from
+    the live path, Trust Gate returns fail:not_instrumented rather than reading zero silently.
 
 source:
   name: nexabank_clickstream
   system: ClickHouse.events_raw
   cadence: real-time
+  event_time: timestamp
 
-# Localize runs on these additive fundamentals, never on the rate itself.
-ratio:
-  numerator:
-    metric: kyc_completed_users
+identity:
+  event_id: required          # NexaBank Postgres Event.id (uuid), carried through the envelope
+  session_id: required        # emitted by the producer; never inferred from a 30-minute gap
+  user_id: hashed
+
+fundamentals:
+  - metric: kyc_completed_sessions
     event: loan.kyc_completed.success
+    aggregation: uniqExact(session_id)
+    additivity: additive      # valid ONLY across session-invariant dimensions (see below)
+    engine_type: sql
+  - metric: kyc_started_sessions
+    event: loan.kyc_started.success
+    aggregation: uniqExact(session_id)
     additivity: additive
-  denominator:
-    metric: kyc_started_users
-    event: loan.kyc.started       # confirm this exact name in all 3 taxonomy dialects
-    additivity: additive
+    engine_type: sql
 
-dimensions: [device_type, country, tier, channel]
+dimensions:
+  # PHYSICAL metadata keys in events_raw, not friendly names. There is deliberately no
+  # contract-level renaming layer -- a fourth vocabulary is how this repo breaks itself.
+  # NOTE: `location` holds a COUNTRY value. The name is known debt, not a typo. There is
+  # no `country` key anywhere in the pipeline.
+  #
+  # Only attributes INVARIANT WITHIN ONE SESSION may be localized for a session-grain
+  # ratio. Otherwise sum(cells) != total and contribution shares are meaningless.
+  allowed: [device_type, location, channel, continent]
+  session_invariant: true
+  max_depth: 3
+  min_segment_volume: 20
+  availability:
+    device_type: {seeded: true, live: noise}
+    location: {seeded: true, live: noise}
+    channel: {seeded: true, live: true}
+    continent: {seeded: true, live: true}
+  excluded:
+    - key: tier
+      reason: >
+        Set only on the live path (eventTracker.ts). scripts/seed_data.py._metadata does not
+        emit it, so it is empty on the demo dataset.
+    - key: kyc_step
+      reason: >
+        Varies within a session, so session counts are not additive across it. Localize step
+        drop-off at event grain as a separate finding instead.
+    - key: country
+      reason: "Does not exist. The country value lives under `location`."
 
-drivers:
-  - loan_apply_volume             # fewer applies -> fewer starts
-  - kyc_step_dropoff              # which KYC step leaks users
-  - marketing_campaign            # weekly source; drives applies
+quality:
+  freshness_sla_minutes: 15
+  provisional_window_minutes: 10
+  hard_invariants:
+    - id: dedup_integrity
+      expr: count() == uniqExact(event_id)
+      on_fail: quarantine
+      note: >
+        Detects the duplicate-event storm (worker replay). This is the Phase 1 hero defect;
+        see docs/SCENARIOS.md scenario 1.
+    - id: session_present
+      expr: countIf(session_id = '') == 0
+      on_fail: quarantine
+  soft_invariants:
+    - id: funnel_order
+      expr: kyc_completed_sessions <= kyc_started_sessions
+      on_fail: ambiguous
+      note: >
+        A session may legitimately complete a KYC started in an earlier session, so a small
+        violation is not proof of a defect. Abstain rather than quarantine.
+  corroboration:
+    - loan.applied.success
+    - dashboard.page.view
+  defect_fingerprints:
+    - id: duplicate_event_storm
+      signature: "count() >> uniqExact(event_id) within the anomaly window"
+      verdict: fail
+    - id: taxonomy_misroute
+      signature: "canonicalize_event_name(name) is NULL while events_raw volume is normal"
+      verdict: fail
+    - id: tracking_disabled
+      signature: "ingestion 403 rate > 0 for this tenant/feature"
+      verdict: fail
 
-thresholds:
-  warn:     { direction: down, pct_change: 8 }
-  critical: { direction: down, pct_change: 15 }
+detection:
+  direction: down
+  band_source: forecast          # Detect consumes the stored forecast interval, not a static threshold
+  warn_pct_change: 8
+  critical_pct_change: 15
+  min_persistence_windows: 2
+  min_denominator: 30
+  robust_scorer: mad
+  multiple_testing: benjamini_hochberg
+  sparse_history_policy: abstain_with_interval
 
-strategic_weight: 0.9             # KYC gates loan approvals and revenue; high business weight
+forecast:
+  enabled: true
+  # Runs as a SCHEDULED BATCH, ahead of Detect. Build-order numbering is not execution order.
+  horizon_days: 7
+  baseline: seasonal_naive
+  interval_required: true
+  fallback: rolling_median
+  min_history_days: 14
 
-owner: growth_analytics
+causal:
+  enabled: true
+  evidence_rungs: [association, attribution, corroborated_cause, estimated_effect]
+  interventions: [simulator_anomaly, campaign, release]
+  control_dimensions: [location, channel, device_type]
+  degrade_to: attribution
+
+decision:
+  owner: growth_analytics
+  allowed_levers: [fix_kyc_step, simplify_form, adjust_messaging, investigate]
+  requires_human_approval: true
+  expected_impact: interval
 
 lineage:
-  events:   [loan.kyc.started, loan.kyc_completed.success]
-  endpoint: /funnels?steps=loan.kyc.started,loan.kyc_completed.success
-  tables:   [events_raw, daily_feature_usage]
+  events: [loan.kyc_started.success, loan.kyc_completed.success]
+  endpoint: /funnels?steps=loan.kyc_started.success,loan.kyc_completed.success
+  tables: [events_raw, daily_feature_usage]
+  note: >
+    /funnels returns USER-grain counts via windowFunnel GROUP BY user_id. That output is for
+    display only and is NOT the localizable fundamental. Do not mix the two in one narrative
+    without reconciling them.
 
 access_restriction:
-  visible_to: [cfo, ops_manager, analyst]   # the rate is not sensitive; margin KPIs would be
+  visible_to: [cfo, ops_manager, analyst]
 
-freshness_sla_minutes: 15
+observability:
+  golden_scenarios: [real_movement, sparse_history, ambiguous_evidence]
+  verifier_required: true
+  engine_type: sql
 
 interconnection:
   drives: loan_approval_volume

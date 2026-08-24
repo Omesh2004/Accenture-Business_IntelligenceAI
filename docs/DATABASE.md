@@ -1,7 +1,8 @@
 # DATABASE.md
 
 Everything about ClickHouse for Phase 1: how it works here, the migration procedure (there is
-no runner), the exact Signal Store DDL to add, and the one correctness fix to verify.
+no runner), the four Foundation fixes that everything downstream depends on, and the exact
+Signal Store DDL to add.
 
 ## How the app talks to ClickHouse
 
@@ -31,49 +32,262 @@ is empty. Editing it does nothing to a running stack. To apply a schema change t
 
 Never `docker compose down -v` to force a re-init on anything whose data you want to keep.
 
-## Current tables (do not change their shapes in Phase 1)
+**Materialized views do not backfill.** `CREATE MATERIALIZED VIEW` only transforms rows inserted
+*after* it exists. Any MV change needs an explicit backfill `INSERT ... SELECT` for history.
+`ALTER TABLE ... MODIFY COLUMN` also cannot convert a plain column into an `AggregateFunction`;
+that needs the shadow-table procedure in FOUNDATION-4.
+
+## Current tables
 
 `events_raw` (MergeTree, PARTITION toYYYYMM(timestamp), ORDER BY tenant_id,event_name,timestamp;
 `metadata` is a JSON String read with JSONExtract*), `daily_feature_usage` (AggregatingMergeTree
 rollup via `mv_daily_feature_usage`), `tenant_licenses`, `tracking_toggles`, `config_audit_log`,
 `ai_reports`.
 
-### Two edits to existing objects
+---
 
-1. **Add `event_id` and `session_id` to `events_raw`.** `event_id` is a deterministic hash of the
-   natural key (source id + source sequence + timestamp), added at emit time in the tracker and
-   carried through `FeatureEvent`. It makes consumption idempotent so a worker restart cannot
-   double-count. `session_id` comes from the tracker so sessions are exact rather than inferred
-   by 30-minute gaps. Add the columns with `ALTER TABLE events_raw ADD COLUMN ... DEFAULT ''`.
+# The four Foundation fixes
 
-2. **Verify the decaying-sum column in `daily_feature_usage`.** `unique_users` is
-   `AggregateFunction(uniq)` and is correct (read with `uniqMerge`). Check whether there is an
-   event-count/total column stored as a plain `UInt64` inside the AggregatingMergeTree. If so, it
-   silently drifts as background merges collapse blocks (non-aggregate columns are not summed on
-   merge). Fix by converting it to `SimpleAggregateFunction(sum, UInt64)` (or
-   `AggregateFunction(sum, UInt64)` read with `sumMerge`) and always aggregate with `GROUP BY`.
-   Confirm with a test: insert known blocks, `OPTIMIZE ... FINAL`, assert the sum is unchanged.
+Stages 01-08 are built on these. Each is verified against the code, not assumed.
 
-## Signal Store: new tables for Phase 1
+## FOUNDATION-1 — `event_id`, and why the old design was wrong
+
+**The problem.** `processing/worker.py:65-66` inserts a batch then commits Kafka offsets
+asynchronously, with `enable.auto.commit = False`. If the worker dies between the insert and the
+commit landing, the batch is re-consumed and **re-inserted**. `events_raw` is a plain `MergeTree`,
+which never deduplicates, so the rows genuinely double. `mv_daily_feature_usage` fires again on
+the replayed insert, so the rollup doubles too.
+
+**Do not use a hash of (source id + source sequence + timestamp).** That was the previous design
+in this file and it does not work: there is no source sequence anywhere in the producer, so two
+events from one user in the same second collide, and dedup would then delete a real event.
+
+**Use the key that already exists.** `NexaBank/backend/prisma/schema.prisma:131` declares
+`Event.id String @id @default(uuid())`. `eventTracker.ts:401` already awaits
+`prisma.event.create({...})` and **discards the return value**. Capturing it yields a UUID minted
+exactly once per logical event, stable across every retry, with no collision risk:
+
+```ts
+const row = await prisma.event.create({ data: { ... } });
+forwardToIngestionAPI(eventName, hashedUserId, tenantId, metadata, timestampOverride, tier, row.id)
+  .catch(() => {});
+```
+
+**Adding the column alone changes nothing.** A `MergeTree` will not dedup on it. Idempotency is
+delivered at *read* time by FOUNDATION-4, which replaces `count()` with `uniqExact(event_id)`.
+
+```sql
+ALTER TABLE feature_intelligence.events_raw ADD COLUMN IF NOT EXISTS event_id String DEFAULT '';
+```
+
+Also add `event_id: str = ""` to `FeatureEvent` in `core/models.py`, and have
+`scripts/seed_data.py` emit one per event (it currently emits none).
+
+## FOUNDATION-2 — `session_id`, and why it is a correctness requirement
+
+`session_id` is not a nicety that replaces 30-minute gap inference. It is the precondition that
+makes ratio localization mathematically valid — see `docs/KPI_CONTRACT.md`, "Why grain.entity
+decides whether Localize is valid".
+
+```sql
+ALTER TABLE feature_intelligence.events_raw ADD COLUMN IF NOT EXISTS session_id String DEFAULT '';
+```
+
+Today `session_id` is read out of the metadata JSON with a fallback
+(`api/main.py:1513`, `concat('user:', user_id)`). Promote it to a real column and keep the
+metadata read as a fallback during migration.
+
+**Who emits it today:**
+
+| Producer | `session_id` | Dimensions | Localizable |
+|---|---|---|---|
+| `scripts/seed_data.py` | yes, stable per session (`generate_session_events`) | one profile per session, reused for every event | **yes** |
+| `analytics-dashboard/src/lib/tracker.ts` | yes, `sessionStorage`-backed | browser-derived | yes |
+| `NexaBank/.../eventTracker.ts` | **no** | `selectGeoProfile()` / `selectDevice()` called **per event** | **no** |
+
+The live NexaBank path re-rolls `location` and `device_type` on every single event inside
+`forwardToIngestionAPI`, so those fields are statistically independent of user, session, and
+outcome. No localizer can recover a planted segment from that stream, however good it is.
+
+The seeded path is already correct, which is why the Phase 1 demo runs on seeded data. To fix
+the live path: mint a session id in the NexaBank frontend (the `sessionStorage` pattern in
+`analytics-dashboard/src/lib/tracker.ts:19-27` is the model), send it as a header on API calls,
+and select the geo/device profile **once per session** rather than once per event.
+
+## FOUNDATION-3 — taxonomy remaps (coupling point 2, broken in production right now)
+
+Verified by calling `canonicalize_event_name` directly:
+
+| Emitted | Ends up as | Contract expects | Status |
+|---|---|---|---|
+| `trackEvent("loan_approved")` | `core.loan_approved.action` | `loan.approved.success` | **reads zero, silently** |
+| `trackEvent("loan_applied")` | `loan.submit_application.success` | `loan.applied.success` | **reads zero, silently** |
+| `trackEvent("wealth_rebalance")` | `wealth_management.rebalance.success` | `wealth-management-pro.rebalance.success` | not a licensed feature |
+| `trackEvent("bulk_payroll_processing")` | `payroll.page.view` | `bulk-payroll-processing.batch.success` | not a conversion |
+
+`loan_approved` is absent from `LEGACY_MAP` (`eventTracker.ts:176`), so `enforceTaxonomy` falls
+through to its generic wrapper (`core.<name>.action`), and `canonicalize_event_name` leaves that
+untouched. Fix in `LEGACY_MAP` — each target verified against `canonicalize_event_name`:
+
+```ts
+'loan_approved':           'loans.approved.success',                  // -> loan.approved.success
+'loan_applied':            'loans.applied.success',                   // -> loan.applied.success
+'wealth_rebalance':        'wealth_management_pro.rebalance.success', // -> wealth-management-pro...
+'bulk_payroll_processing': 'bulk_payroll_processing.batch.success',   // -> bulk-payroll-processing...
+```
+
+`scripts/seed_data.py` emits canonical names directly and is unaffected — except that it emits no
+`loan.approved.*` at all. Add one, or `loan_approval_volume` has no source on either path.
+
+## FOUNDATION-4 — the rollup: one fix for two bugs
+
+`storage/schema.sql:23` declares `total_events UInt64` inside an `AggregatingMergeTree`, fed by
+`count()` in `mv_daily_feature_usage`. A plain column inside an aggregating engine is **not**
+summed when background merges collapse blocks — it silently decays. Confirmed present, not
+hypothetical.
+
+Replacing it with a `uniqExact` state over `event_id` fixes the decay **and** delivers the
+replay-idempotency FOUNDATION-1 set up, because re-inserting identical `event_id`s collapses:
+
+```sql
+-- 1. shadow table with the corrected shape
+CREATE TABLE IF NOT EXISTS feature_intelligence.daily_feature_usage_v2 (
+    tenant_id    String,
+    event_name   String,
+    date         Date,
+    event_count  AggregateFunction(uniqExact, String),   -- was: total_events UInt64
+    unique_users AggregateFunction(uniq, String)
+) ENGINE = AggregatingMergeTree()
+PARTITION BY toYYYYMM(date)
+ORDER BY (tenant_id, event_name, date);
+
+-- 2. point the MV at it (an MV only sees rows inserted after it exists)
+DROP TABLE IF EXISTS feature_intelligence.mv_daily_feature_usage;
+CREATE MATERIALIZED VIEW feature_intelligence.mv_daily_feature_usage
+TO feature_intelligence.daily_feature_usage_v2 AS
+SELECT tenant_id, event_name, toDate(timestamp) AS date,
+       uniqExactState(event_id) AS event_count,
+       uniqState(user_id)       AS unique_users
+FROM feature_intelligence.events_raw
+GROUP BY tenant_id, event_name, date;
+
+-- 3. backfill history, then swap
+INSERT INTO feature_intelligence.daily_feature_usage_v2
+SELECT tenant_id, event_name, toDate(timestamp) AS date,
+       uniqExactState(event_id) AS event_count,
+       uniqState(user_id)       AS unique_users
+FROM feature_intelligence.events_raw
+GROUP BY tenant_id, event_name, date;
+
+RENAME TABLE feature_intelligence.daily_feature_usage    TO feature_intelligence.daily_feature_usage_old,
+             feature_intelligence.daily_feature_usage_v2 TO feature_intelligence.daily_feature_usage;
+```
+
+**Reader migration — 12 expressions across 6 query blocks, with no compile check:**
+
+| Was | Becomes |
+|---|---|
+| `sum(total_events)` | `uniqExactMerge(event_count)` |
+| `sumIf(total_events, <cond>)` | `uniqExactMergeIf(event_count, <cond>)` |
+
+Sites: `api/data_layer.py:30,41,42`, `api/insights.py:126,139,140`,
+`api/main.py:554,1911,1919,2780,2833,2834`. Other `total_events` occurrences in `api/main.py` are
+local `count()` aliases over `events_raw`, not this column — leave those alone.
+
+**Trade-off, stated honestly:** `uniqExact` retains every distinct value, so state size grows with
+events per (tenant, event, date) cell. Correct and cheap at demo volume. At real scale, switch to
+`uniq` (HyperLogLog, ~0.5% error) and accept approximate counts, or dedup upstream.
+
+**Verification test (required by the Definition of Done):** insert known blocks, force a merge,
+assert the total is unchanged — then replay the same batch and assert it is still unchanged.
+
+```sql
+OPTIMIZE TABLE feature_intelligence.daily_feature_usage FINAL;
+SELECT tenant_id, event_name, uniqExactMerge(event_count)
+FROM feature_intelligence.daily_feature_usage
+GROUP BY tenant_id, event_name;
+```
+
+---
+
+# Signal Store: new tables for Phase 1
 
 Add these to `storage/schema.sql` and apply via the procedure above. Small demo tables, so
 ORDER BY is enough; no partitioning needed. All findings are written here; the narrator may
 state only what these tables contain.
 
+## The investigation spine
+
+Every table below is joined by `investigation_id`, minted once when a run starts and threaded
+through every write. **Do not hang the audit trail off `anomaly_id`.** Two cases break if you do:
+
+- **Trust Gate runs before an anomaly exists.** A `fail` verdict terminates the run, so scenario 1
+  produces an incident-note `insights` row with **no anomaly at all**. Keyed on `anomaly_id`, that
+  narrative cannot be linked to the finding that caused it — the schema would be unable to
+  represent the hero scenario's output.
+- **`model_runs` is written by every stage,** including the ones that run before Narrate. Keyed on
+  `insight_id`, the rows for Trust Gate, Detect and Localize would all carry an empty key — so the
+  LLM-vs-non-LLM breakdown would be missing exactly the stages that did the non-LLM work.
+
+`forecasts` is the one exception: it is produced by a scheduled batch, not by an investigation, so
+it carries its own `forecast_id` and is referenced by `anomalies.forecast_id`.
+
 ```sql
--- The detected move. One row per (tenant, kpi, window, method).
+-- Stage 00. The run itself. One row per investigation, created before any stage executes.
+CREATE TABLE IF NOT EXISTS investigations (
+    investigation_id String,
+    tenant_id        String,
+    kpi_id           String,
+    window_start     DateTime,
+    window_end       DateTime,
+    trigger          String,            -- 'scheduled' | 'manual' | 'ping'
+    status           String,            -- 'running'|'completed'|'terminated'|'error'
+    terminal_stage   String DEFAULT '', -- where it stopped: 'trust_gate'|'detect'|'narrate'
+    termination_reason String DEFAULT '',-- 'not_instrumented'|'defect'|'ambiguous'|'immaterial'
+    dataset          String,            -- 'seeded' | 'live'  -- no gate passes on seeded data
+    started_at       DateTime,
+    ended_at         DateTime DEFAULT toDateTime(0)
+) ENGINE = ReplacingMergeTree(started_at)
+ORDER BY (tenant_id, kpi_id, investigation_id);
+```
+
+```sql
+-- Stage 01. Trust Gate verdicts. Written on EVERY run, including passes -- stage 08 audits the
+-- suppression rate, and a defect that blocks narration must leave a row behind.
+CREATE TABLE IF NOT EXISTS trust_findings (
+    finding_id       String,
+    investigation_id String,           -- the spine; see "The investigation spine" below
+    tenant_id        String,
+    kpi_id           String,
+    window_start     DateTime,
+    window_end       DateTime,
+    verdict          String,            -- 'pass' | 'fail' | 'ambiguous'
+    check_id         String,            -- contract hard_invariants / soft_invariants id
+    fingerprint      String DEFAULT '', -- contract defect_fingerprints id
+    observed         String,            -- JSON: what the check actually saw
+    expected         String,            -- JSON: what the contract required
+    cheapest_check   String DEFAULT '', -- required when verdict = 'ambiguous'
+    blocks_narrative UInt8 DEFAULT 0,
+    engine_type      String DEFAULT 'rule',
+    ts               DateTime DEFAULT now()
+) ENGINE = ReplacingMergeTree(ts)
+ORDER BY (tenant_id, kpi_id, window_start, check_id);
+
+-- Stage 02. The detected move. One row per (tenant, kpi, window, method).
 CREATE TABLE IF NOT EXISTS anomalies (
-    anomaly_id   String,            -- hash(tenant_id, kpi_id, window_start, method)
+    anomaly_id   String,
+    investigation_id String,            -- hash(tenant_id, kpi_id, window_start, method)
     tenant_id    String,
     kpi_id       String,            -- matches a contract id in contracts/*.yaml
     detected_at  DateTime,
     window_start DateTime,
     window_end   DateTime,
-    method       String,            -- 'ruptures_pelt' | 'mad' | 'rule'
+    method       String,            -- 'mad' | 'seasonal_residual' | 'rule'
     direction    Int8,              -- -1 drop, +1 spike, 0 categorical
     magnitude    Float64,           -- signed effect size
-    baseline     Float64,
+    baseline     Float64,           -- from the stored forecast band where one exists
     observed     Float64,
+    forecast_id  String DEFAULT '', -- the band this was scored against (stage 04)
     materiality  Float64,           -- significance x impact x persistence
     severity     String,            -- 'info' | 'warn' | 'urgent'
     status       String DEFAULT 'open',   -- open|investigating|explained|dismissed
@@ -81,77 +295,109 @@ CREATE TABLE IF NOT EXISTS anomalies (
 ) ENGINE = ReplacingMergeTree(detected_at)
 ORDER BY (tenant_id, kpi_id, window_start);
 
--- Ranked localization output. Contributions sum to ~1 across ranks.
+-- Stage 03. Ranked localization. Contributions sum to ~1 across ranks -- which is only
+-- meaningful because the fundamental is additive at the contract's grain.entity.
 CREATE TABLE IF NOT EXISTS root_causes (
     cause_id      String,
+    investigation_id String,
     anomaly_id    String,
     tenant_id     String,
     rank          UInt8,
-    dimensions    String,           -- JSON: {"device_type":"mobile","country":"IN"}
+    dimensions    String,           -- JSON: {"device_type":"mobile","location":"India"}
+    fundamental   String,           -- which additive fundamental was decomposed
     contribution  Float64,
-    method        String,           -- 'psqueeze' | 'groupby'
+    method        String,           -- 'greedy_cube' | 'groupby'
     explained_pct Float64,
     engine_type   String DEFAULT 'stats'
 ) ENGINE = ReplacingMergeTree()
 ORDER BY (tenant_id, anomaly_id, rank);
 
--- Only written for the sparse-history scenario.
+-- Stage 04. Runs as a SCHEDULED BATCH, ahead of Detect. Stage 02 scores residuals against the
+-- band stored here; this is not a sparse-history-only table.
 CREATE TABLE IF NOT EXISTS forecasts (
-    forecast_id  String,
-    tenant_id    String,
-    kpi_id       String,
-    as_of        DateTime,
-    horizon_days UInt16,
-    point        Float64,
-    lower        Float64,
-    upper        Float64,
-    method       String,            -- 'chronos' | 'seasonal_naive' | 'category_prior'
-    confidence   Float64,
-    caveat       String DEFAULT '', -- 'insufficient_history'
-    engine_type  String DEFAULT 'ml'
+    forecast_id   String,
+    tenant_id     String,
+    kpi_id        String,
+    as_of         DateTime,
+    horizon_days  UInt16,
+    point         Float64,
+    lower         Float64,
+    upper         Float64,
+    method        String,            -- 'seasonal_naive' | 'rolling_median' | 'category_prior'
+    confidence    Float64,
+    backtest_mase Float64 DEFAULT 0, -- vs seasonal-naive; 0 = not backtested
+    caveat        String DEFAULT '', -- 'insufficient_history'
+    engine_type   String DEFAULT 'stats'
 ) ENGINE = ReplacingMergeTree(as_of)
 ORDER BY (tenant_id, kpi_id, as_of);
 
--- Minimal rules-based recommendation. Impact is an interval, never a point.
+-- Stage 05. Causal impact. `rung` is mandatory; a point estimate without an interval is not a
+-- Phase 1 causal result.
+CREATE TABLE IF NOT EXISTS causal_effects (
+    effect_id       String,
+    investigation_id String,
+    anomaly_id      String,
+    tenant_id       String,
+    kpi_id          String,
+    intervention    String,           -- contract causal.interventions id
+    rung            String,           -- association|attribution|corroborated_cause|estimated_effect
+    effect_point    Float64,
+    effect_lower    Float64,
+    effect_upper    Float64,
+    method          String,           -- 'pre_post' | 'control_segment' | 'rule'
+    assumptions_met UInt8 DEFAULT 1,
+    degraded_reason String DEFAULT '',
+    engine_type     String DEFAULT 'stats'
+) ENGINE = ReplacingMergeTree()
+ORDER BY (tenant_id, anomaly_id, effect_id);
+
+-- Stage 06. Rules-based recommendation. Impact is an interval, never a point.
 CREATE TABLE IF NOT EXISTS recommendations (
     rec_id          String,
+    investigation_id String,
     anomaly_id      String,
     tenant_id       String,
     action          String,
-    lever           String,
+    lever           String,          -- must be in the contract's decision.allowed_levers
     owner_role      String,
-    expected_impact String,         -- JSON: {"low":..,"high":..}
+    expected_impact String,          -- JSON: {"low":..,"high":..}
     status          String DEFAULT 'proposed',
     engine_type     String DEFAULT 'rule'
 ) ENGINE = ReplacingMergeTree()
 ORDER BY (tenant_id, anomaly_id, rec_id);
 
--- The narrated output. One row per (tenant, persona, anomaly). Replaces ai_report content.
+-- Stage 07. The narrated output. One row per (tenant, persona, anomaly).
 CREATE TABLE IF NOT EXISTS insights (
     insight_id    String,
+    investigation_id String,
     tenant_id     String,
-    anomaly_id    String,
+    kpi_id        String,
+    anomaly_id    String DEFAULT '', -- empty when Trust Gate failed: an incident note has no anomaly
     persona       String,           -- 'cfo' | 'ops_manager' | 'default'
     generated_at  DateTime,
+    trust_verdict String,           -- copied from trust_findings; 'fail' => incident note
     headline      String,
     narrative     String,
     evidence      String,           -- JSON array: {metric_id, source, as_of, method,
-                                     --             contribution, confidence, lineage_ref}
+                                    --             contribution, confidence, lineage_ref}
     llm_breakdown String,           -- JSON: which numbers came from which engine
     confidence    Float64,
+    simulated     UInt8 DEFAULT 0,  -- any figure sourced from a contract `simulated:` block
     abstained     UInt8 DEFAULT 0,
     verifier_pass UInt8 DEFAULT 1
 ) ENGINE = ReplacingMergeTree(generated_at)
 ORDER BY (tenant_id, persona, anomaly_id);
 
--- Per-insight telemetry. The LLM-vs-non-LLM breakdown reads from here.
+-- Stage 08. Per-run telemetry. The LLM-vs-non-LLM breakdown reads from here.
 CREATE TABLE IF NOT EXISTS model_runs (
     run_id        String,
-    insight_id    String,
+    investigation_id String,           -- ALWAYS set; stages run before an insight exists
+    insight_id    String DEFAULT '', -- set only once Narrate has produced one
     tenant_id     String,
-    stage         String,           -- 'trust_gate'|'detect'|'localize'|'forecast'|'narrate'
+    stage         String,           -- trust_gate|detect|localize|forecast|causal|decide|narrate
     engine_type   String,           -- 'llm'|'sql'|'stats'|'ml'|'rule'
     model         String DEFAULT '',-- 'qwen2.5-3b-awq' or ''
+    inputs_hash   String DEFAULT '',
     tokens_in     UInt32 DEFAULT 0,
     tokens_out    UInt32 DEFAULT 0,
     latency_ms    UInt32,
@@ -161,9 +407,10 @@ CREATE TABLE IF NOT EXISTS model_runs (
 ) ENGINE = MergeTree()
 ORDER BY (tenant_id, ts);
 
--- Human feedback loop (Should-have). Never train a policy on un-audited output.
+-- Stage 08. Human feedback loop. Never train a policy on un-audited output.
 CREATE TABLE IF NOT EXISTS outcomes (
     outcome_id String,
+    investigation_id String,
     insight_id String,
     tenant_id  String,
     signal     String,               -- 'root_cause_correct'|'useful'|'action_taken'
@@ -178,13 +425,13 @@ ORDER BY (tenant_id, insight_id, ts);
 
 Keep the route and its response contract so the dashboard and `/admin/app/{id}/summary` do not
 break. Internally it stops calling the LLM directly and instead reads the latest `insights` row
-for the tenant and requested persona, plus the linked `anomalies` / `root_causes` / evidence.
-Preserve the three-layer fallback: if no insight exists or the pipeline failed, fall back to the
-existing rule-based summary rather than erroring.
+for the tenant and requested persona, plus the linked `trust_findings` / `anomalies` /
+`root_causes` / evidence. Preserve the three-layer fallback: if no insight exists or the pipeline
+failed, fall back to the existing rule-based summary rather than erroring.
 
 ## Engine-type vocabulary (used everywhere)
 
-`llm` (a vLLM call), `sql` (a ClickHouse aggregation), `stats` (ruptures/MAD/BH/materiality),
-`ml` (a forecast model), `rule` (deterministic heuristic). Every produced number carries one.
-This is the backbone of the LLM-vs-non-LLM deliverable, so it must be recorded at write time,
-never inferred later.
+`llm` (a vLLM call), `sql` (a ClickHouse aggregation), `stats` (robust residuals, BH, materiality,
+baseline forecasts), `ml` (a learned forecast model — unused in Phase 1), `rule` (deterministic
+heuristic). Every produced number carries one. This is the backbone of the LLM-vs-non-LLM
+deliverable, so it must be recorded at write time, never inferred later.

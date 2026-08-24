@@ -34,14 +34,11 @@ TENANT_ALIAS_MAP = {
 
 APP_TENANT_SCOPES = {
     "nexabank": {"nexabank", "safexbank"},
-    "javabank": {"jbank", "obank"},
 }
 
 TENANT_TO_APP = {
     "nexabank": "nexabank",
     "safexbank": "nexabank",
-    "jbank": "javabank",
-    "obank": "javabank",
 }
 
 
@@ -343,8 +340,6 @@ def get_available_tenants(
     KNOWN_TENANTS = [
         {"id": "nexabank", "name": "NexaBank", "eventCount": 0, "uniqueUsers": 0},
         {"id": "safexbank", "name": "SafexBank", "eventCount": 0, "uniqueUsers": 0},
-        {"id": "jbank", "name": "JBank", "eventCount": 0, "uniqueUsers": 0},
-        {"id": "obank", "name": "OBank", "eventCount": 0, "uniqueUsers": 0},
     ]
     admin_apps = parse_admin_apps(request.headers.get("X-Admin-Apps", ""))
     active_app = normalize_app_id(request.headers.get("X-Active-App", ""))

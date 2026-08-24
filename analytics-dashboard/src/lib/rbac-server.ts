@@ -10,10 +10,7 @@ export interface RBACConfig {
   app_admins: Record<string, string[]>;
 }
 
-const APP_CANONICAL_MAP: Record<string, string> = {
-  ...TENANT_TO_APP,
-  javabank: 'javabank',
-};
+const APP_CANONICAL_MAP: Record<string, string> = { ...TENANT_TO_APP };
 
 const cwd = (globalThis as { process?: { cwd?: () => string } }).process?.cwd?.() || '.';
 const RBAC_CONFIG_PATH = path.resolve(cwd, '../rbac.json');

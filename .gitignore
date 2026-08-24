@@ -31,7 +31,6 @@ logs/
 **/target/
 **/.mvn/wrapper/maven-wrapper.jar
 **/.gradle/
-/JavaBank/
 
 # Python
 __pycache__/
