@@ -11,7 +11,7 @@ import eventRoutes from "./routes/eventRoutes";
 import tenantRoutes from "./routes/tenantRoutes";
 import proRoutes from "./routes/proRoutes";
 import { isLoggedIn } from "./middleware/IsLoggedIn";
-import { apiTrackingMiddleware } from "./middleware/eventTracker";
+import { apiTrackingMiddleware, requestTelemetryMiddleware } from "./middleware/eventTracker";
 
 const app: Application = express();
 
@@ -39,6 +39,7 @@ app.use(
 app.use(helmet());
 app.use(morgan("dev"));
 app.use(cookieParser());
+app.use(requestTelemetryMiddleware);
 
 // Global API Tracking Middleware
 app.use(apiTrackingMiddleware);

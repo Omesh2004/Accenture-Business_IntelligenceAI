@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import crypto from "crypto";
 import axios from "axios";
+import { AsyncLocalStorage } from "async_hooks";
 import { prisma } from "../prisma";
 
 const INGESTION_API_URL = process.env.INGESTION_API_URL || "http://localhost:8000/events";
@@ -39,6 +40,30 @@ interface GeoProfile {
   deviceBias: { desktop: number; mobile: number; tablet: number };
   channelBias: string[];
   peakHours: number[];  // UTC hours when this region is most active
+}
+
+interface SessionProfile {
+  geo: GeoProfile;
+  deviceType: string;
+  channel: "web" | "mobile" | "api" | "batch";
+}
+
+interface RequestTelemetryContext {
+  sessionId?: string;
+}
+
+const requestTelemetryContext = new AsyncLocalStorage<RequestTelemetryContext>();
+const sessionProfiles = new Map<string, SessionProfile>();
+const MAX_SESSION_PROFILES = 10000;
+
+function firstHeaderValue(value: string | string[] | undefined): string | undefined {
+  if (Array.isArray(value)) return value[0];
+  return value;
+}
+
+export function requestTelemetryMiddleware(req: Request, _res: Response, next: NextFunction): void {
+  const sessionId = firstHeaderValue(req.headers["x-session-id"]) || firstHeaderValue(req.headers["x-nexabank-session-id"]);
+  requestTelemetryContext.run({ sessionId }, next);
 }
 
 const GEO_PROFILES: GeoProfile[] = [
@@ -121,6 +146,35 @@ function normalizeChannel(channel: unknown): "web" | "mobile" | "api" | "batch" 
   return "web";
 }
 
+function getSessionId(metadata: Record<string, unknown> | null | undefined): string {
+  const safeMetadata = metadata || {};
+  const fromMetadata = String(safeMetadata.session_id || safeMetadata.sessionId || "").trim();
+  if (fromMetadata) return fromMetadata;
+
+  const fromRequest = String(requestTelemetryContext.getStore()?.sessionId || "").trim();
+  if (fromRequest) return fromRequest;
+
+  return `server-${crypto.randomUUID()}`;
+}
+
+function getSessionProfile(sessionId: string, metadata: Record<string, unknown> | null | undefined): SessionProfile {
+  const existing = sessionProfiles.get(sessionId);
+  if (existing) return existing;
+
+  const safeMetadata = metadata || {};
+  const geo = selectGeoProfile();
+  const deviceType = String(safeMetadata.device_type || safeMetadata.device || selectDevice(geo));
+  const channel = normalizeChannel((safeMetadata.channel as string) || geo.channelBias[Math.floor(Math.random() * geo.channelBias.length)]);
+  const profile = { geo, deviceType, channel };
+
+  if (sessionProfiles.size >= MAX_SESSION_PROFILES) {
+    const oldestKey = sessionProfiles.keys().next().value;
+    if (oldestKey) sessionProfiles.delete(oldestKey);
+  }
+  sessionProfiles.set(sessionId, profile);
+  return profile;
+}
+
 /**
  * Validates and auto-corrects event names to strict [page].[feature].[status] taxonomy.
  * Logs a warning when correction happens so developers can fix instrumentation.
@@ -192,7 +246,8 @@ function enforceTaxonomy(eventName: string): string {
     'payees': 'payees.page.view',
     'payment_completed': 'transactions.pay_now.success',
     'payment_failed': 'transactions.pay_now.failed',
-    'loan_applied': 'loans.submit_application.success',
+    'loan_applied': 'loans.applied.success',
+    'loan_approved': 'loans.approved.success',
     'loans_page_view': 'loans.page.view',
     'kyc_started': 'loans.kyc_started.success',
     'kyc_completed': 'loans.kyc_completed.success',
@@ -204,11 +259,11 @@ function enforceTaxonomy(eventName: string): string {
     'pro_license_unlocked': 'pro.features_unlock.success',
     'pro_feature_usage': 'dashboard.feature.view',
     'feature_view': 'dashboard.feature.view',
-    'wealth_rebalance': 'wealth_management.rebalance.success',
+    'wealth_rebalance': 'wealth_management_pro.rebalance.success',
     'ai_insight_download': 'ai_insights.book.success',
     'crypto_trading': 'crypto_trading.page.view',
     'wealth_management_pro': 'wealth_management.page.view',
-    'bulk_payroll_processing': 'payroll.page.view',
+    'bulk_payroll_processing': 'bulk_payroll_processing.batch.success',
     'ai_insights': 'ai_insights.page.view',
     'page_view': 'dashboard.page.view',
     'location_captured': 'profile.location.success',
@@ -343,22 +398,26 @@ async function forwardToIngestionAPI(
   eventName: string,
   userId: string,
   tenantId: string,
-  metadata: Record<string, unknown>,
+  metadata: Record<string, unknown> = {},
   timestampOverride?: number,
-  tier?: string
+  tier?: string,
+  eventId?: string
 ): Promise<void> {
   // Enforce taxonomy
   const mappedEventName = enforceTaxonomy(eventName);
 
-  // Simulate realistic global user context
-  const geo = selectGeoProfile();
-  const deviceType = (metadata.device_type as string) || selectDevice(geo);
+  const sessionId = getSessionId(metadata);
+  const sessionProfile = getSessionProfile(sessionId, metadata);
+  const geo = sessionProfile.geo;
+  const deviceType = String(metadata.device_type || sessionProfile.deviceType);
   const simTime = simulateResponseTime();
-  const channel = normalizeChannel((metadata.channel as string) || geo.channelBias[Math.floor(Math.random() * geo.channelBias.length)]);
+  const channel = normalizeChannel((metadata.channel as string) || sessionProfile.channel);
 
   try {
     const analyticsTenantId = resolveAnalyticsTenantId(tenantId);
     await axios.post(INGESTION_API_URL, {
+      event_id: eventId || crypto.randomUUID(),
+      session_id: sessionId,
       event_name: mappedEventName,
       tenant_id: analyticsTenantId,
       user_id: userId,
@@ -366,6 +425,7 @@ async function forwardToIngestionAPI(
       channel: channel,
       metadata: {
         ...metadata,
+        session_id: sessionId,
         source_tenant: tenantId,
         role: metadata.role || "user",
         device_type: deviceType,
@@ -393,25 +453,27 @@ export async function trackEvent(
   eventName: string,
   customerId: string | null,
   tenantId: string,
-  metadata: Record<string, unknown>,
+  metadata: Record<string, unknown> = {},
   timestampOverride?: number,
   tier?: 'free' | 'pro' | 'enterprise'
 ): Promise<void> {
   try {
     const hashedUserId = customerId ? hashUserId(customerId) : "anonymous";
-    await prisma.event.create({
+    const sessionId = getSessionId(metadata);
+    const metadataWithSession: Record<string, unknown> = { ...metadata, session_id: sessionId };
+    const row = await prisma.event.create({
       data: {
         eventName,
         tenantId,
         userId: hashedUserId,
         customerId: customerId || null,
-        metadata: { ...metadata, tier } as any,
+        metadata: { ...metadataWithSession, tier } as any,
         timestamp: timestampOverride ? new Date(timestampOverride * 1000) : undefined,
       },
     });
 
     // Forward to the Pathway analytics pipeline (fire-and-forget)
-    forwardToIngestionAPI(eventName, hashedUserId, tenantId, metadata, timestampOverride, tier).catch(() => { });
+    forwardToIngestionAPI(eventName, hashedUserId, tenantId, metadataWithSession, timestampOverride, tier, row.id).catch(() => { });
 
     // Broadcast via WebSocket for real-time updates (lazy import to avoid circular deps)
     try {
@@ -422,10 +484,11 @@ export async function trackEvent(
           tenantId,
           userId: hashedUserId,
           metadata: {
-            country: metadata.country,
-            city: metadata.city,
-            continent: metadata.continent,
-            device_type: metadata.device_type,
+            session_id: sessionId,
+            country: metadataWithSession.country,
+            city: metadataWithSession.city,
+            continent: metadataWithSession.continent,
+            device_type: metadataWithSession.device_type,
           },
         });
       }

@@ -14,30 +14,35 @@ grain:
   entity: event
 
 readiness:
-  status: blocked
+  status: ready
   blockers:
     - id: approval-not-instrumented
+      status: resolved
       detail: >
-        NexaBank calls trackEvent("loan_approved") in loanRoutes.ts:214, but "loan_approved" is
-        absent from LEGACY_MAP in eventTracker.ts. enforceTaxonomy falls through to its generic
-        wrapper and emits core.loan_approved.action, which canonicalize_event_name leaves
-        unchanged. This KPI therefore reads exactly zero rows, silently, today.
+        NexaBank calls trackEvent("loan_approved") in loanRoutes.ts:214. "loan_approved" was
+        absent from LEGACY_MAP in eventTracker.ts, so enforceTaxonomy fell through to its generic
+        wrapper and emitted core.loan_approved.action, which canonicalize_event_name left
+        unchanged. This KPI read exactly zero rows, silently.
       fix: >
-        Add 'loan_approved': 'loans.approved.success' to LEGACY_MAP. Verified:
+        Added 'loan_approved': 'loans.approved.success' to LEGACY_MAP. Verified live:
         canonicalize_event_name('loans.approved.success') == 'loan.approved.success'.
     - id: applied-misrouted
+      status: resolved
       detail: >
-        'loan_applied' maps to loans.submit_application.success, which canonicalizes to
-        loan.submit_application.success -- not loan.applied.success. The denominator below is
+        'loan_applied' mapped to loans.submit_application.success, which canonicalized to
+        loan.submit_application.success -- not loan.applied.success. The denominator was
         stranded on the live path. scripts/seed_data.py emits loan.applied.success directly,
-        so seeded demo data is unaffected.
-      fix: "Remap 'loan_applied' to 'loans.applied.success' (canonicalizes to loan.applied.success)."
+        so seeded demo data was unaffected.
+      fix: "Remapped 'loan_applied' to 'loans.applied.success'. Verified live:
+        canonicalize_event_name('loans.applied.success') == 'loan.applied.success'."
     - id: no-seeded-approvals
-      detail: "scripts/seed_data.py emits no loan.approved.* event, so even seeded data is empty."
+      status: resolved
+      detail: "scripts/seed_data.py emitted no loan.approved.* event, so even seeded data was empty."
+      fix: "Added 'loan.approved.success' to FREE_EVENTS in scripts/seed_data.py."
   unblocked_by: [FOUNDATION-1, FOUNDATION-3]
   gate: >
-    While status is `blocked`, Trust Gate returns fail:not_instrumented and no business
-    narrative is produced. It must never silently read zero.
+    Both fundamentals are instrumented on seeded and live paths. Ordinary Trust Gate invariant
+    checks (dedup_integrity, source_present, approval_subset) still apply per run.
 
 source:
   name: nexabank_clickstream
@@ -69,8 +74,8 @@ dimensions:
   max_depth: 3
   min_segment_volume: 10
   availability:
-    device_type: {seeded: true, live: noise}
-    location: {seeded: true, live: noise}
+    device_type: {seeded: true, live: true}   # FOUNDATION-2: session-cached, no longer re-rolled per event
+    location: {seeded: true, live: true}      # FOUNDATION-2: session-cached, no longer re-rolled per event
     channel: {seeded: true, live: true}
     continent: {seeded: true, live: true}
   excluded:

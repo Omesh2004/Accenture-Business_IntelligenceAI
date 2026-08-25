@@ -15,6 +15,8 @@ TAXONOMY_REGEX = re.compile(r'^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*
 LEGACY_REGEX = re.compile(r'^[a-z][a-z0-9_]*$')
 
 class FeatureEvent(BaseModel):
+    event_id: str = Field(default="", description="Stable logical event ID for replay-safe analytics")
+    session_id: str = Field(default="", description="Stable browser/session ID for journey grouping")
     event_name: str = Field(..., description="Name of the tracked feature/interaction")
     tenant_id: str = Field(..., description="ID of the tenant/organization")
     user_id: str = Field(..., description="ID of the user interacting")

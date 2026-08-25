@@ -35,6 +35,8 @@ def _insert_direct_to_clickhouse(event_dict: dict):
         
         ts = datetime.utcfromtimestamp(event_dict["timestamp"])
         row = [[
+            event_dict.get("event_id", ""),
+            event_dict.get("session_id") or event_dict.get("metadata", {}).get("session_id", ""),
             event_dict["tenant_id"],
             event_dict["event_name"],
             event_dict["user_id"],
@@ -45,7 +47,7 @@ def _insert_direct_to_clickhouse(event_dict: dict):
         client.insert(
             "feature_intelligence.events_raw",
             row,
-            column_names=["tenant_id", "event_name", "user_id", "channel", "timestamp", "metadata"],
+            column_names=["event_id", "session_id", "tenant_id", "event_name", "user_id", "channel", "timestamp", "metadata"],
         )
         logger.info(f"[Fallback] Inserted event '{event_dict['event_name']}' directly into ClickHouse")
     except Exception as e:

@@ -562,7 +562,9 @@ router.post(
 
         // ─── 2. Generate Persona (behavioral traits) ────────
         const persona = generatePersona();
-        const lMeta = locationMeta(location, persona);
+        // session_id is refreshed per login boundary below (registration, each active day, live
+        // pulse) so simulated traffic is session-groupable like the real live/seeded paths.
+        let lMeta = { ...locationMeta(location, persona), session_id: `sess_sim_${seed}_reg` };
 
         // ─── 3. Compute join date ───────────────────────────
         const joinDaysAgo = Math.floor(Math.random() * simDays);
@@ -685,7 +687,8 @@ router.post(
           // ── Daily Login Roll ──────────────────────────────
           if (Math.random() > persona.loginProbability) continue;
 
-          // User logged in today
+          // User logged in today -- each day is its own session for session-grain analytics
+          lMeta = { ...lMeta, session_id: `sess_sim_${seed}_d${day}` };
           const channel = Math.random() < 0.6 ? persona.preferredChannel : pick(CHANNELS);
           await trackEvent("free.auth.login.success", customer.id, tenantId, { channel, ...lMeta, day }, dayTs);
           eventsCreated++;
@@ -1102,6 +1105,7 @@ router.post(
         // Ensure this persona reflects as "Real-Time" by generating a live ping NOW
         // 60% of simulated users have real-time activity when simulation executes
         if (Math.random() < 0.6) {
+           lMeta = { ...lMeta, session_id: `sess_sim_${seed}_live` };
            const nowTs = Math.floor(Date.now() / 1000) - Math.floor(Math.random() * 240); // Within last 4 minutes
            await trackEvent("free.dashboard.view", customer.id, tenantId, { channel: persona.preferredChannel, ...lMeta, live_pulse: true }, nowTs);
            eventsCreated++;

@@ -164,6 +164,7 @@ FEATURE_DISPLAY_NAMES: dict[str, str] = {
     "loans.proceed_to_kyc.failed": "Loan KYC Start Failed",
     "loans.submit_application.success": "Loan App Submitted",
     "loan.applied.success": "Loan App Submitted",
+    "loan.approved.success": "Loan Approved",
     "loan.kyc_started.success": "Loan KYC Started",
     "loan.kyc_completed.success": "Loan KYC Completed",
     "loan.kyc_failed.failure": "Loan KYC Failed",
@@ -178,6 +179,8 @@ FEATURE_DISPLAY_NAMES: dict[str, str] = {
     "wealth-management-pro.page.view": "Wealth Management View",
     "bulk-payroll-processing.page.view": "Bulk Payroll View",
     "ai-insights.page.view": "AI Insights View",
+    "pro.new_feature.view": "New Pro Feature View",
+    "auth.role.violation": "Role Violation",
 
     # Pro Features - AI Insights
     "pro-feature.ai-insights.read_online": "AI Insights Read",
@@ -313,7 +316,8 @@ def normalize_event(event_name: str) -> str:
         "core.payee_added.view": "payees.add_payee.view",
         
         # Loans & KYC related
-        "loan_applied": "loans.submit_application.success",  # Changed - this is submission
+        "loan_applied": "loans.applied.success",
+        "loan_approved": "loans.approved.success",
         "kyc_abandoned": "loans.kyc.abandoned",
         "kyc_started": "loans.proceed_to_kyc.action",
         "kyc_completed": "loans.submit_application.success",
@@ -354,13 +358,13 @@ def normalize_event(event_name: str) -> str:
         
         # Pro Features - Wealth Management
         "wealth_management_pro": "pro-feature.wealth-management-pro.insights_view",
-        "wealth_rebalance": "pro-feature.wealth-management-pro.rebalance_success",
+        "wealth_rebalance": "wealth_management_pro.rebalance.success",
         "core.wealth_management_pro.view": "pro-feature.wealth-management-pro.insights_view",
         "pro.wealth.rebalance.success": "pro-feature.wealth-management-pro.rebalance_success",
         "wealth-management-pro": "pro-feature.wealth-management-pro.insights_view",
         
         # Pro Features - Bulk Payroll
-        "bulk_payroll_processing": "pro-feature.bulk-payroll-processing.page_view",
+        "bulk_payroll_processing": "bulk_payroll_processing.batch.success",
         "payroll_batch_processed": "pro-feature.bulk-payroll-processing.pay_all_success",
         "core.bulk_payroll_processing.view": "pro-feature.bulk-payroll-processing.page_view",
         "pro.payroll_batch.success": "pro-feature.bulk-payroll-processing.pay_all_success",
@@ -472,6 +476,8 @@ CANONICAL_EVENT_ALIASES: dict[str, str | None] = {
     "free.payees.delete_failed": "payee.remove_payee.failure",
     "core.payee_added.view": "payee.add_payee.view",
     "free.loan.applied": "loan.applied.success",
+    "loan_applied": "loan.applied.success",
+    "loans.applied.success": "loan.applied.success",
     "free.loan.applied.action": "loan.applied.success",
     "core.loan.applied.action": "loan.applied.success",
     "lending.loan.applied": "loan.applied.success",
@@ -479,6 +485,7 @@ CANONICAL_EVENT_ALIASES: dict[str, str | None] = {
     "free.loan.kyc_started": "loan.kyc_started.success",
     "free.loan.kyc_started.action": "loan.kyc_started.success",
     "loan.proceed_to_kyc.success": "loan.kyc_started.success",
+    "loans.proceed_to_kyc.success": "loan.kyc_started.success",
     "loans.proceed_to_kyc.action": "loan.kyc_started.success",
     "core.loan.kyc_started.action": "loan.kyc_started.success",
     "lending.loan.kyc_started": "loan.kyc_started.success",
@@ -486,6 +493,8 @@ CANONICAL_EVENT_ALIASES: dict[str, str | None] = {
     "free.loan.kyc_completed": "loan.kyc_completed.success",
     "lending.loan.kyc_completed": "loan.kyc_completed.success",
     "kyc_completed": "loan.kyc_completed.success",
+    "loan_approved": "loan.approved.success",
+    "loans.approved.success": "loan.approved.success",
     "free.loan.kyc_failed": "loan.kyc_failed.failure",
     "core.loan_approved.view": "loan.approved.view",
     "free.loan.kyc_abandoned.action": "loan.kyc_abandoned.failure",
@@ -521,10 +530,12 @@ CANONICAL_EVENT_ALIASES: dict[str, str | None] = {
     "pro-feature.wealth-management-pro.insights_view": "wealth-management-pro.insights.view",
     "pro-feature.wealth-management-pro.rebalance_success": "wealth-management-pro.rebalance.success",
     "pro.wealth_rebalance.success": "wealth-management-pro.rebalance.success",
+    "wealth_management_pro.rebalance.success": "wealth-management-pro.rebalance.success",
     "wealth_management_pro": "wealth-management-pro.page.view",
     "wealth_rebalance": "wealth-management-pro.rebalance.success",
     "wealth-management-pro": "wealth-management-pro.page.view",
     "pro.payroll_batch.success": "bulk-payroll-processing.batch.success",
+    "bulk_payroll_processing.batch.success": "bulk-payroll-processing.batch.success",
     "pro-feature.bulk-payroll-processing.pay_all_success": "bulk-payroll-processing.batch.success",
     "pro-feature.bulk-payroll-processing.page_view": "bulk-payroll-processing.page.view",
     "pro.payroll_search.success": "bulk-payroll-processing.search.success",

@@ -60,3 +60,6 @@ ENV/
 # Development Related Agent Files
 /docs/*
 !/docs/*.md
+
+# Standalone JavaBank application
+/JavaBank/

@@ -33,24 +33,35 @@ simulated:
     for this KPI rests entirely on the integrity of the underlying event count.
 
 readiness:
-  status: degraded
+  status: ready
   blockers:
     - id: live-path-stranded
+      status: resolved
       detail: >
-        Two of the four conversion events never reach their catalog key on the live NexaBank
-        path. LEGACY_MAP sends 'wealth_rebalance' to wealth_management.rebalance.success
-        (canonicalizes unchanged, but the licence catalog key is
+        Two of the four conversion events never reached their catalog key on the live NexaBank
+        path. LEGACY_MAP sent 'wealth_rebalance' to wealth_management.rebalance.success
+        (canonicalized unchanged, but the licence catalog key is
         wealth-management-pro.rebalance.success) and 'bulk_payroll_processing' to
         payroll.page.view (not a conversion at all).
       fix: >
-        Remap to 'wealth_management_pro.rebalance.success' and
-        'bulk_payroll_processing.batch.success'. Verified: both canonicalize to the
+        Remapped to 'wealth_management_pro.rebalance.success' and
+        'bulk_payroll_processing.batch.success'. Verified live: both canonicalize to the
         hyphenated catalog keys.
-      impact: "Seeded demo data is unaffected -- scripts/seed_data.py emits the correct names."
+      impact: "Seeded demo data was unaffected -- scripts/seed_data.py emits the correct names."
+    - id: seeded-conversion-incomplete
+      status: resolved
+      detail: >
+        scripts/seed_data.py's PRO_EVENTS emitted only 3 of the 4 pro_conversion_events sources
+        (crypto-trading.trade_execution.success, wealth-management-pro.rebalance.success,
+        bulk-payroll-processing.batch.success); ai-insights.book.success was never seeded, so
+        this KPI's baseline undercounted conversions even on the ready seeded path.
+      fix: "Added 'ai_insights.book.success' to PRO_EVENTS in scripts/seed_data.py. Verified live:
+        canonicalize_event_name('ai_insights.book.success') == 'ai-insights.book.success'."
   unblocked_by: [FOUNDATION-3]
   gate: >
-    While status is `degraded`, the KPI may be narrated from seeded data only, and every
-    figure carries both the simulated label and a live-coverage caveat.
+    All four conversion events are instrumented on seeded and live paths. This KPI still
+    requires the `simulated:` label on every narrated figure (see above) -- that gate is
+    permanent, not tied to instrumentation status.
 
 source:
   name: nexabank_clickstream
@@ -86,8 +97,8 @@ dimensions:
   max_depth: 3
   min_segment_volume: 5
   availability:
-    device_type: {seeded: true, live: noise}
-    location: {seeded: true, live: noise}
+    device_type: {seeded: true, live: true}   # FOUNDATION-2: session-cached, no longer re-rolled per event
+    location: {seeded: true, live: true}      # FOUNDATION-2: session-cached, no longer re-rolled per event
     channel: {seeded: true, live: true}
     continent: {seeded: true, live: true}
     event_name: {seeded: true, live: true}

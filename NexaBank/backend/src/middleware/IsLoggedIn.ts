@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import jwt from "jsonwebtoken";
 import { prisma } from "../prisma";
+import { trackEvent } from "./eventTracker";
 
 interface DecodedToken {
   userId: string;
@@ -22,6 +23,11 @@ export const isAdmin = async (
   next: NextFunction
 ): Promise<void> => {
   if (req.user?.role !== "ADMIN") {
+    trackEvent("auth.role.violation", req.user?.id || null, req.user?.tenantId || "bank_a", {
+      role: req.user?.role || "anonymous",
+      attempted_action: `${req.method} ${req.originalUrl}`,
+      path: req.originalUrl,
+    }).catch(() => {});
     res.status(403).json({ error: "Admin access required" });
     return;
   }

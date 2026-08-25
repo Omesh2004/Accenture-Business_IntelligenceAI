@@ -156,7 +156,7 @@ flagged urgent and isolated.
   suppression rate, so a silent pass is as much a missing record as a silent failure.
 - One seeded run produces all five; re-running with the same seed reproduces the same planted
   ground truth (deterministic).
-- No scenario narrates a KPI whose contract `readiness.status` is `blocked`. As of this writing
-  `loan_approval_volume` is blocked on every path (FOUNDATION-3 plus a missing seeded emitter),
-  so it may appear as a driver in the chain but must not carry a narrated figure until it is
-  instrumented.
+- No scenario narrates a KPI whose contract `readiness.status` is `blocked`. All three contracts
+  (`kyc_completion_rate`, `loan_approval_volume`, `pro_revenue`) are now `ready` on both seeded
+  and live paths -- see each contract's `readiness.blockers` for the resolved Foundation items.
+  This rule still applies to any future KPI landed with `readiness.status: blocked`.

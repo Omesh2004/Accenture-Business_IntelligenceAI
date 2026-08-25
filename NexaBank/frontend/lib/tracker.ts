@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { getNexaBankSessionId } from './api';
 
 const INGESTION_API_URL = process.env.NEXT_PUBLIC_INGESTION_URL || 'http://localhost:8000/events';
 
@@ -30,12 +31,18 @@ class NexaBankTracker {
   }
 
   async track(eventName: string, metadata: Record<string, any> = {}) {
+    const sessionId = getNexaBankSessionId();
     const device =
       typeof window !== 'undefined' && window.innerWidth < 768
         ? 'mobile'
         : 'desktop';
 
     const payload = {
+      event_id:
+        typeof crypto !== 'undefined' && 'randomUUID' in crypto
+          ? crypto.randomUUID()
+          : `event-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      session_id: sessionId,
       event_name: eventName,
       tenant_id: this.tenantId,
       user_id: this.userId,
@@ -43,6 +50,7 @@ class NexaBankTracker {
       channel: 'web',
       metadata: {
         role: this.role,
+        session_id: sessionId,
         device_type: device,
         email: this.email,
         ...metadata,

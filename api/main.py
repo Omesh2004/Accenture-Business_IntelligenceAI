@@ -551,7 +551,7 @@ def compare_tenants(feature: str = Query(..., description="Feature event to comp
     sql = """
         SELECT 
             tenant_id, 
-            sum(total_events) as total_interactions
+            uniqExactMerge(event_count) as total_interactions
         FROM feature_intelligence.daily_feature_usage
         WHERE event_name = %(feature)s
         GROUP BY tenant_id
@@ -1908,7 +1908,7 @@ def get_admin_summary(range: str = Query("30d", description="Time range like 7d,
         days = parse_range(range)
         sql = """
             SELECT count(distinct tenant_id) as total_tenants, 
-                   sum(total_events) as total_events
+                   uniqExactMerge(event_count) as total_events
             FROM feature_intelligence.daily_feature_usage
             WHERE date >= today() - %(days)s
         """
@@ -1916,7 +1916,7 @@ def get_admin_summary(range: str = Query("30d", description="Time range like 7d,
         basic = basic_rows[0] if basic_rows else {"total_tenants": 0, "total_events": 0}
         
         sql_top = """
-            SELECT tenant_id as name, sum(total_events) as events
+            SELECT tenant_id as name, uniqExactMerge(event_count) as events
             FROM feature_intelligence.daily_feature_usage
             WHERE date >= today() - %(days)s
             GROUP BY tenant_id
@@ -2777,7 +2777,7 @@ def get_segmentation_comparison(tenants: str = Query(..., description="Comma-sep
         
         # Get usage
         sql_usage = """
-            SELECT event_name, sum(total_events) as total, uniqMerge(unique_users) as users
+            SELECT event_name, uniqExactMerge(event_count) as total, uniqMerge(unique_users) as users
             FROM feature_intelligence.daily_feature_usage
             WHERE tenant_id = %(tenant_id)s AND date >= today() - 30
             GROUP BY event_name
@@ -2830,8 +2830,8 @@ def get_predictive_adoption(tenants: str = Query(..., description="Comma-separat
         sql_trend = """
             SELECT 
                 event_name,
-                sumIf(total_events, date >= today() - 7) as recent_7d,
-                sumIf(total_events, date >= today() - 14 AND date < today() - 7) as prev_7d
+                uniqExactMergeIf(event_count, date >= today() - 7) as recent_7d,
+                uniqExactMergeIf(event_count, date >= today() - 14 AND date < today() - 7) as prev_7d
             FROM feature_intelligence.daily_feature_usage
             WHERE tenant_id IN %(tenant_ids)s AND date >= today() - 14
             GROUP BY event_name

@@ -123,7 +123,7 @@ def generate_insights(tenant_id: str) -> List[Dict[str, str]]:
     else:
         # Fallback to direct query if cache is empty
         sql_low_adoption = """
-            SELECT event_name, sum(total_events) as count
+            SELECT event_name, uniqExactMerge(event_count) as count
             FROM feature_intelligence.daily_feature_usage
             WHERE tenant_id = %(tenant_id)s AND date >= today() - 7
             GROUP BY event_name
@@ -136,8 +136,8 @@ def generate_insights(tenant_id: str) -> List[Dict[str, str]]:
 
         sql_trending = """
             SELECT event_name, 
-                   sumIf(total_events, date = today()) as today_count,
-                   sumIf(total_events, date = today() - 1) as yesterday_count
+                   uniqExactMergeIf(event_count, date = today()) as today_count,
+                   uniqExactMergeIf(event_count, date = today() - 1) as yesterday_count
             FROM feature_intelligence.daily_feature_usage
             WHERE tenant_id = %(tenant_id)s AND date >= today() - 1
             GROUP BY event_name

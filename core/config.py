@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     
     class Config:
         env_file = ".env"
+        extra = "ignore"  # .env is shared across services (docker-compose port refs, vLLM, etc.)
+                           # that Settings doesn't declare fields for -- don't crash on those.
 
 # Global settings instance
 settings = Settings()

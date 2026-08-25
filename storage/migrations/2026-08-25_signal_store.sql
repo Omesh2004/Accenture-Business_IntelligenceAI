@@ -1,114 +1,7 @@
-CREATE DATABASE IF NOT EXISTS feature_intelligence;
-
--- Raw Events Table
--- Using MergeTree and ordering by tenant_id first guarantees data locality per tenant, optimizing multi-tenant queries.
-CREATE TABLE IF NOT EXISTS feature_intelligence.events_raw (
-    event_id String DEFAULT '',
-    session_id String DEFAULT '',
-    tenant_id String,
-    event_name String,
-    user_id String,
-    channel String,
-    timestamp DateTime,
-    metadata String
-) ENGINE = MergeTree()
-PARTITION BY toYYYYMM(timestamp)
-ORDER BY (tenant_id, event_name, timestamp)
-SETTINGS index_granularity = 8192;
-
--- Pre-aggregated Daily Feature Usage Table
--- This is useful for fast dashboard loading where we only need counts.
-CREATE TABLE IF NOT EXISTS feature_intelligence.daily_feature_usage (
-    tenant_id String,
-    event_name String,
-    date Date,
-    event_count AggregateFunction(uniqExact, String),
-    unique_users AggregateFunction(uniq, String)
-) ENGINE = AggregatingMergeTree()
-PARTITION BY toYYYYMM(date)
-ORDER BY (tenant_id, event_name, date);
-
--- Materialized View to automatically populate daily_feature_usage from events_raw
-CREATE MATERIALIZED VIEW IF NOT EXISTS feature_intelligence.mv_daily_feature_usage
-TO feature_intelligence.daily_feature_usage AS
-SELECT
-    tenant_id,
-    event_name,
-    toDate(timestamp) AS date,
-    uniqExactState(if(length(event_id) > 0, event_id, concat('legacy:', user_id, ':', toString(timestamp), ':', event_name, ':', metadata))) AS event_count,
-    uniqState(user_id) AS unique_users
-FROM feature_intelligence.events_raw
-GROUP BY tenant_id, event_name, date;
-
--- ═══════════════════════════════════════════════════════════
--- Tenant Feature Licenses
--- Tracks which features each tenant has paid for.
--- ═══════════════════════════════════════════════════════════
-CREATE TABLE IF NOT EXISTS feature_intelligence.tenant_licenses (
-    tenant_id String,
-    feature_name String,
-    is_licensed UInt8 DEFAULT 1,
-    plan_tier String DEFAULT 'pro',
-    updated_at DateTime DEFAULT now()
-) ENGINE = ReplacingMergeTree(updated_at)
-ORDER BY (tenant_id, feature_name);
-
--- ═══════════════════════════════════════════════════════════
--- Admin Tracking Toggles
--- Allows admins to enable/disable tracking per feature.
--- ═══════════════════════════════════════════════════════════
-CREATE TABLE IF NOT EXISTS feature_intelligence.tracking_toggles (
-    tenant_id String,
-    feature_name String,
-    is_enabled UInt8 DEFAULT 1,
-    changed_by String DEFAULT '',
-    changed_at DateTime DEFAULT now()
-) ENGINE = ReplacingMergeTree(changed_at)
-ORDER BY (tenant_id, feature_name);
-
--- ═══════════════════════════════════════════════════════════
--- Configuration Audit Log
--- Records who changed which system setting and when.
--- ═══════════════════════════════════════════════════════════
-CREATE TABLE IF NOT EXISTS feature_intelligence.config_audit_log (
-    tenant_id String,
-    actor_email String,
-    action String,
-    target String,
-    old_value String DEFAULT '',
-    new_value String DEFAULT '',
-    timestamp DateTime DEFAULT now()
-) ENGINE = MergeTree()
-PARTITION BY toYYYYMM(timestamp)
-ORDER BY (tenant_id, timestamp);
-
--- ═══════════════════════════════════════════════════════════
--- AI Reports Storage
--- Stores generated AI reports per tenant.
--- ReplacingMergeTree ensures only the latest report is kept
--- per tenant after background merges.
--- ═══════════════════════════════════════════════════════════
-CREATE TABLE IF NOT EXISTS feature_intelligence.ai_reports (
-    tenant_id String,
-    generated_by String DEFAULT '',
-    report String,
-    insights String DEFAULT '[]',
-    generated_at DateTime DEFAULT now()
-) ENGINE = ReplacingMergeTree(generated_at)
-ORDER BY (tenant_id);
-
--- ═══════════════════════════════════════════════════════════
--- Signal Store (Phase 1 intelligence pipeline)
--- Small demo tables -- ORDER BY is enough, no partitioning needed. All findings are written
--- here; the narrator may state only what these tables contain.
---
--- The investigation spine: every table is joined by investigation_id, minted once when a run
--- starts and threaded through every write. Do NOT hang the audit trail off anomaly_id -- Trust
--- Gate can fail before any anomaly exists (scenario 1's incident note has none), and model_runs
--- is written by stages that run before an insight exists. `forecasts` is the one exception: it
--- is produced by a scheduled batch, not an investigation, and carries its own forecast_id,
--- referenced by anomalies.forecast_id. See docs/DATABASE.md.
--- ═══════════════════════════════════════════════════════════
+-- Signal Store: new tables for the Phase 1 intelligence pipeline (stages 00-08).
+-- Additive only -- creates 10 new tables, touches nothing that already exists.
+-- Apply directly to a running ClickHouse (schema.sql only auto-runs on an empty volume).
+-- See docs/DATABASE.md "Signal Store: new tables for Phase 1" for the full rationale.
 
 -- Stage 00. The run itself. One row per investigation, created before any stage executes.
 CREATE TABLE IF NOT EXISTS feature_intelligence.investigations (
@@ -131,7 +24,7 @@ ORDER BY (tenant_id, kpi_id, investigation_id);
 -- suppression rate, and a defect that blocks narration must leave a row behind.
 CREATE TABLE IF NOT EXISTS feature_intelligence.trust_findings (
     finding_id       String,
-    investigation_id String,           -- the spine; see note above
+    investigation_id String,           -- the spine; see docs/DATABASE.md
     tenant_id        String,
     kpi_id           String,
     window_start     DateTime,

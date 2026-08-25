@@ -14,35 +14,55 @@ grain:
   entity: session
 
 readiness:
-  status: degraded
+  status: ready
   seeded_path: ready          # scripts/seed_data.py -- the path the Phase 1 demo runs on
-  live_path: blocked          # NexaBank/backend/src/middleware/eventTracker.ts
+  live_path: ready            # NexaBank/backend/src/middleware/eventTracker.ts
   blockers:
     - id: no-event-id
+      status: resolved
       affects: [seeded, live]
       detail: >
-        No producer emits event_id and FeatureEvent has no such field, so the dedup_integrity
-        invariant below cannot run and the duplicate-event-storm scenario cannot be detected.
-      fix: "FOUNDATION-1. NexaBank Postgres Event.id (uuid) is already minted; capture and forward it."
+        No producer emitted event_id and FeatureEvent had no such field, so the dedup_integrity
+        invariant below could not run and the duplicate-event-storm scenario could not be detected.
+      fix: "FOUNDATION-1. NexaBank Postgres Event.id (uuid) is captured in eventTracker.ts and
+        forwarded through ingestion -> Kafka -> ClickHouse. Verified: events_raw.event_id is
+        populated end to end."
     - id: live-no-session-id
+      status: resolved
       affects: [live]
       detail: >
-        eventTracker.ts emits no session_id, so the live stream has no session grain and this
-        ratio is not localizable from it. scripts/seed_data.py DOES emit a stable per-session
-        session_id, so seeded data is unaffected.
-      fix: "FOUNDATION-2."
+        eventTracker.ts emitted no session_id, so the live stream had no session grain and this
+        ratio was not localizable from it. scripts/seed_data.py already emitted a stable
+        per-session session_id, so seeded data was unaffected.
+      fix: "FOUNDATION-2. The frontend now mints a session_id in sessionStorage and sends it as
+        x-session-id; the backend reads it via AsyncLocalStorage and threads it through
+        trackEvent -> forwardToIngestionAPI -> FeatureEvent -> events_raw.session_id."
     - id: live-dimensions-are-noise
+      status: resolved
       affects: [live]
       detail: >
-        forwardToIngestionAPI calls selectGeoProfile() and selectDevice() PER EVENT, so
-        location and device_type are re-rolled on every event and are statistically
-        independent of user, session, and outcome. Localize cannot recover a planted segment
-        from live traffic. seed_data.generate_session_events picks one profile per session and
-        reuses it, so seeded dimensions are session-invariant and localization is valid there.
-      fix: "FOUNDATION-2: derive the geo/device profile once per session, not per event."
+        forwardToIngestionAPI called selectGeoProfile() and selectDevice() PER EVENT, so
+        location and device_type were re-rolled on every event and were statistically
+        independent of user, session, and outcome. seed_data.generate_session_events picks one
+        profile per session and reuses it, so seeded dimensions were already session-invariant.
+      fix: "FOUNDATION-2. eventTracker.ts now caches one geo/device/channel profile per
+        session_id (the sessionProfiles map) and reuses it for every event in that session, so
+        live dimensions are session-invariant too."
+    - id: live-kyc-started-misrouted
+      status: resolved
+      affects: [live]
+      detail: >
+        The real KYC-start trigger (ApplyLoanForm.tsx step 1) posts directly to the ingestion
+        API with event_name 'loans.proceed_to_kyc.success', bypassing eventTracker.ts's taxonomy
+        layer entirely. canonicalize_event_name('loans.proceed_to_kyc.success') resolved to
+        'loan.proceed_to_kyc.success', not 'loan.kyc_started.success' -- so kyc_started_sessions
+        read zero on the live path even after FOUNDATION-2/3 landed.
+      fix: "Added 'loans.proceed_to_kyc.success' -> 'loan.kyc_started.success' to
+        CANONICAL_EVENT_ALIASES in api/page_map.py. Verified with canonicalize_event_name."
   gate: >
-    Narrate from the seeded path only while live_path is blocked. If a run's data came from
-    the live path, Trust Gate returns fail:not_instrumented rather than reading zero silently.
+    Both paths are instrumented; Trust Gate no longer needs to force fail:not_instrumented for
+    this KPI on readiness grounds alone. Ordinary Trust Gate invariant checks (dedup_integrity,
+    session_present, funnel_order) still apply per run.
 
 source:
   name: nexabank_clickstream
@@ -80,8 +100,8 @@ dimensions:
   max_depth: 3
   min_segment_volume: 20
   availability:
-    device_type: {seeded: true, live: noise}
-    location: {seeded: true, live: noise}
+    device_type: {seeded: true, live: true}   # FOUNDATION-2: session-cached, no longer re-rolled per event
+    location: {seeded: true, live: true}      # FOUNDATION-2: session-cached, no longer re-rolled per event
     channel: {seeded: true, live: true}
     continent: {seeded: true, live: true}
   excluded:

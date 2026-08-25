@@ -51,6 +51,8 @@ class ClickHouseClient:
         # Prepare column data
         data = [
             [
+                e.get('event_id', ''),
+                e.get('session_id') or e.get('metadata', {}).get('session_id', ''),
                 e['tenant_id'], 
                 e['event_name'], 
                 e['user_id'], 
@@ -64,7 +66,7 @@ class ClickHouseClient:
         client.insert(
             'feature_intelligence.events_raw',
             data,
-            column_names=['tenant_id', 'event_name', 'user_id', 'channel', 'timestamp', 'metadata']
+            column_names=['event_id', 'session_id', 'tenant_id', 'event_name', 'user_id', 'channel', 'timestamp', 'metadata']
         )
         logger.debug(f"Inserted {len(events)} events into ClickHouse.")
 
