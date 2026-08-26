@@ -2,6 +2,13 @@ import express, { Request, Response } from "express";
 import { prisma } from "../prisma";
 import { isLoggedIn, isAdmin } from "../middleware/IsLoggedIn";
 import { trackEvent } from "../middleware/eventTracker";
+import {
+  BehaviorOverride,
+  describeOverride,
+  parseBehaviorOverride,
+  pickWeighted,
+  resolveBehavior,
+} from "../helper/simulationBehavior";
 import { UAParser } from "ua-parser-js";
 import axios from "axios";
 
@@ -520,6 +527,11 @@ router.post(
       .toLowerCase();
 
     const tenantId = tenantAliasMap[rawTenant] || rawTenant || "bank_a";
+    // Behaviour knobs from the simulate page. Null means "generate at baseline", which is
+    // the distribution this route produced before knobs existed.
+    const behaviorOverride: BehaviorOverride | null = parseBehaviorOverride(
+      (req.body as { behavior?: unknown })?.behavior
+    );
     const count = Number.isFinite(rawCount)
       ? Math.max(1, Math.min(Math.floor(rawCount), 100))
       : 50;
@@ -689,7 +701,36 @@ router.post(
 
           // User logged in today -- each day is its own session for session-grain analytics
           lMeta = { ...lMeta, session_id: `sess_sim_${seed}_d${day}` };
-          const channel = Math.random() < 0.6 ? persona.preferredChannel : pick(CHANNELS);
+
+          // `day` counts UP toward now (dayTs = baseTs + day*86400), so days-ago inverts it.
+          const daysAgo = joinDaysAgo - day;
+
+          // Mix overrides are applied per SESSION, not per event and not per user. The
+          // kyc_completion_rate contract needs each dimension to be invariant WITHIN a
+          // session; a user on mobile one day and desktop the next is realistic and legal.
+          // Re-rolling per event is the FOUNDATION-2 bug and must not come back.
+          const mixBehavior = resolveBehavior(behaviorOverride, {
+            daysAgo,
+            deviceType: String(lMeta.device_type || ""),
+            location: String(lMeta.location || ""),
+          });
+          const forcedDevice = pickWeighted(mixBehavior.mix.deviceWeights);
+          const forcedCountry = pickWeighted(mixBehavior.mix.countryWeights);
+          if (forcedDevice) lMeta = { ...lMeta, device_type: forcedDevice };
+          if (forcedCountry) lMeta = { ...lMeta, country: forcedCountry, location: forcedCountry };
+
+          // Resolve again AFTER the mix shift so a segment-scoped rate override matches the
+          // device/location this session actually ended up with.
+          const behavior = resolveBehavior(behaviorOverride, {
+            daysAgo,
+            deviceType: String(lMeta.device_type || ""),
+            location: String(lMeta.location || ""),
+          });
+
+          const forcedChannel = pickWeighted(behavior.mix.channelWeights);
+          const channel = forcedChannel
+            ? forcedChannel
+            : (Math.random() < 0.6 ? persona.preferredChannel : pick(CHANNELS));
           await trackEvent("free.auth.login.success", customer.id, tenantId, { channel, ...lMeta, day }, dayTs);
           eventsCreated++;
 
@@ -735,14 +776,14 @@ router.post(
             }
           }
 
-          if (kycState === "NOT_STARTED" && day > 2 && Math.random() < 0.25) {
+          if (kycState === "NOT_STARTED" && day > 2 && Math.random() < behavior.kyc.startRate) {
             kycState = "PENDING";
             await prisma.customer.update({ where: { id: customer.id }, data: { kycStatus: "PENDING" } });
             await trackEvent("free.loan.kyc_started", customer.id, tenantId, { ...lMeta }, dayTs + 200);
             eventsCreated++;
           }
-          if (kycState === "PENDING" && Math.random() < persona.kycCompletionRate * 0.3) {
-            if (Math.random() < 0.85) {
+          if (kycState === "PENDING" && Math.random() < persona.kycCompletionRate * behavior.kyc.progressMultiplier) {
+            if (Math.random() < behavior.kyc.successRate) {
               kycState = "VERIFIED";
               await prisma.customer.update({
                 where: { id: customer.id },
@@ -826,59 +867,63 @@ router.post(
 
             // Crypto suite
             if (Math.random() < 0.22) {
-              await trackEvent("pro.crypto_price_feeds.view", customer.id, tenantId, { source: pick(["live", "cache"]), ...lMeta, tier: "enterprise" }, proTimelineBase + 10);
+              // pro_revenue lists crypto-trading.page.view as a corroboration event; without a
+              // module entry event it read zero on both paths.
+              await trackEvent("crypto_trading.page.view", customer.id, tenantId, { ...lMeta, tier: "enterprise" }, proTimelineBase + 5);
+              eventsCreated++;
+              await trackEvent("crypto_trading.price_feeds.view", customer.id, tenantId, { source: pick(["live", "cache"]), ...lMeta, tier: "enterprise" }, proTimelineBase + 10);
               eventsCreated++;
             }
             if (Math.random() < 0.14) {
-              await trackEvent("pro.crypto_portfolio.view", customer.id, tenantId, { ...lMeta, tier: "enterprise" }, proTimelineBase + 20);
+              await trackEvent("crypto_trading.portfolio.view", customer.id, tenantId, { ...lMeta, tier: "enterprise" }, proTimelineBase + 20);
               eventsCreated++;
             }
             if (Math.random() < 0.11) {
-              await trackEvent("pro.crypto_trade_execution.success", customer.id, tenantId, { amount: Math.floor(500 + Math.random() * 4500), symbol: pick(["BTC", "ETH", "SOL", "XRP"]), ...lMeta, tier: "enterprise" }, proTimelineBase + 30);
+              await trackEvent("crypto_trading.trade_execution.success", customer.id, tenantId, { amount: Math.floor(500 + Math.random() * 4500), symbol: pick(["BTC", "ETH", "SOL", "XRP"]), ...lMeta, tier: "enterprise" }, proTimelineBase + 30);
               eventsCreated++;
               if (Math.random() < 0.09) {
-                await trackEvent("pro.crypto_trade_execution.failed", customer.id, tenantId, { reason: pick(["Insufficient Funds", "Price Slippage", "Exchange Timeout"]), ...lMeta, tier: "enterprise" }, proTimelineBase + 35);
+                await trackEvent("crypto_trading.trade_execution.failure", customer.id, tenantId, { reason: pick(["Insufficient Funds", "Price Slippage", "Exchange Timeout"]), ...lMeta, tier: "enterprise" }, proTimelineBase + 35);
                 eventsCreated++;
               }
             }
 
             // Wealth suite
             if (Math.random() < 0.16) {
-              await trackEvent("pro.wealth_insights.view", customer.id, tenantId, { ...lMeta, tier: "enterprise" }, proTimelineBase + 45);
+              await trackEvent("wealth_management_pro.insights.view", customer.id, tenantId, { ...lMeta, tier: "enterprise" }, proTimelineBase + 45);
               eventsCreated++;
             }
             if (Math.random() < 0.08) {
-              await trackEvent("pro.wealth_rebalance.success", customer.id, tenantId, { ...lMeta, tier: "enterprise" }, proTimelineBase + 55);
+              await trackEvent("wealth_management_pro.rebalance.success", customer.id, tenantId, { ...lMeta, tier: "enterprise" }, proTimelineBase + 55);
               eventsCreated++;
               if (Math.random() < 0.06) {
-                await trackEvent("pro.wealth_rebalance.failed", customer.id, tenantId, { reason: pick(["Allocation Constraint", "Market Halt"]), ...lMeta, tier: "enterprise" }, proTimelineBase + 58);
+                await trackEvent("wealth_management_pro.rebalance.failure", customer.id, tenantId, { reason: pick(["Allocation Constraint", "Market Halt"]), ...lMeta, tier: "enterprise" }, proTimelineBase + 58);
                 eventsCreated++;
               }
             }
 
             // Payroll suite
             if (Math.random() < 0.13) {
-              await trackEvent("pro.payroll_payees.view", customer.id, tenantId, { ...lMeta, tier: "enterprise" }, proTimelineBase + 70);
+              await trackEvent("bulk_payroll_processing.payees.view", customer.id, tenantId, { ...lMeta, tier: "enterprise" }, proTimelineBase + 70);
               eventsCreated++;
             }
             if (Math.random() < 0.1) {
               const payrollSearchSuccess = Math.random() > 0.12;
-              await trackEvent(payrollSearchSuccess ? "pro.payroll_search.success" : "pro.payroll_search.failed", customer.id, tenantId, { queryLength: Math.floor(3 + Math.random() * 7), ...lMeta, tier: "enterprise" }, proTimelineBase + 78);
+              await trackEvent(payrollSearchSuccess ? "bulk_payroll_processing.search.success" : "bulk_payroll_processing.search.failure", customer.id, tenantId, { queryLength: Math.floor(3 + Math.random() * 7), ...lMeta, tier: "enterprise" }, proTimelineBase + 78);
               eventsCreated++;
             }
             if (Math.random() < 0.07) {
               const payrollBatchSuccess = Math.random() > 0.1;
-              await trackEvent(payrollBatchSuccess ? "pro.payroll_batch.success" : "pro.payroll_batch.failed", customer.id, tenantId, { employees: Math.floor(10 + Math.random() * 190), ...lMeta, tier: "enterprise" }, proTimelineBase + 86);
+              await trackEvent(payrollBatchSuccess ? "bulk_payroll_processing.batch.success" : "bulk_payroll_processing.batch.failure", customer.id, tenantId, { employees: Math.floor(10 + Math.random() * 190), ...lMeta, tier: "enterprise" }, proTimelineBase + 86);
               eventsCreated++;
             }
 
             // AI insights suite
             if (Math.random() < 0.15) {
-              await trackEvent("pro.finance_library_stats.view", customer.id, tenantId, { ...lMeta, tier: "enterprise" }, proTimelineBase + 96);
+              await trackEvent("ai_insights.stats.view", customer.id, tenantId, { ...lMeta, tier: "enterprise" }, proTimelineBase + 96);
               eventsCreated++;
             }
             if (Math.random() < 0.09) {
-              await trackEvent("pro.finance_library_book.access", customer.id, tenantId, { title: pick(["The Intelligent Investor", "The Psychology of Money", "Rich Dad Poor Dad", "A Random Walk Down Wall Street"]), ...lMeta, tier: "enterprise" }, proTimelineBase + 104);
+              await trackEvent("ai_insights.book.success", customer.id, tenantId, { title: pick(["The Intelligent Investor", "The Psychology of Money", "Rich Dad Poor Dad", "A Random Walk Down Wall Street"]), ...lMeta, tier: "enterprise" }, proTimelineBase + 104);
               eventsCreated++;
             }
           }
@@ -904,8 +949,20 @@ router.post(
             }
           }
 
+          // ── Unauthorized access attempts ──────────────────
+          // Same event IsLoggedIn.ts emits when a non-admin hits an admin route, so a
+          // simulated burst is indistinguishable from real violations downstream.
+          if (Math.random() < behavior.pro.roleViolationRate) {
+            await trackEvent("auth.role.violation", customer.id, tenantId, {
+              role: "user",
+              attempted_action: pick(["GET /api/admin/applications", "POST /api/approve", "PUT /api/events/toggles"]),
+              ...lMeta,
+            }, dayTs + 2600);
+            eventsCreated++;
+          }
+
           // ── Loan Application ──────────────────────────────
-          if (!hasAppliedLoan && kycState === "VERIFIED" && day > 5 && Math.random() < persona.loanInterest * 0.15) {
+          if (!hasAppliedLoan && kycState === "VERIFIED" && day > 5 && Math.random() < persona.loanInterest * behavior.loans.applicationMultiplier) {
             const loanType = pick(LOAN_TYPES);
             const loanAmounts: Record<string, [number, number]> = {
               HOME: [500000, 5000000],
@@ -946,6 +1003,19 @@ router.post(
               await trackEvent("lending.loan.kyc_abandoned", customer.id, tenantId, { step: 1, context: "loan", ...lMeta }, dayTs + 3500);
             }
             eventsCreated += 2;
+
+            // Approval. This route previously created applications but never approved one,
+            // so loan_approval_volume's numerator (loan.approved.success) had no source on
+            // the simulate path at all -- it came only from an admin clicking Approve in the
+            // UI. "loan_approved" is the LEGACY_MAP key that resolves to loan.approved.success.
+            if (kycComplete && Math.random() < behavior.loans.approvalRate) {
+              await prisma.loanApplication.updateMany({
+                where: { customerId: customer.id, status: "PENDING" },
+                data: { status: "APPROVED" },
+              });
+              await trackEvent("loan_approved", customer.id, tenantId, { loanType, amount: principalAmount, term, ...lMeta }, dayTs + 4200);
+              eventsCreated++;
+            }
           }
 
           // ── Pro Feature Exploration & Conversion ──────────
@@ -956,7 +1026,7 @@ router.post(
 
             // Whale users (high balance) are 5x more likely to convert
             const isWhale = currentBalance > 100000;
-            const conversionChance = persona.proConversionChance * (isWhale ? 5 : 1);
+            const conversionChance = persona.proConversionChance * (isWhale ? 5 : 1) * behavior.pro.conversionMultiplier;
 
             if (currentBalance > 5000 && Math.random() < conversionChance) {
               const expiry = new Date((dayTs + 86400 * 30) * 1000);
@@ -1001,17 +1071,17 @@ router.post(
             const u2 = Math.random();
             const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
             const responseTime = Math.max(15, Math.min(300, Math.round(Math.exp(4.0 + z * 0.7))));
-            const isError = Math.random() < 0.03; // 3% error rate
+            const isError = Math.random() < behavior.pro.errorRate;
 
             if (unlockedFeature === "ai_insight_download") {
               // Finance Library — book access events
               const bookTitles = ["The Intelligent Investor", "Rich Dad Poor Dad", "The Psychology of Money", "A Random Walk Down Wall Street", "Common Stocks and Uncommon Profits", "The Little Book of Common Sense Investing"];
               const bookTitle = pick(bookTitles);
-              await trackEvent("pro.finance-library.book_access", customer.id, tenantId, {
+              await trackEvent((isError ? "ai_insights.book.failure" : "ai_insights.book.success"), customer.id, tenantId, {
                 feature: "ai-insights", title: bookTitle, status: isError ? "error" : "success",
                 response_time_ms: responseTime, error: isError ? "timeout" : undefined, ...lMeta
               }, dayTs + 6000, 'enterprise');
-              await trackEvent("pro.finance-library.stats_view", customer.id, tenantId, {
+              await trackEvent("ai_insights.stats.view", customer.id, tenantId, {
                 feature: "ai-insights", books_tracked: Math.floor(1 + Math.random() * 5),
                 status: "success", response_time_ms: responseTime, ...lMeta
               }, dayTs + 6100, 'enterprise');
@@ -1022,21 +1092,23 @@ router.post(
               const assets = ["BTC", "ETH", "SOL", "XRP", "ADA"];
               const asset = pick(assets);
               const tradeType = pick(["BUY", "SELL"]);
-              await trackEvent("pro.crypto-trading.prices_view", customer.id, tenantId, {
+              await trackEvent("crypto_trading.page.view", customer.id, tenantId, { feature: "crypto-trading", ...lMeta }, dayTs + 5950, 'enterprise');
+              eventsCreated++;
+              await trackEvent((isError ? "crypto_trading.price_feeds.failure" : "crypto_trading.price_feeds.view"), customer.id, tenantId, {
                 feature: "crypto-trading", source: pick(["live", "cache"]),
                 status: isError ? "error" : "success", response_time_ms: responseTime,
                 assets_count: 5, ...lMeta
               }, dayTs + 6000, 'enterprise');
               if (Math.random() < 0.4) {
                 const tradeAmount = parseFloat((0.001 + Math.random() * 0.5).toFixed(4));
-                await trackEvent("pro.crypto-trading.trade_execute", customer.id, tenantId, {
+                await trackEvent((isError ? "crypto_trading.trade_execution.failure" : "crypto_trading.trade_execution.success"), customer.id, tenantId, {
                   feature: "crypto-trading", asset, amount: tradeAmount, type: tradeType,
                   status: isError ? "error" : "success", response_time_ms: responseTime,
                   error: isError ? "insufficient_funds" : undefined, ...lMeta
                 }, dayTs + 6200, 'enterprise');
                 eventsCreated++;
               }
-              await trackEvent("pro.crypto-trading.portfolio_view", customer.id, tenantId, {
+              await trackEvent("crypto_trading.portfolio.view", customer.id, tenantId, {
                 feature: "crypto-trading", holdings_count: Math.floor(Math.random() * 4),
                 status: "success", response_time_ms: responseTime, ...lMeta
               }, dayTs + 6300, 'enterprise');
@@ -1044,7 +1116,7 @@ router.post(
 
             } else if (unlockedFeature === "wealth_rebalance") {
               // Wealth Management — insights + rebalance
-              await trackEvent("pro.wealth-management.insights_view", customer.id, tenantId, {
+              await trackEvent((isError ? "wealth_management_pro.insights.failure" : "wealth_management_pro.insights.view"), customer.id, tenantId, {
                 feature: "wealth-management-pro", status: isError ? "error" : "success",
                 response_time_ms: responseTime, accounts_count: Math.floor(1 + Math.random() * 3),
                 transactions_analyzed: Math.floor(10 + Math.random() * 200),
@@ -1052,7 +1124,7 @@ router.post(
                 error: isError ? "db_timeout" : undefined, ...lMeta
               }, dayTs + 6000, 'enterprise');
               if (Math.random() < 0.15) {
-                await trackEvent("pro.wealth-management.rebalance", customer.id, tenantId, {
+                await trackEvent("wealth_management_pro.rebalance.success", customer.id, tenantId, {
                   feature: "wealth-management-pro", status: "success",
                   response_time_ms: Math.floor(100 + Math.random() * 1000),
                   totalValue: Math.floor(100000 + Math.random() * 500000), ...lMeta
@@ -1063,14 +1135,14 @@ router.post(
 
             } else if (unlockedFeature === "pro-feature?id=bulk-payroll-processing") {
               // Payroll Pro — payee views + batch processing
-              await trackEvent("pro.payroll-pro.payees_view", customer.id, tenantId, {
+              await trackEvent("bulk_payroll_processing.payees.view", customer.id, tenantId, {
                 feature: "bulk-payroll-processing", payees_count: Math.floor(2 + Math.random() * 15),
                 status: "success", response_time_ms: responseTime, ...lMeta
               }, dayTs + 6000, 'enterprise');
               if (Math.random() < 0.3) {
                 const payeeCount = Math.floor(2 + Math.random() * 10);
                 const amtPerPayee = Math.floor(1000 + Math.random() * 9000);
-                await trackEvent("pro.payroll-pro.batch_process", customer.id, tenantId, {
+                await trackEvent((isError ? "bulk_payroll_processing.batch.failure" : "bulk_payroll_processing.batch.success"), customer.id, tenantId, {
                   feature: "bulk-payroll-processing",
                   payees_count: payeeCount,
                   amount_per_payee: amtPerPayee,
@@ -1111,7 +1183,7 @@ router.post(
            eventsCreated++;
            
            if (persona.isEnterprise && Math.random() < 0.3) {
-               await trackEvent("pro.crypto_trade_execution.success", customer.id, tenantId, { amount: Math.floor(100+Math.random()*900), symbol: "BTC", ...lMeta, live_pulse: true }, nowTs + 15);
+               await trackEvent("crypto_trading.trade_execution.success", customer.id, tenantId, { amount: Math.floor(100+Math.random()*900), symbol: "BTC", ...lMeta, live_pulse: true }, nowTs + 15);
                eventsCreated++;
            }
         }
@@ -1202,6 +1274,12 @@ router.post(
         simulatedDays: simDays,
         runMs,
         throughputEventsPerSec: throughput,
+        // Echo of what the run was asked to do, for the operator's screen only.
+        // Deliberately NOT persisted anywhere: no table records that a movement was
+        // introduced, so the intelligence layer has to infer it from the telemetry rather
+        // than look it up. See NexaBank/backend/src/helper/simulationBehavior.ts.
+        behaviorApplied: behaviorOverride,
+        behaviorSummary: describeOverride(behaviorOverride),
         processingSummary: {
           users: { requested: userCount, created: usersCreated, skipped: skippedUsers },
           funnel: {

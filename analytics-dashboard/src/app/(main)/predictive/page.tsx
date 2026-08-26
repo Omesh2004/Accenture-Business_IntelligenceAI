@@ -405,8 +405,8 @@ export default function PredictivePage() {
                 metricLabel={forecast.metric_id}
                 modelUsed={forecast.model_used}
                 beatNaive={forecast.beat_naive}
-                mase={forecast.backtest_mase}
-                crps={forecast.backtest_crps}
+                mase={forecast.mase}
+                crps={forecast.crps}
                 fallbackReason={forecast.fallback_reason}
               />
             </ChartContainer>

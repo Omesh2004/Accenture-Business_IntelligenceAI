@@ -54,6 +54,14 @@ export interface KPIMetric {
   change: number; // percentage change from previous period
   changeDirection: 'up' | 'down';
   icon: string;
+  /**
+   * True when any part of this figure is modelled rather than measured. Response time, geo
+   * and device are synthesised in the forwarding layer, and there is no money field anywhere
+   * in events_raw. CLAUDE.md requires such figures to be labelled in the UI, never shown bare.
+   */
+  simulated?: boolean;
+  /** Human-readable reason shown alongside the simulated badge. */
+  simulatedNote?: string;
 }
 
 /* ─────────────── Chart Data Types ─────────────── */

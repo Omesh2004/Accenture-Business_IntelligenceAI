@@ -313,7 +313,7 @@ export default function AIReportPage() {
                   </p>
                   <ul className="mt-2 text-sm text-red-800 list-disc list-inside">
                     {quarantinedMetrics.slice(0, 3).map((qm, i) => (
-                      <li key={i}><strong>{qm.metric_id}</strong>: {qm.reason || 'Pending review'}</li>
+                      <li key={i}><strong>{qm.metric_id}</strong>: {qm.failing_detail || 'Pending review'}</li>
                     ))}
                     {quarantinedMetrics.length > 3 && (
                       <li>...and {quarantinedMetrics.length - 3} more</li>

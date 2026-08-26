@@ -31,17 +31,38 @@ NexaBank UI / backend            (event producers)
                                  synthesises geo/device/latency, maps bank_a -> nexabank
   POST /events  (:8000)  ->  validate FeatureEvent (name coerced to 3 lowercase segments)
                          ->  sanitize metadata (email/IPv4 redaction)
-                         ->  tracking_toggles check (403 if disabled)
-                         ->  Kafka feature-events   (or direct-CH fallback on 5s timeout)
+                         ->  tracking_toggles check, cached 20s, raw OR canonical name
+                         ->  Kafka feature-events   (or direct-CH fallback if unreachable)
   processing/worker.py   ->  buffer 500 events / 2s  ->  ClickHouse events_raw
+                         ->  on failure: backoff, isolate, events_dead_letter
   mv_daily_feature_usage ->  rolls up into daily_feature_usage automatically
   api/main.py reads      ->  canonicalize_event_name merges aliases at query time
   dashboard              ->  REST JSON (UI-shaped) + WS METRICS_UPDATE / REALTIME_EVENT
 ```
 
 Key facts that constrain how you write code:
+- **Kafka is the primary path, and for a long time it silently was not.** `ingestion/main.py`
+  connected once in its lifespan handler; compose declared `depends_on: broker` with no
+  `condition: service_healthy`, so it lost that race, set `producer = None`, and never retried.
+  Every event took the direct-ClickHouse fallback, `feature-events` sat at LOG-END-OFFSET 0,
+  and `processing/worker.py` had never executed at all. The producer now reconnects lazily and
+  the broker has a healthcheck. `GET /health` reports `ingest_path`: if it says
+  `clickhouse_fallback`, the worker is idle and nothing is buffering in Kafka.
+- Delivery is at-least-once and `events_raw` never deduplicates, so a worker replay genuinely
+  doubles rows. That is safe ONLY because every reader counts `uniqExact(event_id)`. Verified
+  end to end: replaying 5 events took raw rows 5 -> 10 while `/metrics/kpi` stayed put.
+- The worker applies backpressure rather than buffering without bound, retries with backoff,
+  and parks rows that fail individually in `events_dead_letter` so one poison message cannot
+  stall the partition. It probes ClickHouse with `SELECT 1` to tell "the sink is down, hold
+  and replay" from "this batch is malformed, dead-letter it".
 - FastAPI handlers are `def`, run in Starlette's thread pool, so `ClickHouseClient` builds a
   fresh client per call (clickhouse_connect is not thread-safe). Keep that pattern.
+  `ingestion/main.py` is the exception: its handlers are `async def`, so blocking
+  clickhouse_connect calls there go through `asyncio.to_thread` or they stall the event loop
+  for every concurrent request.
+- Tracking toggles are cached with a short TTL and matched against BOTH the raw and the
+  canonical event name. The dashboard writes canonical keys and producers send raw ones; when
+  ingest checked only the raw name, disabling a feature in the admin UI did nothing at all.
 - Every read comes only from ClickHouse. Postgres (bank state) and ClickHouse (telemetry) are
   never joined.
 - Bank state (customers, accounts, loans, licenses) lives in Postgres and never reaches
@@ -52,20 +73,28 @@ Key facts that constrain how you write code:
 - The worker commits Kafka offsets **after** the ClickHouse insert, asynchronously. Delivery is
   at-least-once, and `events_raw` is a plain `MergeTree` that never deduplicates.
 
-## The two producer paths differ in a way that matters
+## The three producer paths
 
-| | `scripts/seed_data.py` (demo) | `eventTracker.ts` (live NexaBank) |
-|---|---|---|
-| `session_id` | stable, one per session | **absent** |
-| geo / device | one profile per session, reused | **re-rolled per event** |
-| event names | canonical, emitted directly | via `LEGACY_MAP` + `enforceTaxonomy` |
-| localizable | **yes** | **no** |
+| | `scripts/seed_data.py` (demo) | `eventTracker.ts` (live NexaBank) | `lib/tracker.ts` (browser) |
+|---|---|---|---|
+| `session_id` | stable, one per session | from `x-session-id` header | `sessionStorage` |
+| geo / device | one profile per session | one profile cached per session | real, from `useGeoLocation` |
+| event names | canonical, emitted directly | `LEGACY_MAP` + `enforceTaxonomy` | straight to ingest dialect |
+| localizable | **yes** | **yes** | yes, once geo resolves |
 
-`forwardToIngestionAPI` calls `selectGeoProfile()` and `selectDevice()` inside the per-event
-function, so on the live path `location` and `device_type` are statistically independent of user,
-session and outcome. Root-cause localization cannot recover a planted segment from that stream.
-The Phase 1 demo therefore runs on seeded data; fixing the live path is FOUNDATION-2 in
-`docs/DATABASE.md`.
+All three are now session-grain and localizable. The live path was not until the `x-session-id`
+interceptor actually reached the network: it was registered only on an `apiClient` axios instance
+that **nothing imported**, so `getSessionId()` fell through to a fresh `server-<uuid>` per event,
+which in turn meant the per-session geo/device cache (keyed on `session_id`) never hit. Measured
+before the fix: 41 events across 41 sessions, 10 locations, 4 devices. After: 5 events, 1 session,
+1 location, 1 device.
+
+Run `python scripts/verify_data_quality.py` to re-assert this rather than trusting the table.
+
+Note the browser path skips `enforceTaxonomy` entirely -- it posts straight to `POST /events`, so
+only two of the three dialects apply to it. `pro.new_feature.view` is the one name where the two
+dialects disagree (Node strips the reserved `pro.` prefix, Python preserves it); an alias in
+`api/page_map.py` converges them.
 
 Note also that `location` holds a **country** value. There is no `country` key anywhere.
 

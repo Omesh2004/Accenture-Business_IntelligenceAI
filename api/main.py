@@ -32,6 +32,35 @@ TENANT_ALIAS_MAP = {
     "bank_b": "safexbank",
 }
 
+# Replay-safe event count over events_raw.
+#
+# The worker commits Kafka offsets AFTER the ClickHouse insert, so delivery is at-least-once
+# and events_raw (a plain MergeTree) never deduplicates. Counting rows with count() therefore
+# double-counts a replayed batch. Idempotency is delivered at READ time by counting distinct
+# event_ids instead -- see docs/DATABASE.md FOUNDATION-1/4.
+#
+# This expression is byte-for-byte the one in mv_daily_feature_usage (storage/schema.sql).
+# Keep them identical: if they drift, /metrics/kpi and daily_feature_usage report different
+# totals for the same window and the dashboard contradicts itself. The concat() branch only
+# covers legacy rows written before event_id existed.
+DEDUP_EVENT_KEY = (
+    "if(length(event_id) > 0, event_id, "
+    "concat('legacy:', user_id, ':', toString(timestamp), ':', event_name, ':', metadata))"
+)
+
+def count_canonical_features(event_names) -> int:
+    """Distinct features behind a set of raw event names.
+
+    Aliases collapse: dashboard.page.view and free.dashboard.view are one feature, not two.
+    Names canonicalize_event_name drops (returns None) are not features and are excluded.
+    """
+    return len({
+        canonical
+        for canonical in (canonicalize_event_name(str(name)) for name in event_names)
+        if canonical
+    })
+
+
 APP_TENANT_SCOPES = {
     "nexabank": {"nexabank", "safexbank"},
 }
@@ -137,7 +166,7 @@ def build_heatmap_group_labels(days: int, groups: List[str], is_compare: bool) -
     safe_days = max(days, 1)
     bucket_count = max(len(groups), 1)
     bucket_span = safe_days / bucket_count
-    start_date = datetime.utcnow().date() - timedelta(days=safe_days)
+    start_date = datetime.now(timezone.utc).replace(tzinfo=None).date() - timedelta(days=safe_days)
     labels: List[str] = []
 
     for index, _ in enumerate(groups):
@@ -472,6 +501,26 @@ def get_funnel_analysis(
     def sql_quote(value: str) -> str:
         return value.replace("'", "''")
 
+    # The alias dict is hand-maintained and only covers names given an EXPLICIT entry.
+    # canonicalize_event_name also collapses names by RULE -- e.g. loan.kyc_started.action
+    # (what enforceTaxonomy produces from free.loan.kyc_started) resolves to
+    # loan.kyc_started.success without any dict entry. Expanding from the dict alone
+    # therefore searched for names the producers never write, and the funnel read zero rows
+    # while events_raw held thousands. Ask the data which raw names are present and
+    # canonicalize those, so no producible form can be missed.
+    try:
+        present_rows = ch_client.query(
+            f"""
+            SELECT DISTINCT event_name
+            FROM feature_intelligence.events_raw
+            WHERE {cond} AND timestamp >= today() - %(days)s
+            """,
+            params,
+        )
+        present_names = [str(r["event_name"]) for r in present_rows]
+    except Exception:
+        present_names = []
+
     def expand_step_aliases(step_name: str) -> list[str]:
         canonical = canonicalize_event_name(step_name) or step_name
         aliases = {
@@ -483,6 +532,10 @@ def get_funnel_analysis(
             alias
             for alias, mapped in CANONICAL_EVENT_ALIASES.items()
             if mapped == canonical and alias
+        })
+        aliases.update({
+            name for name in present_names
+            if canonicalize_event_name(name) == canonical
         })
         return [a for a in sorted(aliases) if a]
 
@@ -598,7 +651,7 @@ def get_insights(tenants: str = Query(..., description="Comma-separated list of 
         **existing,
         "timestamp": existing.get("timestamp", time.time()),
         "insights": insights_data,
-        "generated_at": existing.get("generated_at", datetime.utcnow().isoformat()),
+        "generated_at": existing.get("generated_at", datetime.now(timezone.utc).replace(tzinfo=None).isoformat()),
     }
     return {"tenant_id": tenant_id, "insights": insights_data, "cached": False}
 
@@ -614,25 +667,36 @@ def get_kpi_metrics(tenants: str = Query(..., description="Comma-separated list 
     
     try:
         # --- Current period ---
+        # count(distinct event_name) counts RAW names, so aliases of one feature (e.g.
+        # dashboard.page.view and free.dashboard.view) registered as two features while
+        # /features/usage correctly showed one. Canonicalize in Python, then count.
         sql_current = f"""
             SELECT 
-                count() as total_events,
-                count(distinct event_name) as active_features
+                uniqExact({DEDUP_EVENT_KEY}) as total_events,
+                groupUniqArray(event_name) as event_names
             FROM feature_intelligence.events_raw
             WHERE {cond} AND timestamp >= today() - %(days)s
         """
         res_current = ch_client.query(sql_current, params)
-        cur = res_current[0] if res_current else {"total_events": 0, "active_features": 0}
+        cur = res_current[0] if res_current else {"total_events": 0, "event_names": []}
+        cur = {
+            "total_events": cur.get("total_events") or 0,
+            "active_features": count_canonical_features(cur.get("event_names") or []),
+        }
 
         sql_prev = f"""
             SELECT 
-                count() as total_events,
-                count(distinct event_name) as active_features
+                uniqExact({DEDUP_EVENT_KEY}) as total_events,
+                groupUniqArray(event_name) as event_names
             FROM feature_intelligence.events_raw
             WHERE {cond} AND timestamp >= today() - (%(days)s * 2) AND timestamp < today() - %(days)s
         """
         res_prev = ch_client.query(sql_prev, params)
-        prev = res_prev[0] if res_prev else {"total_events": 0, "active_features": 0}
+        prev = res_prev[0] if res_prev else {"total_events": 0, "event_names": []}
+        prev = {
+            "total_events": prev.get("total_events") or 0,
+            "active_features": count_canonical_features(prev.get("event_names") or []),
+        }
 
         def pct_change(current_val: int, previous_val: int) -> tuple:
             if previous_val == 0:
@@ -643,12 +707,20 @@ def get_kpi_metrics(tenants: str = Query(..., description="Comma-separated list 
         events_change, events_dir = pct_change(cur["total_events"] or 0, prev["total_events"] or 0)
         features_change, features_dir = pct_change(cur["active_features"] or 0, prev["active_features"] or 0)
 
+        # There is no measured latency on most rows: when metadata has no response_time_ms
+        # this synthesises one from a hash. CLAUDE.md forbids fabricating a metric SILENTLY,
+        # so also count how many rows were synthesised and surface it as `simulated` on the
+        # card. The value stays as-is; what changes is that the UI can now say so.
         sql_response = f"""
-            SELECT avg(if(JSONHas(metadata, 'response_time_ms'), JSONExtractFloat(metadata, 'response_time_ms'), 15 + (cityHash64(event_name, toString(timestamp)) %% 285))) as avg_rt
+            SELECT avg(if(JSONHas(metadata, 'response_time_ms'), JSONExtractFloat(metadata, 'response_time_ms'), 15 + (cityHash64(event_name, toString(timestamp)) %% 285))) as avg_rt,
+                   countIf(NOT JSONHas(metadata, 'response_time_ms')) as synthesised,
+                   count() as total_rows
             FROM feature_intelligence.events_raw
             WHERE {cond} AND timestamp >= today() - %(days)s
         """
         res_rt = ch_client.query(sql_response, params)
+        rt_synthesised = int(res_rt[0].get("synthesised") or 0) if res_rt else 0
+        rt_total_rows = int(res_rt[0].get("total_rows") or 0) if res_rt else 0
         raw_rt = res_rt[0]["avg_rt"] if res_rt and "avg_rt" in res_rt[0] else 0
         if raw_rt is None or (isinstance(raw_rt, float) and math.isnan(raw_rt)):
             avg_rt = 0
@@ -719,6 +791,11 @@ def get_kpi_metrics(tenants: str = Query(..., description="Comma-separated list 
                 "change": rt_change,
                 "changeDirection": rt_dir,
                 "icon": "clock",
+                "simulated": rt_synthesised > 0,
+                "simulatedNote": (
+                    f"{rt_synthesised} of {rt_total_rows} events carry no measured latency; "
+                    "those values are synthesised in the forwarding layer."
+                ) if rt_synthesised > 0 else "",
             },
             {
                 "id": "error-rate",
@@ -1510,9 +1587,13 @@ def get_realtime_users(tenants: str = Query(..., description="Comma-separated li
         WITH session_states AS (
             SELECT
                 user_id,
-                if(
+                -- session_id is a real column since FOUNDATION-2. Prefer it; keep the
+                -- metadata read as a fallback for rows written before the column existed,
+                -- and the user_id fallback for rows that never carried a session at all.
+                multiIf(
+                    length(session_id) > 0, session_id,
                     JSONHas(metadata, 'session_id') AND length(JSONExtractString(metadata, 'session_id')) > 0,
-                    JSONExtractString(metadata, 'session_id'),
+                        JSONExtractString(metadata, 'session_id'),
                     concat('user:', user_id)
                 ) as session_id,
                 max(timestamp) as last_seen,
@@ -2321,7 +2402,7 @@ def sync_licenses(req: LicenseSyncRequest):
         from datetime import datetime
         rows = []
         for f in req.features:
-            rows.append([req.tenant_id, f.feature_name, 1 if f.is_licensed else 0, f.plan_tier, datetime.utcnow()])
+            rows.append([req.tenant_id, f.feature_name, 1 if f.is_licensed else 0, f.plan_tier, datetime.now(timezone.utc).replace(tzinfo=None)])
         
         client = ch_client._get_client()
         client.insert(
@@ -2508,7 +2589,7 @@ def set_tracking_toggle(req: TrackingToggleRequest):
     tenants_sql = ", ".join([f"'{t}'" for t in scope_tenants])
     try:
         from datetime import datetime
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
         canonical_feature = canonicalize_event_name(req.feature_name) or req.feature_name
         canonical_feature = (
             str(canonical_feature or "").strip().lower()
@@ -3005,7 +3086,7 @@ def get_ai_report(
             client = ch_client._get_client()
             client.insert(
                 'feature_intelligence.ai_reports',
-                [[tid, generated_by, report, _json.dumps(insights_list), datetime.utcnow()]],
+                [[tid, generated_by, report, _json.dumps(insights_list), datetime.now(timezone.utc).replace(tzinfo=None)]],
                 column_names=['tenant_id', 'generated_by', 'report', 'insights', 'generated_at']
             )
         except Exception:
@@ -3348,7 +3429,7 @@ Retention metrics are being tracked. A full cohort analysis will be available wh
         _save_report_to_db(tenant_id, final_report, insights_payload, generated_by)
 
         # Update in-memory cache
-        gen_at = datetime.utcnow().isoformat()
+        gen_at = datetime.now(timezone.utc).replace(tzinfo=None).isoformat()
         AI_REPORT_CACHE[cache_key] = {
             "timestamp": time.time(),
             "report": final_report,
@@ -3416,7 +3497,7 @@ Cohort retention data is available for review. Focus on Week 1-2 retention to id
             "tenant_id": tenant_id,
             "report": fallback_report,
             "cached": False,
-            "generated_at": datetime.utcnow().isoformat(),
+            "generated_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
             "time_range": range,
             "insights": [],
             "fallback_reason": str(e),

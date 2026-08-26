@@ -50,26 +50,40 @@ not by reading the code. Most of this repo's failures are silent renames, not ex
   .venv/Scripts/python.exe -c "import sys; sys.path.insert(0,'.'); \
     from api.page_map import canonicalize_event_name as c; print(c('loan.approved.success'))"
   ```
+- Verify the telemetry is fit to build on: `python scripts/verify_data_quality.py`
+  (host, stack up; needs `node`, `requests`, `PyYAML` — no ClickHouse driver).
+- Produce a KPI movement to investigate: the admin simulation console at
+  NexaBank `/admin/simulate`, or `POST /events/simulate` with a `behavior` block. It records
+  **no** ground truth — the movement exists only as the shape of the events. See
+  `docs/SCENARIOS.md`.
 - There are no tests and no CI today. Add tests only where `docs/PHASE_1.md` requires them.
 
-## Foundation: four verified bugs Phase 1 must fix first
+## Foundation: the four bugs stages 01-08 stand on — all four now land
 
-Stages 01-08 are unbuildable until these land. Detail and DDL in `docs/DATABASE.md`.
+Detail, DDL, and the traps each one hid in are in `docs/DATABASE.md`.
 
-1. **`event_id`** — capture the Postgres `Event.id` UUID that `eventTracker.ts:401` already mints
-   and discards. Do *not* hash (source id + sequence + timestamp): there is no source sequence, so
-   it collides.
-2. **`session_id`** — NexaBank emits none, and it re-rolls geo/device **per event**, so those
-   dimensions are statistically noise on the live path. Session grain is what makes ratio
-   localization additive; this is a correctness requirement, not a nicety.
-3. **Taxonomy remaps** — `loan_approved` and `loan_applied` do not survive `LEGACY_MAP` today, so
-   both KPIs read zero rows silently.
-4. **The rollup** — `total_events UInt64` inside an `AggregatingMergeTree` silently decays on
-   merge. Replacing it with `uniqExactState(event_id)` fixes that *and* makes counts idempotent
-   under worker replay.
+1. **`event_id`** — the Postgres `Event.id` UUID that `eventTracker.ts` mints. Do *not* hash
+   (source id + sequence + timestamp): there is no source sequence, so it collides.
+2. **`session_id`** — carried from the browser via `x-session-id`, and the geo/device profile is
+   cached once per session. Session grain is what makes ratio localization additive; this is a
+   correctness requirement, not a nicety.
+3. **Taxonomy remaps** — all three contracts reach every lineage event on both producer paths.
+4. **The rollup** — `event_count AggregateFunction(uniqExact, String)`, read with
+   `uniqExactMerge`. Fixes the silent decay of a plain column inside an `AggregatingMergeTree`
+   *and* makes counts idempotent under worker replay.
 
-`scripts/seed_data.py` already emits `session_id` and assigns one geo/device profile per session,
-so the **seeded demo path is localizable and the live path is not.** Demos run on seeded data.
+**Do not take that list on trust — it was wrong before.** Fixes 2 and 3 were recorded as
+`resolved` in the KPI contracts while both were still inert: the `x-session-id` interceptor was
+registered on an axios instance no file imported, and the `LEGACY_MAP` remaps fixed keys the code
+never calls. Both failures were silent and neither showed up in any chart.
+
+```bash
+python scripts/verify_data_quality.py     # 16 checks; exit 0 only when all pass
+```
+
+It runs the real Node `enforceTaxonomy` by evaluating that function's own source rather than
+reimplementing it, so it cannot drift from the dialect it is checking. Run it after touching any
+producer, the taxonomy, or the schema.
 
 ## The six coupling points (break one and something silently 404s or vanishes)
 
@@ -93,6 +107,8 @@ edit has large, non-obvious blast radius.
    empty list. See `docs/DATABASE.md`.
 6. **Dimension vocabulary and grain** KPI contracts name **physical metadata keys** — there is no
    renaming layer, deliberately. `location` holds a country value; there is no `country` key.
+   `channel` is the exception: it is a top-level `events_raw` **column**, not a metadata key, so
+   reading it with `JSONExtractString(metadata, 'channel')` returns empty on every row.
    `tier` exists live but not in seeded data. A contract may only localize dimensions that are
    invariant within its `grain.entity`, or contribution shares are meaningless. See
    `docs/KPI_CONTRACT.md`.
@@ -158,6 +174,7 @@ edit has large, non-obvious blast radius.
 
 | Need to... | Read |
 |---|---|
+| Know what is already fixed, and what is left before the pipeline | `docs/FOUNDATION_STATUS.md` |
 | Understand the system | `docs/ARCHITECTURE.md` |
 | Know Phase 1 scope / DoD | `docs/PHASE_1.md` |
 | Run or extend a demo scenario | `docs/SCENARIOS.md` |

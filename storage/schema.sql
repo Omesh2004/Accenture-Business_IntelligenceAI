@@ -41,6 +41,25 @@ FROM feature_intelligence.events_raw
 GROUP BY tenant_id, event_name, date;
 
 -- ═══════════════════════════════════════════════════════════
+-- Dead-letter queue for the processor worker.
+-- processing/worker.py inserts in batches and commits Kafka offsets only after a successful
+-- insert. A single un-insertable row therefore failed its ENTIRE batch, forever: offsets
+-- never advanced, the batch was retried every poll, and the pipeline stalled silently with
+-- no signal anywhere. Rows that fail on their own are parked here instead, so one bad event
+-- cannot block every good one behind it -- and is still recoverable rather than dropped.
+-- ═══════════════════════════════════════════════════════════
+CREATE TABLE IF NOT EXISTS feature_intelligence.events_dead_letter (
+    event_id    String DEFAULT '',
+    tenant_id   String DEFAULT '',
+    event_name  String DEFAULT '',
+    payload     String,             -- the original Kafka message, verbatim JSON
+    error       String,             -- the exception this row failed with
+    failed_at   DateTime DEFAULT now()
+) ENGINE = MergeTree()
+PARTITION BY toYYYYMM(failed_at)
+ORDER BY (tenant_id, failed_at);
+
+-- ═══════════════════════════════════════════════════════════
 -- Tenant Feature Licenses
 -- Tracks which features each tenant has paid for.
 -- ═══════════════════════════════════════════════════════════

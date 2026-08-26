@@ -61,6 +61,7 @@ FREE_EVENTS = [
 ]
 
 PRO_EVENTS = [
+    "crypto_trading.page.view",
     "crypto_trading.trade_execution.success",
     "crypto_trading.trade_execution.failure",
     "crypto_trading.price_feeds.view",

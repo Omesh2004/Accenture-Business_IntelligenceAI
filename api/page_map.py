@@ -187,6 +187,7 @@ FEATURE_DISPLAY_NAMES: dict[str, str] = {
     "pro-feature.ai-insights.read_online.failed": "AI Insights Read Failed",
     "ai-insights.book.access": "AI Insights Book Access",
     "ai-insights.book.success": "AI Insights Book Access",
+    "ai-insights.book.failure": "AI Insights Book Access Failed",
     "ai-insights.stats.view": "AI Insights Stats View",
 
     # Pro Features - Crypto Trading
@@ -199,6 +200,7 @@ FEATURE_DISPLAY_NAMES: dict[str, str] = {
     "crypto-trading.trade_execution.failure": "Crypto Trade Execution Failed",
     "crypto-trading.portfolio.view": "Crypto Portfolio View",
     "crypto-trading.price_feeds.view": "Crypto Price Feeds View",
+    "crypto-trading.price_feeds.failure": "Crypto Price Feeds Failed",
 
     # Pro Features - Wealth Management
     "pro-feature.wealth-management-pro.insights_view": "Wealth Insights",
@@ -207,6 +209,7 @@ FEATURE_DISPLAY_NAMES: dict[str, str] = {
     "pro-feature.wealth-management-pro.rebalance_success": "Wealth Rebalanced",
     "pro-feature.wealth-management-pro.rebalance_failed": "Wealth Rebalance Failed",
     "wealth-management-pro.insights.view": "Wealth Insights",
+    "wealth-management-pro.insights.failure": "Wealth Insights Failed",
     "wealth-management-pro.rebalance.success": "Wealth Rebalanced",
     "wealth-management-pro.rebalance.failure": "Wealth Rebalance Failed",
 
@@ -522,6 +525,10 @@ CANONICAL_EVENT_ALIASES: dict[str, str | None] = {
     "pro.crypto_portfolio.view": "crypto-trading.portfolio.view",
     "crypto_trading.portfolio.view": "crypto-trading.portfolio.view",
     "pro.crypto_price_feeds.view": "crypto-trading.price_feeds.view",
+    "crypto_trading.price_feeds.failure": "crypto-trading.price_feeds.failure",
+    "wealth_management_pro.insights.failure": "wealth-management-pro.insights.failure",
+    "ai_insights.book.failure": "ai-insights.book.failure",
+    "new_feature.view.action": "pro.new_feature.view",
     "crypto_trading.price_feeds.view": "crypto-trading.price_feeds.view",
     "core.crypto_trading.view": "crypto-trading.page.view",
     "crypto_trading": "crypto-trading.page.view",

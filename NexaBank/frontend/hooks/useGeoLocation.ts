@@ -1,12 +1,24 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import axios from 'axios';
-import { API_BASE_URL } from '@/lib/api';
+import { API_BASE_URL, setBrowserContext } from '@/lib/api';
 
 export const useGeoLocation = (userId: string | undefined, isAuth: boolean = false) => {
   const [captured, setCaptured] = useState(false);
+  // `captured` is state, so it updates a render too late to stop a second POST: the 10s
+  // timeout and the geolocation success callback can both fire, and StrictMode mounts the
+  // effect twice. Each extra POST is a second location_captured event with its own
+  // event_id, which uniqExact cannot collapse. A ref settles synchronously.
+  const postedRef = useRef(false);
 
   useEffect(() => {
     if (!userId || !isAuth || captured) return;
+
+    const postOnce = async (body: Record<string, unknown>) => {
+      if (postedRef.current) return;
+      postedRef.current = true;
+      await axios.post(`${API_BASE_URL}/events/location`, body, { withCredentials: true })
+        .catch(console.error);
+    };
 
     if ('geolocation' in navigator) {
       const geoTimeout = setTimeout(() => {
@@ -21,9 +33,8 @@ export const useGeoLocation = (userId: string | undefined, isAuth: boolean = fal
         const platform = navigator.platform || (navigator as any).userAgentData?.platform || "";
         const deviceType = /Mobi|Android/i.test(userAgent) ? "mobile" : /Tablet|iPad/i.test(userAgent) ? "tablet" : "desktop";
         
-        await axios.post(`${API_BASE_URL}/events/location`, {
-           deviceType, platform, userAgent
-        }, { withCredentials: true }).catch(console.error);
+        setBrowserContext({ device_type: deviceType });
+        await postOnce({ deviceType, platform, userAgent });
         if (!captured) setCaptured(true);
       };
 
@@ -56,7 +67,15 @@ export const useGeoLocation = (userId: string | undefined, isAuth: boolean = fal
               } catch (fallbackErr) {}
             }
 
-            await axios.post(`${API_BASE_URL}/events/location`, {
+            // Cache the resolved values so the direct-to-ingestion tracker can carry
+            // real geo instead of emitting unlocalizable rows.
+            setBrowserContext({
+              location: country || undefined,
+              city: city || undefined,
+              device_type: deviceType,
+            });
+
+            await postOnce({
                latitude: position.coords.latitude,
                longitude: position.coords.longitude,
                city,
@@ -64,7 +83,7 @@ export const useGeoLocation = (userId: string | undefined, isAuth: boolean = fal
                deviceType,
                platform,
                userAgent
-            }, { withCredentials: true });
+            });
             setCaptured(true);
           } catch (e) {
             console.error("Location tracking failed", e);
@@ -82,7 +101,8 @@ export const useGeoLocation = (userId: string | undefined, isAuth: boolean = fal
       const userAgent = _nav?.userAgent || "";
       const platform = _nav?.platform || "";
       const deviceType = "desktop";
-      axios.post(`${API_BASE_URL}/events/location`, { deviceType, platform, userAgent }, { withCredentials: true }).catch(console.error);
+      setBrowserContext({ device_type: deviceType });
+      void postOnce({ deviceType, platform, userAgent });
       setCaptured(true);
     }
   }, [userId, captured]);

@@ -12,19 +12,41 @@ both.
 
 ---
 
-## Plant into the seeded path, not the live path
+## Two ways to produce a movement
 
-Extend `scripts/seed_data.py` to accept a scenario name and inject a KNOWN, recorded ground truth.
-Write the planted truth to a fixture the evaluation can read (planted segment, magnitude, expected
-rank-1 cause). Keep normal traffic generating around it so detection is not trivial.
+**1. `scripts/seed_data.py --scenario <name>` — scripted, with recorded ground truth.**
+Writes the planted truth to `fixtures/planted_truth.json` (planted segment, magnitude, expected
+rank-1 cause). This is what the Evaluation Gates below are scored against; a hit-rate@1 number
+cannot be computed without a recorded answer.
 
-**This must be the seeded path.** `scripts/seed_data.py.generate_session_events` picks one geo
-profile, one device and one channel per session and reuses them for every event in that session,
-so its dimensions are session-invariant and localization is mathematically valid. The live
-NexaBank path calls `selectGeoProfile()` and `selectDevice()` **per event** inside
-`forwardToIngestionAPI`, making `location` and `device_type` statistically independent of
-everything — no localizer can recover a planted segment from it. See `docs/DATABASE.md`
-FOUNDATION-2.
+**2. The admin simulation console — operator-driven, with NO recorded ground truth.**
+`POST /events/simulate` accepts a `behavior` block (see
+`NexaBank/backend/src/helper/simulationBehavior.ts`). An operator picks a scenario from a dropdown
+— KYC completions falling for mobile users in India, loan approvals slowing, traffic shifting to
+mobile, pro conversions collapsing, an unauthorized-access burst — and the generator produces
+users who genuinely behave that way.
+
+Nothing is recorded about what changed. No table, no fixture, no metadata flag. The movement
+exists **only** as the shape of the events, so the intelligence layer has to infer it the way it
+would for a real incident rather than look up the answer. The API response echoes the applied
+behaviour back to the operator's screen and is never persisted.
+
+Use (1) for automated scoring and regression. Use (2) for the demo, and for honestly answering
+"why did this move?" without the pipeline having had a hint.
+
+**Both paths are localizable now.** The live path was not until FOUNDATION-2 actually landed —
+see `docs/DATABASE.md`, which records why it appeared to and did not. Two properties make a
+movement recoverable, and the console surfaces both:
+
+- **A window.** The change applies only to the last N days; earlier days generate at baseline.
+  Without that history there is nothing to score a residual against.
+- **A segment.** The change can be confined to e.g. `{device_type: mobile, location: India}`, so
+  the movement concentrates in a cell localization can recover instead of shifting everything
+  uniformly.
+
+Mix overrides (device/country/channel) apply per **session**, not per user — `kyc_completion_rate`
+requires only that a dimension be invariant *within* a session, and a user on mobile one day and
+desktop the next is realistic. Re-rolling per event is the FOUNDATION-2 bug and must not return.
 
 Scenarios 1 and 2 also require FOUNDATION-1 (`event_id`), without which `dedup_integrity` cannot
 run at all.

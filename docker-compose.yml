@@ -32,11 +32,21 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
     volumes:
       - kafka_data:/var/lib/kafka/data
+    # Without this, dependents start as soon as the CONTAINER starts rather than when Kafka
+    # is accepting connections. ingestion-api lost that race every time, gave up, and ran on
+    # the ClickHouse fallback for its whole lifetime -- silently, since it never crashed.
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "broker:29092"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 30s
 
   init-kafka:
     image: confluentinc/cp-kafka:7.4.0
     depends_on:
-      - broker
+      broker:
+        condition: service_healthy
     restart: on-failure
     command: "bash -c 'echo Waiting for Kafka to be ready... && cub kafka-ready -b broker:29092 1 120 && kafka-topics --create --topic feature-events --partitions 1 --replication-factor 1 --if-not-exists --bootstrap-server broker:29092'"
 
@@ -63,8 +73,10 @@ services:
       context: .
       dockerfile: Dockerfile
     depends_on:
-      - broker
-      - clickhouse
+      broker:
+        condition: service_healthy
+      clickhouse:
+        condition: service_started
     ports:
       - "8000:8000"
     environment:
@@ -84,7 +96,7 @@ services:
       init-kafka:
         condition: service_completed_successfully
       broker:
-        condition: service_started
+        condition: service_healthy
       clickhouse:
         condition: service_started
     environment:

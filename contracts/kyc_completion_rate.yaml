@@ -34,9 +34,18 @@ readiness:
         eventTracker.ts emitted no session_id, so the live stream had no session grain and this
         ratio was not localizable from it. scripts/seed_data.py already emitted a stable
         per-session session_id, so seeded data was unaffected.
-      fix: "FOUNDATION-2. The frontend now mints a session_id in sessionStorage and sends it as
+      fix: "FOUNDATION-2. The frontend mints a session_id in sessionStorage and sends it as
         x-session-id; the backend reads it via AsyncLocalStorage and threads it through
         trackEvent -> forwardToIngestionAPI -> FeatureEvent -> events_raw.session_id."
+      correction: >
+        This was marked resolved before it worked. The x-session-id interceptor was registered
+        only on the `apiClient` axios instance in NexaBank/frontend/lib/api.ts, and NOTHING
+        imported apiClient -- all 56 call sites used the bare axios default. The header never
+        left the browser, so getSessionId() fell through to `server-<uuid>` on every event.
+        Measured on live data: 41 events across 41 sessions, 1.00 events per session.
+        Actually fixed by also registering the interceptor on the global axios default
+        (scoped to first-party hosts). Re-measured: 5 events, 1 session.
+        Verify with scripts/verify_data_quality.py, check SESSIONS.
     - id: live-dimensions-are-noise
       status: resolved
       affects: [live]
@@ -45,9 +54,15 @@ readiness:
         location and device_type were re-rolled on every event and were statistically
         independent of user, session, and outcome. seed_data.generate_session_events picks one
         profile per session and reuses it, so seeded dimensions were already session-invariant.
-      fix: "FOUNDATION-2. eventTracker.ts now caches one geo/device/channel profile per
-        session_id (the sessionProfiles map) and reuses it for every event in that session, so
-        live dimensions are session-invariant too."
+      fix: "FOUNDATION-2. eventTracker.ts caches one geo/device/channel profile per session_id
+        (the sessionProfiles map) and reuses it for every event in that session."
+      correction: >
+        Also marked resolved prematurely, and for the same root cause: the profile cache is
+        keyed on session_id, so while session_id was a fresh server-<uuid> per event the cache
+        never hit and geo/device were still re-rolled per event. Measured on the live cohort:
+        41 events carrying 10 distinct locations and 4 distinct devices. After the interceptor
+        fix the same shape of traffic yields 1 location and 1 device per session.
+        scripts/verify_data_quality.py asserts session-invariance per declared dimension.
     - id: live-kyc-started-misrouted
       status: resolved
       affects: [live]
@@ -95,16 +110,29 @@ dimensions:
   #
   # Only attributes INVARIANT WITHIN ONE SESSION may be localized for a session-grain
   # ratio. Otherwise sum(cells) != total and contribution shares are meaningless.
-  allowed: [device_type, location, channel, continent]
+  # NOTE: `channel` is a top-level events_raw COLUMN, not a metadata key. Every other
+  # dimension here is read with JSONExtractString(metadata, ...); channel must be read
+  # directly. Reading it from the JSON returns empty on every row.
+  allowed: [device_type, location, continent]
   session_invariant: true
   max_depth: 3
   min_segment_volume: 20
   availability:
     device_type: {seeded: true, live: true}   # FOUNDATION-2: session-cached, no longer re-rolled per event
     location: {seeded: true, live: true}      # FOUNDATION-2: session-cached, no longer re-rolled per event
-    channel: {seeded: true, live: true}
     continent: {seeded: true, live: true}
   excluded:
+    - key: channel
+      reason: >
+        NOT session-invariant, so it is not localizable at this contract's session grain.
+        A transaction event carries its own channel (eventRoutes.ts passes channel: txChannel
+        on payments), which legitimately differs from the channel the session logged in on.
+        Measured: 99 of 511 sessions carried two different channel values.
+        Localizing a session-grain ratio across it would make sum(cells) != total and the
+        contribution shares meaningless -- see CLAUDE.md coupling point 6. The event-grain
+        contracts (loan_approval_volume, pro_revenue) may localize on channel safely, because
+        at event grain every event sits in exactly one cell by construction.
+        scripts/verify_data_quality.py asserts this per declared dimension.
     - key: tier
       reason: >
         Set only on the live path (eventTracker.ts). scripts/seed_data.py._metadata does not

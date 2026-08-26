@@ -56,6 +56,16 @@ function KPICard({ metric }: KPICardProps) {
       <div className="flex items-center gap-2 mb-3">
         <IconComponent className="w-4 h-4 text-gray-500" />
         <span className="text-sm text-gray-600 font-medium">{metric.label}</span>
+        {metric.simulated && (
+          // A modelled figure must never render bare -- see CLAUDE.md "Never fabricate a
+          // metric silently". The title carries the reason the API supplied.
+          <span
+            title={metric.simulatedNote || 'This figure is modelled, not measured.'}
+            className="ml-auto text-[10px] uppercase tracking-wide font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5 cursor-help"
+          >
+            Simulated
+          </span>
+        )}
       </div>
 
       {/* Value + Trend */}

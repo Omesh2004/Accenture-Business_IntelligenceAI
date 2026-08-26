@@ -27,6 +27,7 @@ import { toast } from "sonner"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { UserData } from "@/components/context/UserContext"
 import { useEventTracker } from "@/hooks/useEventTracker"
+import { BehaviorControls, type BehaviorPayload } from "@/components/admin/BehaviorControls"
 
 interface ProcessingSummary {
    users?: { requested?: number; created?: number; skipped?: number };
@@ -62,6 +63,9 @@ interface SimulationResult {
    requestedTenant?: string;
    resolvedTenant?: string;
    processingSummary?: ProcessingSummary;
+   /** Echo of the behaviour the run applied. Shown here only; never persisted. */
+   behaviorApplied?: BehaviorPayload | null;
+   behaviorSummary?: string[];
 }
 
 type StepState = "idle" | "active" | "done";
@@ -79,6 +83,8 @@ export default function AdminSimulatePage() {
    const [result, setResult] = useState<SimulationResult | null>(null)
    const [bankList, setBankList] = useState<BankOption[]>([])
    const [activeStep, setActiveStep] = useState(0)
+   const [scenarioId, setScenarioId] = useState("baseline")
+   const [behavior, setBehavior] = useState<BehaviorPayload | null>(null)
 
   const { isAuth } = UserData()
 
@@ -155,7 +161,7 @@ export default function AdminSimulatePage() {
       await measureAndTrack('admin_simulate.run_simulation', async () => {
             const res = await axios.post(
                `${API_BASE_URL}/events/simulate`,
-               { count: safeCount, days: safeDays, tenantId },
+               { count: safeCount, days: safeDays, tenantId, behavior },
                { withCredentials: true }
             )
         setResult(res.data)
@@ -262,6 +268,16 @@ export default function AdminSimulatePage() {
                                   <p className="text-xs text-zinc-500 font-medium">Generate activities spanning the last N days</p>
                               </div>
 
+                              <div className="pt-2 border-t border-zinc-100">
+                                 <BehaviorControls
+                                    value={behavior}
+                                    onChange={setBehavior}
+                                    scenarioId={scenarioId}
+                                    onScenarioChange={setScenarioId}
+                                    disabled={loading}
+                                 />
+                              </div>
+
                     <Button 
                       className="w-full h-14 rounded-2xl bg-black hover:bg-violet-700 text-white font-black shadow-lg shadow-violet-200 transition-all cursor-pointer"
                       onClick={handleSimulate}
@@ -342,6 +358,28 @@ export default function AdminSimulatePage() {
 
               {result && (
                          <div className="space-y-8 animate-in fade-in slide-in-from-bottom-4 duration-500">
+                    {result.behaviorSummary && result.behaviorSummary.length > 0 && (
+                       <div className="bg-white p-6 rounded-[1.5rem] border-2 border-amber-200 shadow-sm">
+                          <h3 className="text-base font-black text-zinc-900 flex items-center gap-2">
+                             <ShieldAlert className="h-4 w-4 text-amber-600" />
+                             Behaviour applied
+                          </h3>
+                          <ul className="mt-3 space-y-1.5">
+                             {result.behaviorSummary.map((line: string, i: number) => (
+                                <li key={i} className="text-sm text-zinc-700 font-medium flex gap-2">
+                                   <span className="text-amber-500">•</span>
+                                   {line}
+                                </li>
+                             ))}
+                          </ul>
+                          <p className="mt-4 text-xs text-zinc-500 font-medium leading-relaxed border-t border-zinc-100 pt-3">
+                             Shown here only. Nothing recorded what changed — the movement exists
+                             solely as the shape of the events, so the intelligence layer has to
+                             work it out rather than look it up.
+                          </p>
+                       </div>
+                    )}
+
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                                   {computedStats.map((stat) => (
                                      <div key={stat.label} className="bg-white p-6 rounded-[1.5rem] border border-violet-100 shadow-sm flex flex-col items-center text-center">

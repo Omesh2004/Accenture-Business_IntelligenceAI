@@ -2,7 +2,7 @@ import asyncio
 import time
 import sys
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -60,7 +60,7 @@ def fetch_tenant_summaries() -> None:
             # Store everything inside the memory layer
             PRECOMPUTED_LAYER[tenant_str] = {
                 "timestamp": time.time(),
-                "last_updated": datetime.utcnow().isoformat(),
+                "last_updated": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
                 "low_adoption": low_adoption,
                 "trending": trending,
                 "performance": performance

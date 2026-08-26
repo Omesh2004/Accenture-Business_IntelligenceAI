@@ -1,6 +1,6 @@
 import sys
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Add the project root to sys.path to resolve storage module
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -25,7 +25,7 @@ client = ch_client._get_client()
 for tid in tenant_ids:
     rows = []
     for f in features:
-        rows.append([tid, f["feature_name"], 1 if f["is_licensed"] else 0, f["plan_tier"], datetime.utcnow()])
+        rows.append([tid, f["feature_name"], 1 if f["is_licensed"] else 0, f["plan_tier"], datetime.now(timezone.utc).replace(tzinfo=None)])
 
     try:
         client.insert(

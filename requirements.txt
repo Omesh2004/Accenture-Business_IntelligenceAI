@@ -6,3 +6,7 @@ aiokafka==0.10.0
 confluent-kafka==2.4.0
 clickhouse-connect==0.7.16
 python-dotenv==1.0.1
+# Contract loader for contracts/*.yaml -- the one new runtime dependency Phase 1 adds
+# (CLAUDE.md rule 2). It was already present transitively; relying on that is how a
+# dependency silently disappears when an unrelated package is upgraded.
+PyYAML==6.0.3

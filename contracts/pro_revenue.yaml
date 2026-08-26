@@ -48,6 +48,25 @@ readiness:
         'bulk_payroll_processing.batch.success'. Verified live: both canonicalize to the
         hyphenated catalog keys.
       impact: "Seeded demo data was unaffected -- scripts/seed_data.py emits the correct names."
+      correction: >
+        The remap was real but fixed almost nothing, because those LEGACY_MAP keys are not the
+        strings the code calls. proController.ts emits DOTTED names
+        ('pro.crypto-trading.trade_execute', 'pro.payroll-pro.batch_process',
+        'pro.finance-library.book_access'), which are already 3-part and therefore skip
+        LEGACY_MAP entirely. Measured against the contract: 1 of 7 lineage events was
+        reachable on the live path; 'wealth_rebalance' only worked because it was emitted a
+        second time as an explicit legacy duplicate.
+        Actually fixed by renaming the call sites to the underscore vocabulary
+        scripts/seed_data.py already uses, which is verified to survive BOTH dialects
+        unchanged. Two further defects surfaced while doing it:
+          - 5 of 7 crypto trade_execute calls are ERROR paths, yet all 7 collapsed onto one
+            canonical name -- outcome survived only in metadata, which no KPI reads. A naive
+            rename would have counted failed trades as revenue conversions. Names now branch
+            on outcome.
+          - Three "legacy backward compat" calls re-emitted a conversion under a second name.
+            Harmless while the primary name was broken; double-counting once fixed, since the
+            aggregation is uniqExact(event_id) and each call mints its own event_id. Removed.
+        Now 7 of 7 reachable on both paths. Verify with scripts/verify_data_quality.py.
     - id: seeded-conversion-incomplete
       status: resolved
       detail: >
@@ -57,6 +76,10 @@ readiness:
         this KPI's baseline undercounted conversions even on the ready seeded path.
       fix: "Added 'ai_insights.book.success' to PRO_EVENTS in scripts/seed_data.py. Verified live:
         canonicalize_event_name('ai_insights.book.success') == 'ai-insights.book.success'."
+      correction: >
+        One corroboration event was still missing from BOTH paths: crypto-trading.page.view had
+        no producer anywhere. Added to PRO_EVENTS and emitted as the crypto module entry event
+        in both pro branches of the simulate route.
   unblocked_by: [FOUNDATION-3]
   gate: >
     All four conversion events are instrumented on seeded and live paths. This KPI still
@@ -93,6 +116,9 @@ fundamentals:
 dimensions:
   # event_name is the per-feature breakdown (which enterprise feature converted); it replaces
   # the non-existent `feature_id` key. `location` holds a country value (known naming debt).
+  # NOTE: `channel` is a top-level events_raw COLUMN, not a metadata key. Every other
+  # dimension here is read with JSONExtractString(metadata, ...); channel must be read
+  # directly. Reading it from the JSON returns empty on every row.
   allowed: [device_type, location, channel, continent, event_name]
   max_depth: 3
   min_segment_volume: 5

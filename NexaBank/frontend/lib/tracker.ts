@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { getNexaBankSessionId } from './api';
+import { getBrowserContext, getNexaBankSessionId } from './api';
 
 const INGESTION_API_URL = process.env.NEXT_PUBLIC_INGESTION_URL || 'http://localhost:8000/events';
 
@@ -32,10 +32,12 @@ class NexaBankTracker {
 
   async track(eventName: string, metadata: Record<string, any> = {}) {
     const sessionId = getNexaBankSessionId();
+    // Real browser context resolved once per session by useGeoLocation. This path bypasses
+    // the backend, so nothing else fills location/device_type in for it.
+    const browser = getBrowserContext();
     const device =
-      typeof window !== 'undefined' && window.innerWidth < 768
-        ? 'mobile'
-        : 'desktop';
+      browser.device_type ||
+      (typeof window !== 'undefined' && window.innerWidth < 768 ? 'mobile' : 'desktop');
 
     const payload = {
       event_id:
@@ -52,6 +54,10 @@ class NexaBankTracker {
         role: this.role,
         session_id: sessionId,
         device_type: device,
+        // `location` holds a COUNTRY value -- the physical key used across the pipeline.
+        // Omitted rather than guessed when useGeoLocation has not resolved yet.
+        ...(browser.location ? { location: browser.location } : {}),
+        ...(browser.city ? { city: browser.city } : {}),
         email: this.email,
         ...metadata,
       },

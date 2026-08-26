@@ -46,6 +46,10 @@ interface SessionProfile {
   geo: GeoProfile;
   deviceType: string;
   channel: "web" | "mobile" | "api" | "batch";
+  /** Real browser-reported geo, captured at session creation only (see getSessionProfile). */
+  realCountry?: string;
+  realCity?: string;
+  realContinent?: string;
 }
 
 interface RequestTelemetryContext {
@@ -158,14 +162,27 @@ function getSessionId(metadata: Record<string, unknown> | null | undefined): str
 }
 
 function getSessionProfile(sessionId: string, metadata: Record<string, unknown> | null | undefined): SessionProfile {
+  const safeMetadata = metadata || {};
+  // Resolved ONCE per session and never revised. Upgrading the profile when real geo shows
+  // up later would still flip the value mid-session, which is the thing that has to not
+  // happen: every dimension a session-grain KPI localizes on must be invariant within the
+  // session (CLAUDE.md coupling point 6), or sum(cells) != total and the contribution shares
+  // Localize produces are meaningless. Real geo arriving after the first event is therefore
+  // deliberately discarded -- `location` on this path is simulated by design anyway.
   const existing = sessionProfiles.get(sessionId);
   if (existing) return existing;
 
-  const safeMetadata = metadata || {};
   const geo = selectGeoProfile();
   const deviceType = String(safeMetadata.device_type || safeMetadata.device || selectDevice(geo));
   const channel = normalizeChannel((safeMetadata.channel as string) || geo.channelBias[Math.floor(Math.random() * geo.channelBias.length)]);
-  const profile = { geo, deviceType, channel };
+  const profile: SessionProfile = {
+    geo,
+    deviceType,
+    channel,
+    realCountry: safeMetadata.country ? String(safeMetadata.country) : undefined,
+    realCity: safeMetadata.city ? String(safeMetadata.city) : undefined,
+    realContinent: safeMetadata.continent ? String(safeMetadata.continent) : undefined,
+  };
 
   if (sessionProfiles.size >= MAX_SESSION_PROFILES) {
     const oldestKey = sessionProfiles.keys().next().value;
@@ -429,10 +446,15 @@ async function forwardToIngestionAPI(
         source_tenant: tenantId,
         role: metadata.role || "user",
         device_type: deviceType,
-        // Geographic context for continent-level analytics
-        location: metadata.country || geo.country,
-        continent: metadata.continent || geo.continent,
-        city: metadata.city || geo.city,
+        // Geographic context for continent-level analytics.
+        // Resolved from the SESSION profile, never per event. Previously this read
+        // `metadata.country || geo.country`, so an event that happened to carry a real
+        // country (only /events/location does) used it while its siblings fell back to the
+        // session's simulated geo -- one session then reported two different locations.
+        // Observed: a single session carrying ['', 'India', 'Germany'].
+        location: sessionProfile.realCountry || geo.country,
+        continent: sessionProfile.realContinent || geo.continent,
+        city: sessionProfile.realCity || geo.city,
         // Performance metrics
         response_time_ms: metadata.response_time_ms || simTime,
         // Page-level path for Top Pages aggregation

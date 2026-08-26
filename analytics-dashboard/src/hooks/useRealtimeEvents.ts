@@ -18,11 +18,18 @@ export interface RealtimeEvent {
     eventName: string;
     tenantId: string;
     userId: string;
+    /**
+     * Open bag, mirroring events_raw.metadata (a JSON String on the ClickHouse side).
+     * The named keys are what telemetry events carry; intelligence-pipeline broadcasts
+     * (anomaly.detected, trust.verdict.changed, recommendation.*, insight.*) put their own
+     * keys here instead, so this cannot be a closed shape.
+     */
     metadata?: {
       country?: string;
       city?: string;
       continent?: string;
       device_type?: string;
+      [key: string]: string | number | boolean | undefined;
     };
   };
   timestamp: number;

@@ -137,14 +137,16 @@ export default function GovernancePage() {
       .filter((r) => r.status === 'approved' || r.status === 'rejected' || r.status === 'executed')
       .map((r) => {
         const isApproved = r.status === 'approved' || r.status === 'executed';
-        const actionUser = isApproved ? r.approved_by || 'system' : r.rejected_by || 'system';
-        const actionTime = isApproved ? r.approved_at || '' : r.rejected_at || '';
+        // Rejections carry only a reason -- the Recommendation type records no rejecting
+        // actor or timestamp, so do not invent one. created_at is the only time we have.
+        const actionUser = isApproved ? r.approved_by || 'system' : 'system';
+        const actionTime = isApproved ? r.approved_at || '' : r.created_at || '';
         return {
           id: r.id,
           timestamp: actionTime || new Date().toISOString(),
           user: actionUser,
           action: `${isApproved ? 'Approved' : 'Rejected'} recommendation`,
-          resource: r.candidate_action
+          resource: r.action
         };
       });
     return [...auditLogs, ...recLogs].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());

@@ -31,6 +31,8 @@ import TopFeaturesChart from '@/components/TopFeaturesChart';
 import JourneyFunnelInsights from '@/components/JourneyFunnelInsights';
 import FeatureHeatmap from '@/components/FeatureHeatmap';
 import { TrustBadge, VerdictChip } from '@/components/intelligence';
+import type { VerdictValue } from '@/components/intelligence/VerdictChip';
+import type { TrustBadgeStatus, TrustVerdict } from '@/types';
 import ChartContainer from '@/components/ChartContainer';
 
 import {
@@ -162,6 +164,24 @@ const sensitivityConfig = {
   medium: { bg: 'bg-white', text: 'text-gray-500', border: 'border-gray-200', dot: 'bg-gray-300' },
   low: { bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-200', dot: 'bg-blue-500' },
 };
+
+/**
+ * TrustVerdict.verdict, TrustBadge and VerdictChip each use a different vocabulary for the
+ * same three states. Translate explicitly rather than widening any of them -- a shared
+ * fourth vocabulary is how this repo's event taxonomy ended up with three dialects that
+ * disagree (CLAUDE.md coupling point 2).
+ */
+function toBadgeStatus(verdict: TrustVerdict['verdict']): TrustBadgeStatus {
+  if (verdict === 'pass') return 'pass';
+  if (verdict === 'flag') return 'flagged';
+  return 'quarantined';
+}
+
+function toVerdictValue(verdict: TrustVerdict['verdict']): VerdictValue {
+  if (verdict === 'pass') return 'proceed';
+  if (verdict === 'flag') return 'flagged';
+  return 'suppressed';
+}
 
 export default function TransparencyPage() {
   const [viewMode, setViewMode] = useState<ViewMode>('on-prem');
@@ -420,12 +440,12 @@ export default function TransparencyPage() {
                   <div>
                     <div className="flex items-center gap-2 mb-1">
                       <span className="font-semibold text-gray-900">{verdict.metric_id}</span>
-                      <TrustBadge status={verdict.status} size="sm" />
+                      <TrustBadge status={toBadgeStatus(verdict.verdict)} size="sm" />
                     </div>
-                    <p className="text-sm text-gray-600">{verdict.reason || 'Anomalous behavior detected. Pending review.'}</p>
-                    <p className="text-xs text-gray-400 mt-1">Detected at: {new Date(verdict.timestamp).toLocaleString()}</p>
+                    <p className="text-sm text-gray-600">{verdict.failing_detail || 'Anomalous behavior detected. Pending review.'}</p>
+                    <p className="text-xs text-gray-400 mt-1">Detected at: {new Date(verdict.checked_at).toLocaleString()}</p>
                   </div>
-                  <VerdictChip status={verdict.status} />
+                  <VerdictChip verdict={toVerdictValue(verdict.verdict)} />
                 </div>
               ))}
             </div>

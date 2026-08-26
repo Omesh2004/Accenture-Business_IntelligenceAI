@@ -255,10 +255,14 @@ export const UserContextProvider = ({ children }: UserContextProviderProps) => {
       setPan(response.data?.pan);
       setIsAuth(Boolean(nextUserId));
 
-      // Register user with the Pathway analytics tracker
+      // Register user with the Pathway analytics tracker.
+      // No page-view is emitted here on purpose: every page already tracks its own
+      // `<page>.page.view` through useEventTracker, which routes via the backend and so
+      // carries session-invariant geo/device. This call emitted a second, redundant event
+      // named 'page_view' -- it canonicalized to core.page.view.action (rendered nowhere)
+      // and carried no location/continent, so it was an unlocalizable duplicate.
       if (nextUserId) {
         nexaTracker.setUser(nextUserId, nextRole || 'user', undefined, response.data?.tenantId);
-        nexaTracker.track('page_view', { page: typeof window !== 'undefined' ? window.location.pathname : '/' });
       }
 
       // Auto-fetch accounts right after auth succeeds — cookie is guaranteed valid here

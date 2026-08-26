@@ -37,6 +37,31 @@ Never `docker compose down -v` to force a re-init on anything whose data you wan
 `ALTER TABLE ... MODIFY COLUMN` also cannot convert a plain column into an `AggregateFunction`;
 that needs the shadow-table procedure in FOUNDATION-4.
 
+**Materialized views do not see deletes either, and this one bites silently.** An
+`ALTER TABLE feature_intelligence.events_raw DELETE WHERE ...` removes rows from `events_raw`
+but leaves their `event_id`s inside `daily_feature_usage`'s `uniqExact` aggregate state. The
+rollup then reports MORE events than the raw table contains, permanently, and every endpoint
+reading the rollup disagrees with every endpoint reading `events_raw`. Observed: deleting 11
+diagnostic rows left `events_raw` at 2041 and the rollup at 2052.
+
+This is the concrete reason the note above says deletes do not happen here. If you must delete
+from `events_raw`, rebuild the rollup from source afterwards -- it is derived data, so this is
+always safe:
+
+```sql
+TRUNCATE TABLE feature_intelligence.daily_feature_usage;
+INSERT INTO feature_intelligence.daily_feature_usage
+SELECT tenant_id, event_name, toDate(timestamp) AS date,
+       uniqExactState(if(length(event_id) > 0, event_id,
+           concat('legacy:', user_id, ':', toString(timestamp), ':', event_name, ':', metadata))) AS event_count,
+       uniqState(user_id) AS unique_users
+FROM feature_intelligence.events_raw
+GROUP BY tenant_id, event_name, date;
+```
+
+`scripts/verify_data_quality.py` compares the two on every run (the ROLLUP check), so this
+cannot drift unnoticed for long.
+
 ## Current tables
 
 `events_raw` (MergeTree, PARTITION toYYYYMM(timestamp), ORDER BY tenant_id,event_name,timestamp;
@@ -97,33 +122,85 @@ Today `session_id` is read out of the metadata JSON with a fallback
 (`api/main.py:1513`, `concat('user:', user_id)`). Promote it to a real column and keep the
 metadata read as a fallback during migration.
 
-**Who emits it today:**
+**Status: resolved on every producer.** Re-assert with `python scripts/verify_data_quality.py`
+(the SESSIONS and DIMS checks) rather than trusting this table.
 
 | Producer | `session_id` | Dimensions | Localizable |
 |---|---|---|---|
-| `scripts/seed_data.py` | yes, stable per session (`generate_session_events`) | one profile per session, reused for every event | **yes** |
-| `analytics-dashboard/src/lib/tracker.ts` | yes, `sessionStorage`-backed | browser-derived | yes |
-| `NexaBank/.../eventTracker.ts` | **no** | `selectGeoProfile()` / `selectDevice()` called **per event** | **no** |
+| `scripts/seed_data.py` | stable per session (`generate_session_events`) | one profile per session | **yes** |
+| `analytics-dashboard/src/lib/tracker.ts` | `sessionStorage`-backed | browser-derived | yes |
+| `NexaBank/frontend/lib/tracker.ts` | `sessionStorage`-backed | real geo cached by `useGeoLocation` | yes |
+| `NexaBank/.../eventTracker.ts` | from the `x-session-id` header | one profile cached per `session_id` | **yes** |
 
-The live NexaBank path re-rolls `location` and `device_type` on every single event inside
-`forwardToIngestionAPI`, so those fields are statistically independent of user, session, and
-outcome. No localizer can recover a planted segment from that stream, however good it is.
+**The trap this fell into, because it will recur.** The fix looked complete and was not. The
+interceptor that attaches `x-session-id` was registered on an `apiClient` axios instance that
+**no file imported** -- all 56 call sites used the bare `axios` default. So:
 
-The seeded path is already correct, which is why the Phase 1 demo runs on seeded data. To fix
-the live path: mint a session id in the NexaBank frontend (the `sessionStorage` pattern in
-`analytics-dashboard/src/lib/tracker.ts:19-27` is the model), send it as a header on API calls,
-and select the geo/device profile **once per session** rather than once per event.
+- the header never left the browser;
+- `getSessionId()` fell through to `server-<uuid>`, minting a new id per event;
+- `getSessionProfile()` is keyed on `session_id`, so its cache never hit either, and geo/device
+  went on being re-rolled per event exactly as before.
 
-## FOUNDATION-3 — taxonomy remaps (coupling point 2, broken in production right now)
+One unused import made two Foundation fixes silently inert while the contracts recorded both as
+`resolved`. Measured: 41 events / 41 sessions / 10 locations / 4 devices. The real fix registers
+the interceptor on the global axios default too, scoped to first-party hosts so a session id is
+never attached to a third-party request (`useGeoLocation` calls `nominatim` and `ipapi`).
 
-Verified by calling `canonicalize_event_name` directly:
+**Reading it back.** `session_id` is a real column. Prefer it, keep the metadata read as a
+fallback for rows written before the column existed:
+
+```sql
+multiIf(
+  length(session_id) > 0, session_id,
+  JSONHas(metadata, 'session_id') AND length(JSONExtractString(metadata, 'session_id')) > 0,
+      JSONExtractString(metadata, 'session_id'),
+  concat('user:', user_id)
+)
+```
+
+## FOUNDATION-3 — taxonomy remaps (coupling point 2)
+
+**Status: resolved. All three contracts reach every lineage event on both producer paths.**
+Re-assert with `python scripts/verify_data_quality.py` (the TAXONOMY checks) -- it runs the real
+Node `enforceTaxonomy` by extracting and evaluating the function's own source, so it cannot drift
+from the implementation the way a hand-written port would.
+
+The original four, verified by calling `canonicalize_event_name` directly:
 
 | Emitted | Ends up as | Contract expects | Status |
 |---|---|---|---|
-| `trackEvent("loan_approved")` | `core.loan_approved.action` | `loan.approved.success` | **reads zero, silently** |
-| `trackEvent("loan_applied")` | `loan.submit_application.success` | `loan.applied.success` | **reads zero, silently** |
+| `trackEvent("loan_approved")` | `core.loan_approved.action` | `loan.approved.success` | **was reading zero** |
+| `trackEvent("loan_applied")` | `loan.submit_application.success` | `loan.applied.success` | **was reading zero** |
 | `trackEvent("wealth_rebalance")` | `wealth_management.rebalance.success` | `wealth-management-pro.rebalance.success` | not a licensed feature |
 | `trackEvent("bulk_payroll_processing")` | `payroll.page.view` | `bulk-payroll-processing.batch.success` | not a conversion |
+
+**Fixing `LEGACY_MAP` was necessary but nowhere near sufficient.** Two of those four keys are
+never called: `proController.ts` emits DOTTED names (`pro.crypto-trading.trade_execute`,
+`pro.payroll-pro.batch_process`, `pro.finance-library.book_access`) which are already 3-part and
+therefore skip `LEGACY_MAP` entirely. `pro_revenue` still reached 1 of its 7 lineage events.
+
+The durable fix was to align the producers with the vocabulary `scripts/seed_data.py` already
+uses -- underscore forms like `crypto_trading.trade_execution.success` -- because those are
+verified to survive **both** dialects unchanged and to land on the hyphenated licence-catalog key.
+The catalog and `FEATURE_DISPLAY_NAMES` already held the correct names; only the producers were
+wrong.
+
+Two defects surfaced underneath:
+
+- **Outcome was being erased.** 5 of 7 `trade_execute` call sites are error paths, but all 7
+  collapsed onto one canonical name, with success/failure surviving only in metadata that no KPI
+  reads. Renaming without checking would have counted failed trades as revenue conversions.
+  Event names now branch on outcome.
+- **Deliberate duplicate emissions.** Three call sites re-fired a conversion under a second
+  "legacy backward compat" name. Harmless while the primary name was broken; double-counting the
+  moment it was fixed, since the aggregation is `uniqExact(event_id)` and each call mints its own
+  `event_id`. Removed.
+
+**One name still resolves differently per path.** `pro.new_feature.view`: the Node dialect strips
+the reserved `pro.` prefix (`new_feature.view.action`), the Python dialect preserves it. Producers
+that go through the NexaBank backend take the first, `scripts/seed_data.py` takes the second. An
+alias in `api/page_map.py` converges them. Any name whose first segment is `free`/`pro`/`core`/
+`enterprise`/`lending` has this hazard -- prefer a first segment that is not a reserved prefix.
 
 `loan_approved` is absent from `LEGACY_MAP` (`eventTracker.ts:176`), so `enforceTaxonomy` falls
 through to its generic wrapper (`core.<name>.action`), and `canonicalize_event_name` leaves that

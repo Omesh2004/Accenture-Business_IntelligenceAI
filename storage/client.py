@@ -5,7 +5,7 @@ import json
 from typing import List, Dict, Any
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -57,7 +57,9 @@ class ClickHouseClient:
                 e['event_name'], 
                 e['user_id'], 
                 e['channel'], 
-                datetime.utcfromtimestamp(e['timestamp']), 
+                # Naive UTC to match the DateTime column. utcfromtimestamp is deprecated
+                # and returns a naive value anyway; this is the same instant, spelled out.
+                datetime.fromtimestamp(e['timestamp'], timezone.utc).replace(tzinfo=None), 
                 json.dumps(e.get('metadata', {}), ensure_ascii=True) # Encode as valid JSON
             ]
             for e in events

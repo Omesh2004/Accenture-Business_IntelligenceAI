@@ -39,6 +39,20 @@ readiness:
       status: resolved
       detail: "scripts/seed_data.py emitted no loan.approved.* event, so even seeded data was empty."
       fix: "Added 'loan.approved.success' to FREE_EVENTS in scripts/seed_data.py."
+    - id: simulate-path-never-approves
+      status: resolved
+      affects: [live]
+      detail: >
+        POST /events/simulate created LoanApplication rows but never approved one, so this
+        KPI's numerator had no source on the simulate path at all -- loan.approved.success
+        arrived only when a human clicked Approve in the admin UI (loanRoutes.ts:214). The
+        denominator (loan.applied.success) was generated in volume, so the ratio read as a
+        permanent near-total collapse rather than as missing instrumentation.
+      fix: >
+        The simulate route now approves a share of KYC-complete applications and emits
+        trackEvent("loan_approved"), the LEGACY_MAP key verified to resolve to
+        loan.approved.success. The share is the `loans.approvalRate` behaviour knob, so an
+        operator can move this KPI deliberately from the simulation console.
   unblocked_by: [FOUNDATION-1, FOUNDATION-3]
   gate: >
     Both fundamentals are instrumented on seeded and live paths. Ordinary Trust Gate invariant
@@ -70,6 +84,9 @@ fundamentals:
 dimensions:
   # Physical metadata keys. `location` holds a country value (known naming debt).
   # Event grain: every event sits in exactly one cell, so these are additive by construction.
+  # NOTE: `channel` is a top-level events_raw COLUMN, not a metadata key. Every other
+  # dimension here is read with JSONExtractString(metadata, ...); channel must be read
+  # directly. Reading it from the JSON returns empty on every row.
   allowed: [device_type, location, channel, continent]
   max_depth: 3
   min_segment_volume: 10

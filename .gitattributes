@@ -1,0 +1,8 @@
+# Shell scripts are executed inside Linux containers. A CRLF checkout makes bash fail with
+# "$'\r': command not found" and the container restart-loops -- which is exactly what happened
+# to vllm_entrypoint.sh, taking the Narrate stage's model server down silently.
+*.sh text eol=lf
+
+# Same reasoning for anything else read by a Linux process from a bind mount.
+*.sql text eol=lf
+Dockerfile text eol=lf
