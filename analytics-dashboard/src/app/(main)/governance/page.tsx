@@ -1,8 +1,9 @@
 'use client';
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useMemo } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useDashboardData } from '@/hooks/useDashboard';
+import { useIntelligenceData } from '@/hooks/useIntelligenceData';
 import { dashboardAPI } from '@/lib/api';
 import { useRealtimeEvents } from '@/hooks/useRealtimeEvents';
 import { DashboardSkeleton, TableSkeleton } from '@/components/Skeletons';
@@ -60,6 +61,7 @@ function dedupeGovernanceToggles(items: GovernanceToggle[]): GovernanceToggle[] 
 
 export default function GovernancePage() {
   const { isLoading, auditLogs, selectedTenants, tenantsParam } = useDashboardData();
+  const { recommendations } = useIntelligenceData();
   const { data: session, status: sessionStatus } = useSession();
   const actorEmail = session?.user?.email || 'admin@unknown.com';
   const actorRole = session?.user?.role || 'user';
@@ -129,6 +131,24 @@ export default function GovernancePage() {
 
   const enabledCount = toggles.filter((t) => t.is_enabled).length;
   const disabledCount = toggles.length - enabledCount;
+
+  const combinedAuditLogs = useMemo(() => {
+    const recLogs = recommendations
+      .filter((r) => r.status === 'approved' || r.status === 'rejected' || r.status === 'executed')
+      .map((r) => {
+        const isApproved = r.status === 'approved' || r.status === 'executed';
+        const actionUser = isApproved ? r.approved_by || 'system' : r.rejected_by || 'system';
+        const actionTime = isApproved ? r.approved_at || '' : r.rejected_at || '';
+        return {
+          id: r.id,
+          timestamp: actionTime || new Date().toISOString(),
+          user: actionUser,
+          action: `${isApproved ? 'Approved' : 'Rejected'} recommendation`,
+          resource: r.candidate_action
+        };
+      });
+    return [...auditLogs, ...recLogs].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+  }, [auditLogs, recommendations]);
 
   if (isLoading && auditLogs.length === 0) {
     return <DashboardSkeleton />;
@@ -260,18 +280,22 @@ export default function GovernancePage() {
                 </tr>
               </thead>
               <tbody>
-                {auditLogs.map((log, index) => (
+                {combinedAuditLogs.map((log, index) => (
                   <tr
                     key={log.id}
-                    className={`border-b border-gray-100 hover:bg-gray-100 transition-colors ${index === auditLogs.length - 1 ? 'border-b-0' : ''}`}
+                    className={`border-b border-gray-100 hover:bg-gray-100 transition-colors ${index === combinedAuditLogs.length - 1 ? 'border-b-0' : ''}`}
                   >
-                    <td className="px-4 py-3 text-gray-400 font-medium whitespace-nowrap">{log.timestamp}</td>
+                    <td className="px-4 py-3 text-gray-400 font-medium whitespace-nowrap">
+                      {new Date(log.timestamp).toLocaleString(undefined, {
+                        month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit'
+                      })}
+                    </td>
                     <td className="px-4 py-3 text-gray-900 font-medium">{log.user}</td>
                     <td className="px-4 py-3">{log.action}</td>
-                    <td className="px-4 py-3 font-mono text-xs">{log.resource}</td>
+                    <td className="px-4 py-3 font-mono text-xs max-w-sm truncate" title={log.resource}>{log.resource}</td>
                   </tr>
                 ))}
-                {auditLogs.length === 0 && (
+                {combinedAuditLogs.length === 0 && (
                   <tr><td colSpan={4} className="px-4 py-8 text-center text-gray-500">No logs found</td></tr>
                 )}
               </tbody>

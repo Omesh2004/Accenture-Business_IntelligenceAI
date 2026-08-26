@@ -16,6 +16,7 @@ import { useQuery } from '@tanstack/react-query';
 import { useSession } from 'next-auth/react';
 import { dashboardAPI } from '@/lib/api';
 import { useDashboardData } from '@/hooks/useDashboard';
+import { useIntelligenceData } from '@/hooks/useIntelligenceData';
 import { DashboardSkeleton } from '@/components/Skeletons';
 import AuthGuard from '@/components/AuthGuard';
 import KPICard from '@/components/KPICard';
@@ -29,6 +30,9 @@ import FeatureUsageChart from '@/components/FeatureUsageChart';
 import TopFeaturesChart from '@/components/TopFeaturesChart';
 import JourneyFunnelInsights from '@/components/JourneyFunnelInsights';
 import FeatureHeatmap from '@/components/FeatureHeatmap';
+import { TrustBadge, VerdictChip } from '@/components/intelligence';
+import ChartContainer from '@/components/ChartContainer';
+
 import {
   Cloud,
   Server,
@@ -172,6 +176,7 @@ export default function TransparencyPage() {
   const rawAdminSummary = rawAdminSummaryData || null;
   const [expandedCategory, setExpandedCategory] = useState<string | null>(null);
   const { data: session } = useSession();
+  const { quarantinedMetrics, trustVerdicts } = useIntelligenceData();
 
   const userRole = session?.user?.role || 'user';
   const isAppAdmin = userRole === 'app_admin';
@@ -394,6 +399,42 @@ export default function TransparencyPage() {
               <span className="text-[11px] font-bold text-gray-600 uppercase tracking-wider">Super Admin</span>
             </div>
           </div>
+        </div>
+
+        {/* ═══════════ TRUST GATE (QUARANTINED METRICS) ═══════════ */}
+        <div className="bg-white rounded-2xl border border-gray-200 shadow-sm overflow-hidden">
+          <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-red-50/50">
+            <h3 className="text-sm font-bold text-gray-900 uppercase tracking-wider flex items-center gap-2">
+              <Shield className="w-4 h-4 text-red-500" />
+              Trust Gate: Quarantined Metrics
+            </h3>
+            <div className="text-xs text-gray-500 font-medium">
+              {quarantinedMetrics.length} metrics currently isolated
+            </div>
+          </div>
+          
+          {quarantinedMetrics.length > 0 ? (
+            <div className="divide-y divide-gray-100">
+              {quarantinedMetrics.map((verdict, idx) => (
+                <div key={`${verdict.metric_id}-${idx}`} className="p-4 sm:px-6 flex flex-col sm:flex-row gap-4 items-start sm:items-center justify-between hover:bg-gray-50 transition-colors">
+                  <div>
+                    <div className="flex items-center gap-2 mb-1">
+                      <span className="font-semibold text-gray-900">{verdict.metric_id}</span>
+                      <TrustBadge status={verdict.status} size="sm" />
+                    </div>
+                    <p className="text-sm text-gray-600">{verdict.reason || 'Anomalous behavior detected. Pending review.'}</p>
+                    <p className="text-xs text-gray-400 mt-1">Detected at: {new Date(verdict.timestamp).toLocaleString()}</p>
+                  </div>
+                  <VerdictChip status={verdict.status} />
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="p-8 text-center text-gray-500 text-sm">
+              <Shield className="w-8 h-8 text-green-400 mx-auto mb-3 opacity-50" />
+              All data metrics are healthy and passing trust verification.
+            </div>
+          )}
         </div>
 
         {/* ═══════════ DATA CATEGORY MATRIX ═══════════ */}
