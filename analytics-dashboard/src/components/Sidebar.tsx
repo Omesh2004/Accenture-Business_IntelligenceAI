@@ -14,7 +14,6 @@ import Image from 'next/image';
 import {
   LayoutDashboard,
   BarChart3,
-  Filter,
   Users,
   Settings,
   Shield,
@@ -24,7 +23,6 @@ import {
   Eye,
   FileText,
   Key,
-  Route,
   TrendingUp,
 } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '@/lib/store';
@@ -37,7 +35,6 @@ import { buildAppScopedPath, resolveAppIdFromPathname, resolvePrimaryAppIdFromAd
 const iconMap: Record<string, React.ElementType> = {
   'layout-dashboard': LayoutDashboard,
   'bar-chart-3': BarChart3,
-  filter: Filter,
   users: Users,
   settings: Settings,
   shield: Shield,
@@ -45,7 +42,6 @@ const iconMap: Record<string, React.ElementType> = {
   eye: Eye,
   'file-text': FileText,
   key: Key,
-  route: Route,
   'trending-up': TrendingUp,
 };
 
@@ -69,8 +65,6 @@ function Sidebar(_props: SidebarProps) {
     navItems = [
       { id: 'dashboard', label: 'Dashboard', icon: 'layout-dashboard', href: buildAppScopedPath(activeAppId, '/dashboard') },
       { id: 'features', label: 'Feature Analytics', icon: 'bar-chart-3', href: buildAppScopedPath(activeAppId, '/features') },
-      { id: 'funnel', label: 'Funnel Analysis', icon: 'filter', href: buildAppScopedPath(activeAppId, '/funnel') },
-      { id: 'user-journey', label: 'User Journey', icon: 'route', href: buildAppScopedPath(activeAppId, '/user-journey') },
       { id: 'license-usage', label: 'License vs Usage', icon: 'key', href: buildAppScopedPath(activeAppId, '/license-usage') },
       { id: 'predictive', label: 'Predictive Insights', icon: 'trending-up', href: buildAppScopedPath(activeAppId, '/predictive') },
       { id: 'tenants', label: 'Tenants', icon: 'users', href: buildAppScopedPath(activeAppId, '/tenants') },
