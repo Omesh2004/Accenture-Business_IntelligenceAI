@@ -5,16 +5,13 @@ import { useQuery } from '@tanstack/react-query';
 import { dashboardAPI } from '@/lib/api';
 import { useDashboardData } from '@/hooks/useDashboard';
 import { useRealtimeEvents } from '@/hooks/useRealtimeEvents';
-import { useIntelligenceData } from '@/hooks/useIntelligenceData';
 import { Search, User, Clock, AlertCircle } from 'lucide-react';
 import ChartContainer from '@/components/ChartContainer';
-import { TrustBadge } from '@/components/intelligence';
 import { TableSkeleton, ChartSkeleton } from '@/components/Skeletons';
 import type { JourneyEvent } from '@/types';
 
 export default function UserJourneyPage() {
   const { tenantsParam, rangeParam, selectedTenants, timeRange } = useDashboardData();
-  const { getTrustStatus } = useIntelligenceData();
   const [selectedUser, setSelectedUser] = useState<string>('');
   const { lastEvent } = useRealtimeEvents({ maxEvents: 1 });
   const lastRealtimeRefetchAt = useRef(0);
@@ -145,14 +142,9 @@ export default function UserJourneyPage() {
                       {session.map((evt: JourneyEvent, eIdx: number) => (
                         <div key={eIdx} className="relative mb-4 -ml-[25px] flex items-start gap-3">
                           <div className="w-3 h-3 mt-1.5 bg-white border-2 border-gray-300 rounded-full z-10 flex-shrink-0"></div>
-                          <div className="flex-1 p-3 bg-white border border-gray-100 rounded-lg shadow-sm hover:shadow transition-shadow relative">
+                          <div className="flex-1 p-3 bg-white border border-gray-100 rounded-lg shadow-sm hover:shadow transition-shadow">
                             <div className="flex items-center justify-between mb-1">
-                              <div className="flex items-center gap-2">
-                                <span className="text-sm font-semibold text-gray-900">{evt.event_name}</span>
-                                {getTrustStatus(evt.event_name) !== 'pass' && (
-                                  <TrustBadge status={getTrustStatus(evt.event_name)} size="sm" />
-                                )}
-                              </div>
+                              <span className="text-sm font-semibold text-gray-900">{evt.event_name}</span>
                               <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${channelColors[evt.channel] || 'bg-gray-100 text-gray-600'}`}>
                                 {evt.channel}
                               </span>

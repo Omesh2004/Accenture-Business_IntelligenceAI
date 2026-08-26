@@ -1,12 +1,10 @@
 'use client';
 
-import React, { useState, useMemo } from 'react';
+import React, { useMemo } from 'react';
 import { useDashboardData } from '@/hooks/useDashboard';
-import { useIntelligenceData } from '@/hooks/useIntelligenceData';
 import { FunnelPageSkeleton } from '@/components/Skeletons';
-import { TrustBadge, RootCauseBreakdown } from '@/components/intelligence';
-import { FunnelStep, RootCause } from '@/types';
-import { TrendingUp, Sparkles, Target, ArrowRight, X, Loader2, Search } from 'lucide-react';
+import { FunnelStep } from '@/types';
+import { TrendingUp, Sparkles, Target, ArrowRight } from 'lucide-react';
 
 function formatPercent(value: number) {
   return `${value.toFixed(1)}%`;
@@ -63,35 +61,7 @@ function severityStyles(level: 'critical' | 'high' | 'medium' | 'low') {
 
 export default function FunnelPage() {
   const { isLoading, funnelData, selectedTenants, timeRange, topFeatures, featureActivity } = useDashboardData();
-  const { getTrustStatus, fetchRootCauses } = useIntelligenceData();
   const safeFunnelData = useMemo(() => funnelData ?? [], [funnelData]);
-
-  const [selectedLeakId, setSelectedLeakId] = useState<string | null>(null);
-  const [rootCause, setRootCause] = useState<RootCause | null>(null);
-  const [isRootCauseLoading, setIsRootCauseLoading] = useState(false);
-
-  React.useEffect(() => {
-    if (!selectedLeakId) {
-      setRootCause(null);
-      return;
-    }
-    let isMounted = true;
-    setIsRootCauseLoading(true);
-    // In a real app we'd map the leak to a specific anomaly ID. 
-    // Here we use the step label to fetch its root cause from the mock API.
-    fetchRootCauses(selectedLeakId)
-      .then((causes) => {
-        if (isMounted) {
-          setRootCause(causes[0] || null);
-          setIsRootCauseLoading(false);
-        }
-      })
-      .catch((error) => {
-        console.error("Failed to fetch root causes:", error);
-        if (isMounted) setIsRootCauseLoading(false);
-      });
-    return () => { isMounted = false; };
-  }, [selectedLeakId, fetchRootCauses]);
 
   const {
     entryCount,
@@ -256,7 +226,6 @@ export default function FunnelPage() {
       note: `${completedCount.toLocaleString()} users reached final step`,
       color: 'bg-blue-50',
       border: 'border-gray-200 border-t-4 border-t-[#1a73e8]',
-      metricId: 'funnel_conversion',
     },
     {
       label: 'Biggest Leak',
@@ -264,10 +233,6 @@ export default function FunnelPage() {
       note: `${largestLeak.usersLostToNext.toLocaleString()} users lost to next stage`,
       color: 'bg-blue-50',
       border: 'border-gray-200 border-t-4 border-t-[#1a73e8]',
-      action: {
-        label: 'Analyze Leak',
-        onClick: () => setSelectedLeakId(largestLeak.step.label),
-      }
     },
     {
       label: 'Funnel Health Score',
@@ -358,77 +323,17 @@ export default function FunnelPage() {
       </section>
 
       <section className="grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3 stagger-children">
-        {metricCards.map((card) => {
-          const trustStatus = card.metricId ? getTrustStatus(card.metricId) : 'pass';
-          return (
-            <article
-              key={card.label}
-              className={`relative rounded-xl border bg-blue-50 p-4 shadow-sm flex flex-col justify-between ${card.border}`}
-            >
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">{card.label}</p>
-                <p className="mt-2 text-2xl font-semibold text-gray-900">{card.value}</p>
-                <p className="mt-2 text-xs text-gray-500">{card.note}</p>
-              </div>
-              {trustStatus !== 'pass' && (
-                <div className="absolute top-2 right-2">
-                  <TrustBadge status={trustStatus} size="sm" />
-                </div>
-              )}
-              {card.action && (
-                <div className="mt-4 pt-4 border-t border-blue-100/50">
-                  <button
-                    onClick={card.action.onClick}
-                    className="inline-flex items-center gap-1.5 text-xs font-medium text-[#1a73e8] hover:text-blue-700 transition-colors cursor-pointer"
-                  >
-                    <Search className="w-3.5 h-3.5" />
-                    {card.action.label}
-                  </button>
-                </div>
-              )}
-            </article>
-          );
-        })}
-      </section>
-
-      {/* Root Cause Drill-down Modal */}
-      {selectedLeakId && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-gray-900/45 backdrop-blur-sm animate-in fade-in duration-200"
-          onClick={() => setSelectedLeakId(null)}
-        >
-          <div
-            className="bg-white rounded-2xl shadow-xl w-full max-w-3xl overflow-hidden animate-in zoom-in-95 duration-200 border border-gray-200 max-h-[85vh] flex flex-col"
-            onClick={(e) => e.stopPropagation()}
+        {metricCards.map((card) => (
+          <article
+            key={card.label}
+            className={`rounded-xl border bg-blue-50 p-4 shadow-sm ${card.border}`}
           >
-            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-linear-to-r from-gray-50 to-white">
-              <h3 className="font-semibold text-gray-900">
-                Leak Analysis: {toTitleCase(selectedLeakId)}
-              </h3>
-              <button
-                onClick={() => setSelectedLeakId(null)}
-                className="p-1.5 text-gray-400 hover:text-gray-600 hover:bg-gray-100 rounded-lg transition-colors cursor-pointer"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-            <div className="p-6 overflow-y-auto">
-              {isRootCauseLoading ? (
-                <div className="flex flex-col items-center justify-center py-12 space-y-3">
-                  <Loader2 className="w-8 h-8 text-[#1a73e8] animate-spin" />
-                  <p className="text-sm text-gray-500 font-medium animate-pulse">Running root cause localization...</p>
-                </div>
-              ) : rootCause ? (
-                <RootCauseBreakdown rootCause={rootCause} />
-              ) : (
-                <div className="text-center py-12">
-                  <p className="text-gray-500">No root cause data available for this drop-off.</p>
-                </div>
-              )}
-            </div>
-          </div>
-        </div>
-      )}
+            <p className="text-xs font-semibold uppercase tracking-wider text-gray-500">{card.label}</p>
+            <p className="mt-2 text-2xl font-semibold text-gray-900">{card.value}</p>
+            <p className="mt-2 text-xs text-gray-500">{card.note}</p>
+          </article>
+        ))}
+      </section>
 
       <section className="grid grid-cols-1 gap-6 xl:grid-cols-5">
         <article className="rounded-xl border border-gray-200 bg-white p-5 shadow-sm xl:col-span-3">

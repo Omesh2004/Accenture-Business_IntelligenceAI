@@ -25,15 +25,3 @@ export {
   SidebarSkeleton,
   DashboardSkeleton,
 } from './Skeletons';
-
-// Intelligence Layer primitives
-export {
-  TrustBadge,
-  ConfidenceBand,
-  VerdictChip,
-  RootCauseBreakdown,
-  ApproveRejectRow,
-  WhyThisNumber,
-  AnomalyFeedPanel,
-} from './intelligence';
-

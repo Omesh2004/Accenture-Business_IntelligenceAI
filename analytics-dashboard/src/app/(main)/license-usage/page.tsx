@@ -5,8 +5,6 @@ import { useQuery } from '@tanstack/react-query';
 import { dashboardAPI } from '@/lib/api';
 import { useDashboardData } from '@/hooks/useDashboard';
 import { useRealtimeEvents } from '@/hooks/useRealtimeEvents';
-import { useIntelligenceData } from '@/hooks/useIntelligenceData';
-import { TrustBadge } from '@/components/intelligence';
 import { TableSkeleton, KPICardSkeleton, ChartSkeleton, LicensePageSkeleton } from '@/components/Skeletons';
 
 import {
@@ -217,7 +215,6 @@ function UsageBar({ pct, color }: { pct: number; color: string }) {
 
 export default function LicenseUsagePage() {
   const { tenantsParam, rangeParam, selectedTenants, timeRange } = useDashboardData();
-  const { getTrustStatus } = useIntelligenceData();
   const { lastEvent } = useRealtimeEvents({ maxEvents: 1 });
   const lastRealtimeRefetchAt = useRef(0);
   const [seeding, setSeeding] = useState(false);
@@ -387,12 +384,7 @@ export default function LicenseUsagePage() {
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 stagger-children">
 
             {/* Enterprise Licensed */}
-            <div className="relative bg-white border-gray-200 border-t-4 border-t-[#1a73e8] rounded-xl p-5 shadow-sm hover:shadow-md transition-shadow">
-              {getTrustStatus('license_usage') !== 'pass' && (
-                <div className="absolute top-2 right-2">
-                  <TrustBadge status={getTrustStatus('license_usage')} size="sm" />
-                </div>
-              )}
+            <div className="bg-white border-gray-200 border-t-4 border-t-[#1a73e8] rounded-xl p-5 shadow-sm hover:shadow-md transition-shadow">
               <div className="flex items-center justify-between mb-3">
                 <div className="p-2 border border-gray-200 bg-white rounded-lg">
                   <Shield className="h-4 w-4 text-gray-700" />
@@ -410,12 +402,7 @@ export default function LicenseUsagePage() {
             </div>
 
             {/* Pro Users */}
-            <div className="relative bg-white border-gray-200 border-t-4 border-t-[#1a73e8] rounded-xl p-5 shadow-sm hover:shadow-md transition-shadow">
-              {getTrustStatus('pro_users') !== 'pass' && (
-                <div className="absolute top-2 right-2">
-                  <TrustBadge status={getTrustStatus('pro_users')} size="sm" />
-                </div>
-              )}
+            <div className="bg-white border-gray-200 border-t-4 border-t-[#1a73e8] rounded-xl p-5 shadow-sm hover:shadow-md transition-shadow">
               <div className="flex items-center justify-between mb-3">
                 <div className="p-2 border border-gray-200 bg-white rounded-lg">
                   {proUsersLoading ? (
@@ -446,7 +433,7 @@ export default function LicenseUsagePage() {
             </div>
 
             {/* Est. Revenue */}
-            <div className="relative bg-white border-gray-200 border-t-4 border-t-[#1a73e8] rounded-xl p-5 shadow-sm hover:shadow-md transition-shadow">
+            <div className="bg-white border-gray-200 border-t-4 border-t-[#1a73e8] rounded-xl p-5 shadow-sm hover:shadow-md transition-shadow">
               <div className="flex items-center justify-between mb-3">
                 <div className="p-2 border border-gray-200 bg-white rounded-lg">
                   <DollarSign className="h-4 w-4 text-gray-700" />
