@@ -721,6 +721,30 @@ def canonicalize_event_name(event_name: str) -> Optional[str]:
             status = "success"
         return f"{page}.{feature}.{status}"
 
+    if page in {"login", "register"}:
+        if not remainder:
+            return f"{page}.page.view"
+        feature = remainder[0]
+        if feature in {"view", "viewed", "page"}:
+            return f"{page}.page.view"
+        # B2 fix (docs/FinInsights_Bug_Audit.md): this page used to fall all the way through to
+        # `return normalized` untouched, so `login.auth.failed` -- what the producer actually
+        # emits -- never became `login.auth.failure` the way every other page's `failed`/`error`
+        # became `failure`. The vocabulary was inconsistent within this one function, and
+        # `/license/usage`'s catalog ended up keyed on `login.auth.failure`/`register.auth.failure`,
+        # strings no real event can ever produce. `feature` here is always "auth" in practice
+        # (ingest's `f"{feature}.auth.{status}"` shape); the "success" coercion the other
+        # branches apply to unrecognised statuses is deliberately NOT replicated here -- no
+        # producer, contract, or seed script emits an "action"-suffixed auth event, so there is
+        # nothing that needs it, and adding it would risk conflating a future login attempt
+        # event with a login success the way B1 already does elsewhere.
+        status = remainder[1] if len(remainder) > 1 else "success"
+        if status in {"error", "failed", "fail"}:
+            status = "failure"
+        elif status == "viewed":
+            status = "view"
+        return f"{page}.{feature}.{status}"
+
     return normalized
 
 def resolve_page(event_name: str) -> Optional[str]:

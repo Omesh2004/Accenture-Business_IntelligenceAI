@@ -4,10 +4,17 @@ import { getBrowserContext, getNexaBankSessionId } from './api';
 const INGESTION_API_URL = process.env.NEXT_PUBLIC_INGESTION_URL || 'http://localhost:8000/events';
 
 /**
- * SHA-256 hex digest via WebCrypto, matching the backend's hashUserId() in
- * NexaBank/backend/src/middleware/eventTracker.ts (crypto.createHash('sha256')...digest('hex'))
- * byte-for-byte -- same algorithm, same encoding, so the same customer produces the same
- * hashed ID whether an event goes through the backend or this browser-direct path.
+ * SHA-256 hex digest via WebCrypto. Originally documented as matching the backend's
+ * hashUserId() in NexaBank/backend/src/middleware/eventTracker.ts byte-for-byte -- that stopped
+ * being true when C4 (docs/FinInsights_Bug_Audit.md) salted the backend's hash with a server-side
+ * secret plus tenantId, because a secret salt cannot be shipped into this browser bundle without
+ * ceasing to be secret. This function is UNSALTED and will now produce a different hash than the
+ * backend for the same customer id. That divergence is currently harmless only because it is
+ * dead code (see below) -- whoever wires up a live caller of track() must not just restore
+ * byte-for-byte parity here; either the backend needs to expose a way to look up its own hash for
+ * a session-scoped token, or (preferable) this browser-direct path should stop hashing client-side
+ * and send the raw id to a trusted backend endpoint that performs the one authoritative salted
+ * hash, matching how every other producer path already works.
  *
  * Found during the NexaBank telemetry audit: setUser() below is fed the RAW authenticated
  * customer ID at every call site (login, registration, UserContext's session hydration), and

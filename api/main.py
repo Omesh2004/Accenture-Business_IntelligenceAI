@@ -552,20 +552,28 @@ def get_funnel_analysis(
         condition_tokens.append(f"event_name IN ({quoted})")
     conditions = ", ".join(condition_tokens)
     
+    # C1 fix (docs/FinInsights_Bug_Audit.md): this used to GROUP BY user_id. Logged-out traffic
+    # all carries the same synthetic user_id, so every anonymous visitor collapsed into one row
+    # -- across thousands of sessions, that one row will have completed every step of every
+    # funnel, and windowFunnel returns the maximum level for it. Any funnel whose first stage is
+    # pre-login reported near-100% conversion as a definitional artefact, not a measurement.
+    # kyc_completion_rate.yaml declares `grain.entity: session`; this now matches that grain.
+    # The response's "users_completed" field name is unchanged (no shape/consumer change per
+    # CLAUDE.md rule 6) but now counts distinct SESSIONS reaching each step, not distinct users.
     sql = f"""
-        SELECT 
+        SELECT
             level,
             count() as users_reached_level
         FROM (
-            SELECT 
-                user_id,
+            SELECT
+                session_id,
                 windowFunnel(%(window)s)(
                     timestamp,
                     {conditions}
                 ) as level
             FROM feature_intelligence.events_raw
             WHERE {cond} AND timestamp >= today() - %(days)s
-            GROUP BY user_id
+            GROUP BY session_id
         )
         GROUP BY level
         ORDER BY level ASC
@@ -676,12 +684,17 @@ def get_kpi_metrics(tenants: str = Query(..., description="Comma-separated list 
         # count(distinct event_name) counts RAW names, so aliases of one feature (e.g.
         # dashboard.page.view and free.dashboard.view) registered as two features while
         # /features/usage correctly showed one. Canonicalize in Python, then count.
+        # D2 fix: the "current" window used to have no upper bound (>= today()-N, implicitly
+        # through "now"), so it was N days + whatever fraction of today has elapsed, while the
+        # "previous" window below is a clean N days -- every pct_change was biased upward,
+        # growing through the day and resetting at midnight. Both windows are now exactly N
+        # complete days, excluding today.
         sql_current = f"""
-            SELECT 
+            SELECT
                 uniqExact({DEDUP_EVENT_KEY}) as total_events,
                 groupUniqArray(event_name) as event_names
             FROM feature_intelligence.events_raw
-            WHERE {cond} AND timestamp >= today() - %(days)s
+            WHERE {cond} AND timestamp >= today() - %(days)s AND timestamp < today()
         """
         res_current = ch_client.query(sql_current, params)
         cur = res_current[0] if res_current else {"total_events": 0, "event_names": []}
@@ -717,6 +730,15 @@ def get_kpi_metrics(tenants: str = Query(..., description="Comma-separated list 
         # this synthesises one from a hash. CLAUDE.md forbids fabricating a metric SILENTLY,
         # so also count how many rows were synthesised and surface it as `simulated` on the
         # card. The value stays as-is; what changes is that the UI can now say so.
+        # A4 fix (docs/FinInsights_Bug_Audit.md): `has_measured` used to be plain
+        # JSONHas(metadata, 'response_time_ms'), which is true on every row because the producer
+        # always sets that key -- to a real measurement when one exists, to a random log-normal
+        # value otherwise (see A3's naming-mismatch fix in NexaBank/frontend/hooks/useEventTracker.ts
+        # and forwardToIngestionAPI). So `synthesised` was always 0 and the card rendered
+        # `simulated: false` on a value that could be 100% synthetic -- the safeguard was defeated
+        # by the same producer that created the problem. The producer now tags which fields it
+        # fell back on in `metadata._simulated`; `has_measured` reads that flag instead of
+        # inferring from key-presence.
         # Phase E (item 8): avg()/count()/countIf() over raw rows double-count a replayed
         # event. Collapse to one row per logical event first (any() picks a value from the
         # group -- fine since exact duplicates carry identical fields), then aggregate.
@@ -727,9 +749,12 @@ def get_kpi_metrics(tenants: str = Query(..., description="Comma-separated list 
             FROM (
                 SELECT
                     any(if(JSONHas(metadata, 'response_time_ms'), JSONExtractFloat(metadata, 'response_time_ms'), 15 + (cityHash64(event_name, toString(timestamp)) %% 285))) as rt,
-                    any(JSONHas(metadata, 'response_time_ms')) as has_measured
+                    any(
+                        JSONHas(metadata, 'response_time_ms')
+                        AND NOT has(JSONExtract(metadata, '_simulated', 'Array(String)'), 'response_time_ms')
+                    ) as has_measured
                 FROM feature_intelligence.events_raw
-                WHERE {cond} AND timestamp >= today() - %(days)s
+                WHERE {cond} AND timestamp >= today() - %(days)s AND timestamp < today()
                 GROUP BY {DEDUP_EVENT_KEY}
             )
         """
@@ -767,7 +792,7 @@ def get_kpi_metrics(tenants: str = Query(..., description="Comma-separated list 
                 uniqExactIf({DEDUP_EVENT_KEY}, lower(event_name) LIKE '%%error%%' OR lower(event_name) LIKE '%%fail%%') as error_events,
                 uniqExact({DEDUP_EVENT_KEY}) as total
             FROM feature_intelligence.events_raw
-            WHERE {cond} AND timestamp >= today() - %(days)s
+            WHERE {cond} AND timestamp >= today() - %(days)s AND timestamp < today()
         """
         res_err = ch_client.query(sql_error, params)
         err_row = res_err[0] if res_err else {"error_events": 0, "total": 1}
@@ -851,7 +876,7 @@ def get_secondary_kpi(tenants: str = Query(..., description="Comma-separated lis
                 uniqExact({DEDUP_EVENT_KEY}) as total_visits,
                 uniqExact(user_id) as unique_visitors
             FROM feature_intelligence.events_raw
-            WHERE {cond} AND timestamp >= today() - %(days)s
+            WHERE {cond} AND timestamp >= today() - %(days)s AND timestamp < today()
         """
         res_basic = ch_client.query(sql_basic, params)
         basic = res_basic[0] if res_basic else {"total_visits": 0, "unique_visitors": 0}
@@ -880,7 +905,7 @@ def get_secondary_kpi(tenants: str = Query(..., description="Comma-separated lis
             FROM (
                 SELECT user_id, uniqExact({DEDUP_EVENT_KEY}) as event_count
                 FROM feature_intelligence.events_raw
-                WHERE {cond} AND timestamp >= today() - %(days)s
+                WHERE {cond} AND timestamp >= today() - %(days)s AND timestamp < today()
                 GROUP BY user_id
             )
         """
@@ -914,7 +939,7 @@ def get_secondary_kpi(tenants: str = Query(..., description="Comma-separated lis
             FROM (
                 SELECT user_id, toDate(timestamp) as d, dateDiff('second', min(timestamp), max(timestamp)) as session_duration
                 FROM feature_intelligence.events_raw
-                WHERE {cond} AND timestamp >= today() - %(days)s
+                WHERE {cond} AND timestamp >= today() - %(days)s AND timestamp < today()
                 GROUP BY user_id, d
                 HAVING session_duration > 0 AND session_duration < 3600 * 4
             )
@@ -997,13 +1022,14 @@ def get_traffic_data(tenants: str = Query(..., description="Comma-separated list
     try:
         tenants = [t.strip() for t in tenant_id.split(",") if t.strip()]
         if len(tenants) == 1:
-            # Phase E (item 8): dedup-safe count. Direct pattern, not the rollup -- the +330min
-            # IST offset shifts day boundaries before truncation, which the rollup's own `date`
-            # (plain UTC toDate(timestamp), no offset) does not replicate; swapping to the
-            # rollup here would silently move events near midnight IST into the wrong bucket.
+            # D1 fix: this used to bucket by toDate(timestamp + INTERVAL 330 MINUTE) (hardcoded
+            # IST) while daily_feature_usage's rollup and every other endpoint bucket by plain
+            # UTC toDate(timestamp) -- three different definitions of "a day" on the same table.
+            # Bucketing here in UTC too means this endpoint's `date` now agrees with the rollup
+            # and with every other chart; any IST display shift belongs in the frontend, not here.
             sql = f"""
                 SELECT
-                    toDate(timestamp + INTERVAL 330 MINUTE) as date,
+                    toDate(timestamp) as date,
                     uniqExact({DEDUP_EVENT_KEY}) as pageViews,
                     uniq(user_id) as visitors
                 FROM feature_intelligence.events_raw
@@ -1015,7 +1041,7 @@ def get_traffic_data(tenants: str = Query(..., description="Comma-separated list
         else:
             sql = f"""
                 SELECT
-                    toDate(timestamp + INTERVAL 330 MINUTE) as date,
+                    toDate(timestamp) as date,
                     tenant_id,
                     uniqExact({DEDUP_EVENT_KEY}) as pageViews,
                     uniq(user_id) as visitors
@@ -2409,9 +2435,11 @@ def get_license_usage(tenants: str = Query(..., description="Comma-separated lis
             # Phase E (item 8): rollup pattern -- filtered by event_name IN (...), a plain
             # column on daily_feature_usage; uniqExactMergeIf already has precedent in this
             # codebase (api/data_layer.py's trending query, and /tenants above).
+            # D2 fix: current_week used to run through today (no upper bound), making it
+            # 7 days + a partial day against prev_week's clean 7 -- biasing wow_change upward.
             sql_wow = f"""
                 SELECT
-                    uniqExactMergeIf(event_count, date >= today() - 7) as current_week,
+                    uniqExactMergeIf(event_count, date >= today() - 7 AND date < today()) as current_week,
                     uniqExactMergeIf(event_count, date >= today() - 14 AND date < today() - 7) as prev_week
                 FROM feature_intelligence.daily_feature_usage
                 WHERE {cond} AND event_name IN ({pro_str})
@@ -2965,10 +2993,12 @@ def get_predictive_adoption(tenants: str = Query(..., description="Comma-separat
     tenant_list = [t.strip() for t in tenants.split(",") if t.strip()]
     try:
         # Recent 7d vs previous 7d trend (aggregated across tenants)
+        # D2 fix: recent_7d used to run through today (8 buckets: today() - 7 .. today, no
+        # upper bound) against prev_7d's clean 7 buckets -- both are now exactly 7 complete days.
         sql_trend = """
-            SELECT 
+            SELECT
                 event_name,
-                uniqExactMergeIf(event_count, date >= today() - 7) as recent_7d,
+                uniqExactMergeIf(event_count, date >= today() - 7 AND date < today()) as recent_7d,
                 uniqExactMergeIf(event_count, date >= today() - 14 AND date < today() - 7) as prev_7d
             FROM feature_intelligence.daily_feature_usage
             WHERE tenant_id IN %(tenant_ids)s AND date >= today() - 14
@@ -3697,9 +3727,15 @@ def get_tenant_comparison(tenants: str = Query(..., description="Comma-separated
             # Growth rate (current week vs previous week)
             # Phase E (item 8): sumIf(1, cond) is a row count under another name -- same
             # duplicate-vulnerability as count(). Direct pattern, uniqExactIf.
+            # D1/D2 correction: an earlier pass of this work (Phase 1) misidentified this block
+            # as living inside the dead second `/insights` definition and left it unfixed. It does
+            # not -- `/tenants/compare` is its own live, reachable endpoint (confirmed by reading
+            # the function boundaries directly). current_week previously had no upper bound
+            # (>= today()-7, implicitly through now) against prev_week's clean 7 days -- same bias
+            # as every other D2 site fixed in Phase 1.
             sql_growth = f"""
                 SELECT
-                    uniqExactIf({DEDUP_EVENT_KEY}, timestamp >= today() - 7) as current_week,
+                    uniqExactIf({DEDUP_EVENT_KEY}, timestamp >= today() - 7 AND timestamp < today()) as current_week,
                     uniqExactIf({DEDUP_EVENT_KEY}, timestamp >= today() - 14 AND timestamp < today() - 7) as prev_week
                 FROM feature_intelligence.events_raw
                 WHERE tenant_id = %(tid)s
@@ -3708,14 +3744,19 @@ def get_tenant_comparison(tenants: str = Query(..., description="Comma-separated
             cw = int(gr[0]["current_week"]) if gr else 0
             pw = int(gr[0]["prev_week"]) if gr else 0
             growth_rate = round(((cw - pw) / max(pw, 1)) * 100, 1)
-            
-            # Conversion rate (users with >3 events / total users)
+
+            # A6 fix (docs/FinInsights_Bug_Audit.md): this was labelled "conversion rate" but
+            # measures "users with more than 3 events in the range" -- not a conversion in any
+            # business sense (no funnel, no purchase, no signup). Renamed to what it actually
+            # measures. Confirmed via grep this field is not rendered anywhere in
+            # analytics-dashboard today (only referenced in lib/api.ts's type signature), so this
+            # is not a response-shape change with a real consumer to update per CLAUDE.md rule 6.
             # Phase E (item 8): direct pattern for the inner per-user event_count. The outer
             # count() counts subquery rows (one per distinct user_id) -- already immune.
-            sql_conv = f"""
+            sql_engaged = f"""
                 SELECT
                     count() as total,
-                    countIf(event_count > 3) as converted
+                    countIf(event_count > 3) as engaged
                 FROM (
                     SELECT user_id, uniqExact({DEDUP_EVENT_KEY}) as event_count
                     FROM feature_intelligence.events_raw
@@ -3723,15 +3764,16 @@ def get_tenant_comparison(tenants: str = Query(..., description="Comma-separated
                     GROUP BY user_id
                 )
             """
-            conv = ch_client.query(sql_conv, {"tid": tid, "days": days})
-            conversion_rate = round((int(conv[0]["converted"]) / max(int(conv[0]["total"]), 1)) * 100, 1) if conv else 0.0
-            
+            eng = ch_client.query(sql_engaged, {"tid": tid, "days": days})
+            engaged_user_rate = round((int(eng[0]["engaged"]) / max(int(eng[0]["total"]), 1)) * 100, 1) if eng else 0.0
+
             # Daily event trend (last 7 days)
-            # Phase E (item 8): direct pattern -- the +330min IST offset shifts day boundaries
-            # before truncation, same reasoning as /metrics/traffic; the rollup's own `date`
-            # has no such offset.
+            # D1 fix: this used to bucket by toDate(timestamp + INTERVAL 330 MINUTE) (hardcoded
+            # IST), disagreeing with daily_feature_usage's plain-UTC day boundary -- same fix as
+            # /metrics/traffic. This block was NOT dead code (see correction above), so this was a
+            # live discrepancy, not a hypothetical one.
             sql_trend = f"""
-                SELECT toDate(timestamp + INTERVAL 330 MINUTE) as date, uniqExact({DEDUP_EVENT_KEY}) as events
+                SELECT toDate(timestamp) as date, uniqExact({DEDUP_EVENT_KEY}) as events
                 FROM feature_intelligence.events_raw
                 WHERE tenant_id = %(tid)s AND timestamp >= today() - 7
                 GROUP BY date
@@ -3751,7 +3793,7 @@ def get_tenant_comparison(tenants: str = Query(..., description="Comma-separated
                 "unique_users": unique_users,
                 "active_features": active_features,
                 "growth_rate": growth_rate,
-                "conversion_rate": conversion_rate,
+                "engaged_user_rate": engaged_user_rate,
                 "trend": trend_data,
             })
         

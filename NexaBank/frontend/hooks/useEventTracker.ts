@@ -4,7 +4,12 @@ import { API_BASE_URL } from '@/lib/api';
 import { useFeatureToggles } from '@/components/context/FeatureToggleContext';
 
 export interface EventMetadata {
-  responseTime?: number;
+  // A3 fix (docs/FinInsights_Bug_Audit.md): this was `responseTime` (camelCase). The backend's
+  // forwardToIngestionAPI reads `metadata.response_time_ms` (snake_case) -- the names never
+  // matched, so the real measurement made here rode along in metadata, unused, while a random
+  // log-normal value was written to the column everything reads. Renamed to match what the
+  // backend actually looks for.
+  response_time_ms?: number;
   error?: string | unknown;
   amount?: number;
   currency?: string;
@@ -25,9 +30,9 @@ export interface EventMetadata {
  * they are a genuine 2x on every live count. The map is module-level so it survives remounts.
  *
  * This suppression window existed to catch case 2, but didn't: `measureAndTrack` always adds
- * `responseTime`, and StrictMode's two invocations independently measure two different timings
- * for the same action, so the two calls' JSON.stringify(metadata) differ, the suppression key
- * differs, and both sail through as genuinely distinct rows -- confirmed live in events_raw
+ * `response_time_ms`, and StrictMode's two invocations independently measure two different
+ * timings for the same action, so the two calls' JSON.stringify(metadata) differ, the suppression
+ * key differs, and both sail through as genuinely distinct rows -- confirmed live in events_raw
  * (same event/user/second landing twice with two different real event_ids, e.g.
  * dashboard.page.view / profile.location.success / transactions.page.view pairs). `suppressionKey`
  * below excludes fields that legitimately vary between two invocations of the same logical
@@ -41,7 +46,7 @@ const recentEmits = new Map<string, number>();
  * (timing measurements chiefly) -- excluded from the suppression key so a few milliseconds of
  * jitter doesn't defeat the whole point of this map: the two invocations are still one real
  * user action. */
-const VOLATILE_METADATA_KEYS = new Set(['responseTime']);
+const VOLATILE_METADATA_KEYS = new Set(['response_time_ms']);
 
 function suppressionKey(eventType: string, metadata?: EventMetadata): string {
   const stableMetadata = Object.fromEntries(
@@ -105,13 +110,13 @@ export const useEventTracker = () => {
     try {
       const result = await action();
       const end = performance.now();
-      await track(`${eventType}.success`, { ...baseMetadata, responseTime: Math.round(end - start) });
+      await track(`${eventType}.success`, { ...baseMetadata, response_time_ms: Math.round(end - start) });
       return result;
     } catch (error: unknown) {
       const end = performance.now();
-      await track(`${eventType}.error`, { 
-        ...baseMetadata, 
-        responseTime: Math.round(end - start), 
+      await track(`${eventType}.error`, {
+        ...baseMetadata,
+        response_time_ms: Math.round(end - start),
         error: error instanceof Error ? error.message : String(error)
       });
       throw error;
