@@ -2,6 +2,19 @@ CREATE DATABASE IF NOT EXISTS feature_intelligence;
 
 -- Raw Events Table
 -- Using MergeTree and ordering by tenant_id first guarantees data locality per tenant, optimizing multi-tenant queries.
+--
+-- kafka_partition/kafka_offset/kafka_topic/ingested_at/ingest_path added for Phase 3 proposals
+-- 2+3 (docs/audits/clickhouse_pipeline_audit_phase3_proposals.md). Sentinel defaults, not
+-- Nullable, matching this table's existing style for event_id/session_id. kafka_partition/
+-- kafka_offset default -1 and kafka_topic defaults '' because the direct-ClickHouse fallback
+-- path (ingestion/main.py's on-prem and cloud-Kafka-unavailable branches) never has real Kafka
+-- metadata to report. ingest_path defaults '' rather than 'kafka' deliberately: Phase 1's audit
+-- documented a real incident where this pipeline ran entirely on the fallback path for its whole
+-- process lifetime with no crash or signal, so assuming 'kafka' for any row that doesn't say
+-- otherwise would have been actively wrong for that period, and is wrong today for
+-- api/seed_safexbank.py, a third insert site (via storage/client.py's shared insert_events())
+-- that bypasses Kafka and the ingestion API entirely and sets none of these fields. '' means
+-- "not reported by whatever wrote this row", not "assumed kafka".
 CREATE TABLE IF NOT EXISTS feature_intelligence.events_raw (
     event_id String DEFAULT '',
     session_id String DEFAULT '',
@@ -10,7 +23,12 @@ CREATE TABLE IF NOT EXISTS feature_intelligence.events_raw (
     user_id String,
     channel String,
     timestamp DateTime,
-    metadata String
+    metadata String,
+    kafka_partition Int32 DEFAULT -1,
+    kafka_offset Int64 DEFAULT -1,
+    kafka_topic String DEFAULT '',
+    ingested_at DateTime DEFAULT now(),
+    ingest_path String DEFAULT ''
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMM(timestamp)
 ORDER BY (tenant_id, event_name, timestamp)
@@ -41,19 +59,26 @@ FROM feature_intelligence.events_raw
 GROUP BY tenant_id, event_name, date;
 
 -- ═══════════════════════════════════════════════════════════
--- Dead-letter queue for the processor worker.
+-- Dead-letter queue for the processor worker AND for pre-Kafka ingestion validation failures.
 -- processing/worker.py inserts in batches and commits Kafka offsets only after a successful
 -- insert. A single un-insertable row therefore failed its ENTIRE batch, forever: offsets
 -- never advanced, the batch was retried every poll, and the pipeline stalled silently with
 -- no signal anywhere. Rows that fail on their own are parked here instead, so one bad event
 -- cannot block every good one behind it -- and is still recoverable rather than dropped.
+--
+-- `stage` (added for Phase 3 proposal 4c, docs/audits/clickhouse_pipeline_audit_phase3_proposals.md)
+-- distinguishes the two writers sharing this table: 'worker_poison' (processing/worker.py, a row
+-- that reached Kafka but failed to insert) vs. 'ingest_validation' (ingestion/main.py, a payload
+-- that failed FeatureEvent validation and never reached Kafka at all -- previously only a log
+-- line, per Phase 1 item 3, docs/audits/clickhouse_pipeline_audit_phase1_findings.md).
 -- ═══════════════════════════════════════════════════════════
 CREATE TABLE IF NOT EXISTS feature_intelligence.events_dead_letter (
     event_id    String DEFAULT '',
     tenant_id   String DEFAULT '',
     event_name  String DEFAULT '',
-    payload     String,             -- the original Kafka message, verbatim JSON
-    error       String,             -- the exception this row failed with
+    payload     String,             -- the original Kafka message or rejected request body, verbatim JSON
+    error       String,             -- the exception (or validation errors) this row failed with
+    stage       String DEFAULT 'worker_poison', -- 'worker_poison' | 'ingest_validation'
     failed_at   DateTime DEFAULT now()
 ) ENGINE = MergeTree()
 PARTITION BY toYYYYMM(failed_at)

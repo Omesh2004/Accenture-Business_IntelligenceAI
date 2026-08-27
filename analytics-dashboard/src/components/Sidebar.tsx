@@ -14,7 +14,6 @@ import Image from 'next/image';
 import {
   LayoutDashboard,
   BarChart3,
-  Filter,
   Users,
   Settings,
   Shield,
@@ -24,11 +23,7 @@ import {
   Eye,
   FileText,
   Key,
-  Route,
   TrendingUp,
-  GitBranch,
-  Lightbulb,
-  Activity,
 } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '@/lib/store';
 import { toggleSidebar } from '@/lib/dashboardSlice';
@@ -40,7 +35,6 @@ import { buildAppScopedPath, resolveAppIdFromPathname, resolvePrimaryAppIdFromAd
 const iconMap: Record<string, React.ElementType> = {
   'layout-dashboard': LayoutDashboard,
   'bar-chart-3': BarChart3,
-  filter: Filter,
   users: Users,
   settings: Settings,
   shield: Shield,
@@ -48,11 +42,7 @@ const iconMap: Record<string, React.ElementType> = {
   eye: Eye,
   'file-text': FileText,
   key: Key,
-  route: Route,
   'trending-up': TrendingUp,
-  'git-branch': GitBranch,
-  lightbulb: Lightbulb,
-  activity: Activity,
 };
 
 interface SidebarProps { }
@@ -75,18 +65,13 @@ function Sidebar(_props: SidebarProps) {
     navItems = [
       { id: 'dashboard', label: 'Dashboard', icon: 'layout-dashboard', href: buildAppScopedPath(activeAppId, '/dashboard') },
       { id: 'features', label: 'Feature Analytics', icon: 'bar-chart-3', href: buildAppScopedPath(activeAppId, '/features') },
-      { id: 'funnel', label: 'Funnel Analysis', icon: 'filter', href: buildAppScopedPath(activeAppId, '/funnel') },
-      { id: 'user-journey', label: 'User Journey', icon: 'route', href: buildAppScopedPath(activeAppId, '/user-journey') },
       { id: 'license-usage', label: 'License vs Usage', icon: 'key', href: buildAppScopedPath(activeAppId, '/license-usage') },
-      { id: 'predictive', label: 'Forecasts', icon: 'trending-up', href: buildAppScopedPath(activeAppId, '/predictive') },
-      { id: 'causal-impact', label: 'Causal Impact', icon: 'git-branch', href: buildAppScopedPath(activeAppId, '/causal-impact') },
-      { id: 'recommendations', label: 'Recommendations', icon: 'lightbulb', href: buildAppScopedPath(activeAppId, '/recommendations') },
+      { id: 'predictive', label: 'Predictive Insights', icon: 'trending-up', href: buildAppScopedPath(activeAppId, '/predictive') },
       { id: 'tenants', label: 'Tenants', icon: 'users', href: buildAppScopedPath(activeAppId, '/tenants') },
       { id: 'config', label: 'Configuration', icon: 'settings', href: buildAppScopedPath(activeAppId, '/settings') },
       { id: 'governance', label: 'Governance', icon: 'shield', href: buildAppScopedPath(activeAppId, '/governance') },
       { id: 'transparency', label: 'Trust & Transparency', icon: 'eye', href: buildAppScopedPath(activeAppId, '/transparency') },
-      { id: 'ai-report', label: 'Narrate & Verify', icon: 'file-text', href: buildAppScopedPath(activeAppId, '/ai-report') },
-      { id: 'observability', label: 'Model Observability', icon: 'activity', href: buildAppScopedPath(activeAppId, '/observability') },
+      { id: 'ai-report', label: 'AI Report', icon: 'file-text', href: buildAppScopedPath(activeAppId, '/ai-report') }
     ];
   } else if (role === 'super_admin') {
     // Super admin sees only the Global Admin view

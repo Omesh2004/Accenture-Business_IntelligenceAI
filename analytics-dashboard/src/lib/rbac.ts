@@ -79,9 +79,6 @@ export function canAccessRoute(role: UserRole, pathname: string): boolean {
     if (normalizedPathname.startsWith('/license-usage')) return true;
     if (normalizedPathname.startsWith('/user-journey')) return true;
     if (normalizedPathname.startsWith('/predictive')) return true;
-    if (normalizedPathname.startsWith('/causal-impact')) return true;
-    if (normalizedPathname.startsWith('/observability')) return true;
-    if (normalizedPathname.startsWith('/recommendations')) return true;
     // Block super admin routes — app admin shouldn't see cross-tenant data
     if (normalizedPathname === '/admin') return false;
     if (normalizedPathname.startsWith('/apps/')) return false;

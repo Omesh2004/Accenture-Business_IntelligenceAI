@@ -8,8 +8,6 @@ import { AIInsight } from '@/types';
 import { Printer, Loader2, Sparkles, Clock3, TrendingUp, ShieldCheck, Timer, Lightbulb } from 'lucide-react';
 import AIInsightsPanel from '@/components/AIInsightsPanel';
 import { ChartSkeleton } from '@/components/Skeletons';
-import { useIntelligenceData } from '@/hooks/useIntelligenceData';
-import { ShieldAlert } from 'lucide-react';
 
 function simpleMarkdownToHtml(md: string) {
   const html = md
@@ -122,7 +120,6 @@ function extractStrategicBullets(md: string): string[] {
 export default function AIReportPage() {
   const { tenantsParam, selectedTenants, rangeParam, timeRange } = useDashboardData();
   const queryClient = useQueryClient();
-  const { quarantinedMetrics } = useIntelligenceData();
   // Use React Query's global mutation tracking to survive unmounts
   const mutationKey = ['generateAIReport', tenantsParam, rangeParam];
   const activeMutations = useIsMutating({ mutationKey });
@@ -300,30 +297,8 @@ export default function AIReportPage() {
             </span>
           </div>
         </div>
-        <div className="prose max-w-none prose-headings:font-semibold prose-a:text-blue-600 prose-p:text-gray-800 text-gray-800">
-          {quarantinedMetrics.length > 0 && (
-            <div className="mb-6 rounded-xl border border-red-200 bg-red-50 p-5 shadow-sm not-prose">
-              <div className="flex items-start gap-3">
-                <ShieldAlert className="w-5 h-5 text-red-600 mt-0.5 flex-shrink-0" />
-                <div>
-                  <h3 className="text-sm font-bold text-red-900">Incident Note: Quarantined Metrics Detected</h3>
-                  <p className="mt-1 text-sm text-red-700 leading-relaxed">
-                    The Trust Gate has quarantined <strong>{quarantinedMetrics.length}</strong> metric(s). 
-                    To prevent hallucination on anomalous or defective data, a standard business narrative will not be generated for these metrics until they are verified.
-                  </p>
-                  <ul className="mt-2 text-sm text-red-800 list-disc list-inside">
-                    {quarantinedMetrics.slice(0, 3).map((qm, i) => (
-                      <li key={i}><strong>{qm.metric_id}</strong>: {qm.failing_detail || 'Pending review'}</li>
-                    ))}
-                    {quarantinedMetrics.length > 3 && (
-                      <li>...and {quarantinedMetrics.length - 3} more</li>
-                    )}
-                  </ul>
-                </div>
-              </div>
-            </div>
-          )}
 
+        <div className="prose max-w-none prose-headings:font-semibold prose-a:text-blue-600 prose-p:text-gray-800 text-gray-800">
           {loading ? (
             <ChartSkeleton height="h-[520px]" />
           ) : report ? (

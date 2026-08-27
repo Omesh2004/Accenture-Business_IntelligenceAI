@@ -2,6 +2,7 @@ import sys
 import os
 import json
 import logging
+import hashlib
 from confluent_kafka import Consumer, KafkaError, KafkaException
 import time
 
@@ -42,19 +43,142 @@ def _dead_letter(records, error: str) -> None:
                 str(r.get("event_name", "") or ""),
                 json.dumps(r, default=str),
                 error[:2000],
+                # Distinguishes this writer from ingestion/main.py's pre-Kafka validation-failure
+                # writer (stage='ingest_validation') now that both insert into this table --
+                # Phase 3 proposal 4c (docs/audits/clickhouse_pipeline_audit_phase3_proposals.md).
+                "worker_poison",
             ]
             for r in records
         ]
         ch_client._get_client().insert(
             "feature_intelligence.events_dead_letter",
             rows,
-            column_names=["event_id", "tenant_id", "event_name", "payload", "error"],
+            column_names=["event_id", "tenant_id", "event_name", "payload", "error", "stage"],
         )
         logger.error("Dead-lettered %d unrecoverable event(s): %s", len(rows), error[:200])
     except Exception as exc:
         # Losing the DLQ write is bad but must not stall the pipeline; the payload is still
         # in Kafka until the offset commits, and the offset only commits on a clean flush.
         logger.critical("Dead-letter insert FAILED for %d event(s): %s", len(records), exc)
+
+
+def _dead_letter_undecodable(msg, error: str) -> None:
+    """Dead-letter a Kafka message that failed to become JSON at all (Phase G follow-up).
+
+    Previously this case was only logged and the message silently dropped from the batch --
+    the one asymmetry against _dead_letter() below, which properly persists a replayable record
+    for every OTHER poison-row case. A message that never became a dict has no event_id/
+    tenant_id/event_name to report, so those are empty; the raw bytes (decoded with
+    errors='replace' so a second decode failure can't happen here) go into the payload instead,
+    alongside the Kafka delivery coordinates, so this is still cross-referenceable by
+    scripts/reconcile_kafka_offsets.py the same way every other worker_poison row is.
+    """
+    try:
+        raw = msg.value()
+        raw_text = raw.decode("utf-8", errors="replace") if raw is not None else ""
+    except Exception:
+        raw_text = repr(msg.value())
+    record = {
+        "event_id": "",
+        "tenant_id": "",
+        "event_name": "",
+        "raw_payload": raw_text,
+        "kafka_partition": msg.partition(),
+        "kafka_offset": msg.offset(),
+        "kafka_topic": msg.topic(),
+    }
+    _dead_letter([record], error)
+
+
+def _attach_kafka_metadata(event_data: dict, msg) -> dict:
+    """Attach Kafka's own delivery metadata to a consumed message before it enters the batch.
+
+    Phase 3 proposal 2 (docs/audits/clickhouse_pipeline_audit_phase3_proposals.md). Attaching it
+    to `event_data` itself (rather than tracking it out-of-band) means it rides along into
+    events_dead_letter's `payload` too if this row is later isolated as a poison row -- the
+    reconciliation job (scripts/reconcile_kafka_offsets.py) can then cross-reference a DLQ entry
+    against a specific partition/offset directly. Pulled out as its own function so it's
+    unit-testable against a fake message object without a live broker.
+    """
+    event_data["kafka_partition"] = msg.partition()
+    event_data["kafka_offset"] = msg.offset()
+    event_data["kafka_topic"] = msg.topic()
+    event_data["ingest_path"] = "kafka"
+    return event_data
+
+
+def _compute_deduplication_token(event_ids: list) -> str:
+    """Deterministic token for a batch's exact ordered event_id sequence.
+
+    Phase F item 6 bullet 2 (docs/audits/clickhouse_pipeline_implementation_phases_defg_prompt.md).
+    Passed as ClickHouse's `insert_deduplication_token` insert setting so a retried insert of the
+    *same* logical batch (the network ack was lost but the insert actually landed) is caught by
+    ClickHouse's own insert-level dedup -- a backstop behind (not a substitute for) the
+    batch-identity fix in run_worker()/flush_batch() below, per this item's own framing: the
+    token only helps once the batch it describes is guaranteed stable across retries. Hashing the
+    ordered event_ids (not full row content) is cheap and keys on the same identity the rest of
+    this pipeline already uses everywhere (DEDUP_EVENT_KEY in api/main.py,
+    mv_daily_feature_usage's rollup key).
+
+    LOAD-BEARING CAVEAT, confirmed live against the actual installed ClickHouse (24.3.18.7), not
+    assumed: this token is currently a NO-OP on events_raw. `insert_deduplicate=1` is
+    ClickHouse's session default, but the mechanism it gates for a table that is NOT a
+    Replicated*MergeTree (events_raw is a plain ReplacingMergeTree here) is controlled by the
+    table-level `non_replicated_deduplication_window` MergeTree setting -- confirmed via
+    `SELECT * FROM system.merge_tree_settings WHERE name = 'non_replicated_deduplication_window'`
+    to be 0 (disabled) on the live table. With that window at 0, ClickHouse accepts and discards
+    this token without checking it against anything; no hash is retained to compare a retry
+    against. Enabling it is `ALTER TABLE events_raw MODIFY SETTING
+    non_replicated_deduplication_window = N` -- DDL, and explicitly out of scope for this
+    (code-only) phase. Implemented now so the only remaining step, once that DDL is proposed and
+    approved separately, is the ALTER itself, not another code deploy.
+    """
+    return hashlib.sha256("|".join(event_ids).encode("utf-8")).hexdigest()
+
+
+def _log_commit_result(err, partitions) -> bool:
+    """Log an offset-commit outcome; return True if it failed (and should be retried).
+
+    Phase F item 5 (docs/audits/clickhouse_pipeline_implementation_phases_defg_prompt.md): the
+    main loop's `consumer.commit(asynchronous=True)` previously had no `on_commit` callback, so
+    a failed async commit was swallowed silently -- the confluent-kafka client reports it only
+    through this callback, never as an exception on the `commit()` call itself. Pulled out as a
+    pure function (rather than inlined in the closure below) so the logging/decision logic is
+    unit-testable without a live broker or a real Consumer object.
+
+    A failed commit is not a lost-data event: the rows are already durably in ClickHouse by the
+    time commit() is called (flush_batch() only reaches this point after a successful insert),
+    so the only consequence of a stuck offset is redelivery on the next rebalance/restart, which
+    every reader already absorbs via uniqExact(event_id)/DEDUP_EVENT_KEY (docs/DATABASE.md
+    FOUNDATION-1/4). This must still never be silent, though -- an offset that never commits
+    means unbounded reprocessing and a Kafka consumer group that never advances, which is worth
+    knowing about even though it isn't a correctness emergency.
+    """
+    if err is not None:
+        logger.error(
+            "Async offset commit failed (partitions=%s): %s. Rows for this batch are already "
+            "durably in ClickHouse -- only the commit acknowledgment failed. Retrying "
+            "synchronously on the next resolved flush rather than leaving this unresolved.",
+            partitions, err,
+        )
+        return True
+    return False
+
+
+def _should_poll(batch_len: int, batch_stuck: bool) -> bool:
+    """Whether the main loop should pull a new message from Kafka this iteration.
+
+    False when the batch is already at capacity (pre-existing backpressure) OR when the current
+    batch already failed to flush and is awaiting retry -- Phase F item 6 bullet 1's fix. Without
+    the second condition, a batch that failed via the *time*-based flush trigger (small batch,
+    well under BATCH_SIZE) kept accepting newly polled messages while its own retry was still
+    pending, so the batch retried was never byte-identical to the one that failed -- defeating
+    both this worker's own retry-identity guarantee and any block-level dedup token keyed on it.
+    Kafka already holds every message this consumer hasn't committed; pausing consumption here
+    costs nothing; it is exactly what "Kafka is the buffer" (see module-level comment above)
+    was already supposed to mean.
+    """
+    return batch_len < BATCH_SIZE and not batch_stuck
 
 
 def _sink_is_reachable() -> bool:
@@ -72,9 +196,17 @@ def flush_batch(batch: list) -> bool:
     Returns True when the batch is fully accounted for (inserted or dead-lettered) and the
     Kafka offset may be committed.
     """
+    # Computed once per call, not per attempt: `batch` itself never mutates across this
+    # function's own internal retries (they're synchronous, single-threaded, no poll() runs
+    # between them) -- the same token is therefore correct for every attempt inside this call,
+    # and (once item 6 bullet 1's outer-loop freeze is in effect) for every separate call this
+    # same stuck batch triggers too, since its content is unchanged until it resolves.
+    dedup_token = _compute_deduplication_token(
+        [str(r.get("event_id", "") or "") for r in batch]
+    )
     for attempt in range(1, MAX_RETRIES_BEFORE_SPLIT + 1):
         try:
-            ch_client.insert_events(batch)
+            ch_client.insert_events(batch, insert_deduplication_token=dedup_token)
             return True
         except Exception as exc:
             backoff = min(RETRY_BACKOFF_BASE_S * (2 ** (attempt - 1)), RETRY_BACKOFF_MAX_S)
@@ -119,34 +251,115 @@ def flush_batch(batch: list) -> bool:
     )
     return True
 
-def get_consumer():
-    """Build and return a Kafka consumer."""
+def get_consumer(on_commit=None):
+    """Build and return a Kafka consumer.
+
+    `on_commit` (Phase F item 5): registered at construction time -- confluent-kafka only
+    accepts this as a consumer config callback, not as a per-call `commit()` argument (confirmed
+    against the installed confluent-kafka 2.4.0's actual `Consumer.commit()` signature, which
+    takes no callback parameter). It fires for offset-commit completions dispatched while
+    servicing the consumer's event queue (poll()/commit()/close()), for both the main loop's
+    async commits and (as an unavoidable side effect of registering one callback for the whole
+    consumer) possibly also on_revoke's synchronous one -- see run_worker()'s own comment on why
+    that overlap is harmless rather than something actively relied on.
+    """
     conf = {
         'bootstrap.servers': settings.KAFKA_BROKER_URL,
         'group.id': 'feature-processor-group',
         'auto.offset.reset': 'earliest',
         'enable.auto.commit': False  # We commit manually after DB insert
     }
+    if on_commit is not None:
+        conf['on_commit'] = on_commit
     return Consumer(conf)
 
 def run_worker():
     """Main loop to consume from Kafka and write to ClickHouse."""
-    consumer = get_consumer()
-    consumer.subscribe([settings.KAFKA_TOPIC_EVENTS])
-    
-    logger.info("Worker started, waiting for events...")
-    
+    # `commit_retry_needed` is set by on_commit (Phase F item 5) when an async commit fails, and
+    # consumed by the main loop below -- deliberately NOT retried from inside on_commit itself.
+    # on_commit is dispatched synchronously from within whatever consumer call is currently
+    # servicing the event queue (poll()/commit()/close()); calling consumer.commit() again from
+    # inside that same callback would be a reentrant call into the same librdkafka client while
+    # it's mid-dispatch. Routing the retry through a flag the main loop checks on its own next
+    # turn avoids that risk entirely for one extra flush cycle of latency, which is immaterial
+    # given a failed commit is an acknowledgment problem, not a data-loss one (see
+    # _log_commit_result's docstring).
+    commit_retry_needed = False
+
+    def on_commit(err, partitions):
+        nonlocal commit_retry_needed
+        if _log_commit_result(err, partitions):
+            commit_retry_needed = True
+
+    consumer = get_consumer(on_commit=on_commit)
+
     batch = []
     last_flush_time = time.time()
-    
+    # True while `batch` failed to flush and is awaiting retry -- Phase F item 6 bullet 1.
+    # Gates both new-message polling (_should_poll) and forces an immediate retry attempt below,
+    # so a stuck batch is retried as exactly the set of messages it failed with, never a superset
+    # that grew while it waited.
+    batch_stuck = False
+
+    # Partition-rebalance handlers.
+    #
+    # Without these, a rebalance mid-batch has no way to flush or discard the in-flight batch
+    # before this consumer loses the partitions it was buffering for: the flat `batch` list has
+    # no per-partition/offset attribution, so the safe move on a revoke is to account for
+    # everything currently held -- not just the revoked partitions' share -- before the
+    # assignment changes underneath it. `on_revoke` runs synchronously as part of the rebalance
+    # protocol, so this flush must complete (or be abandoned) before returning.
+    def on_revoke(consumer, partitions):
+        nonlocal last_flush_time, batch_stuck
+        logger.warning("Partitions revoked (%s); flushing in-flight batch before rebalance.", partitions)
+        if batch:
+            if flush_batch(batch):
+                # Commit synchronously here, not asynchronously like the main loop: the
+                # rebalance is about to hand these partitions to someone else (maybe this
+                # consumer on reassignment, maybe another), so the commit must land before
+                # control returns to the group coordinator or the newly-inserted rows can be
+                # redelivered and reprocessed unnecessarily. Kept fully independent of
+                # commit_retry_needed/on_commit's retry path above -- Phase F item 5 bullet 3 --
+                # this is its own try/except with its own, already-synchronous, fallback.
+                try:
+                    consumer.commit(asynchronous=False)
+                except Exception as exc:
+                    logger.error("Commit during partition revoke failed: %s", exc)
+            else:
+                # Sink is down. Do NOT commit -- these messages stay uncommitted in Kafka and
+                # will be redelivered (to this consumer on reassignment, or to whichever
+                # instance picks up the partitions next), which is safe because reads dedup on
+                # event_id. Dropping them from the local Python list here does not lose data;
+                # Kafka is still holding them at their un-committed offsets.
+                logger.error(
+                    "Sink unavailable during partition revoke; %d event(s) remain uncommitted "
+                    "in Kafka and will be redelivered to whichever consumer receives these "
+                    "partitions next.",
+                    len(batch),
+                )
+            batch.clear()
+            batch_stuck = False
+            last_flush_time = time.time()
+
+    def on_assign(consumer, partitions):
+        logger.info("Partitions assigned: %s", partitions)
+
+    consumer.subscribe([settings.KAFKA_TOPIC_EVENTS], on_assign=on_assign, on_revoke=on_revoke)
+
+    logger.info("Worker started, waiting for events...")
+
     try:
         while True:
-            # Backpressure: while a batch is stuck we must not keep accumulating, or a sink
-            # outage becomes an OOM. Kafka is the buffer -- that is what it is for.
-            msg = None if len(batch) >= BATCH_SIZE else consumer.poll(timeout=1.0)
-            if msg is None and len(batch) >= BATCH_SIZE:
+            # Backpressure: while a batch is at capacity OR stuck retrying a failed flush, we
+            # must not keep polling -- either would let newly polled messages queue behind a
+            # batch that hasn't resolved yet (item 6), or turn a sink outage into unbounded
+            # growth (the pre-existing size-based case). Kafka is the buffer -- that is what it
+            # is for.
+            should_poll = _should_poll(len(batch), batch_stuck)
+            msg = consumer.poll(timeout=1.0) if should_poll else None
+            if msg is None and not should_poll:
                 time.sleep(1.0)
-            
+
             if msg is not None:
                 if msg.error():
                     if msg.error().code() == KafkaError._PARTITION_EOF:
@@ -157,25 +370,60 @@ def run_worker():
                 else:
                     try:
                         event_data = json.loads(msg.value().decode('utf-8'))
+                        event_data = _attach_kafka_metadata(event_data, msg)
                         batch.append(event_data)
                     except json.JSONDecodeError as e:
                         logger.error(f"Failed to decode message: {e}")
+                        # Phase G follow-up: previously dropped silently. The consumer position
+                        # has already advanced past this message (poll() returned it), so it
+                        # would be committed as "handled" either way -- dead-letter it first so
+                        # that's actually true instead of a silent loss.
+                        _dead_letter_undecodable(msg, str(e))
 
             now = time.time()
-            # Flush if batch limit is reached or time interval passed
-            if len(batch) >= BATCH_SIZE or (now - last_flush_time >= FLUSH_INTERVAL and len(batch) > 0):
+            # Flush if batch limit is reached, time interval passed, or a previous flush of this
+            # exact batch is still owed a retry (batch_stuck) -- retried every loop pass while
+            # stuck since polling is paused, so this doesn't wait out a stale FLUSH_INTERVAL
+            # window; flush_batch()'s own internal backoff (up to ~7s per call) is what actually
+            # paces the retries.
+            if len(batch) >= BATCH_SIZE or batch_stuck or (now - last_flush_time >= FLUSH_INTERVAL and len(batch) > 0):
                 logger.info(f"Flushing batch of {len(batch)} events to ClickHouse.")
                 if flush_batch(batch):
+                    batch_stuck = False
                     # Offsets commit only after the batch is durably accounted for. Delivery
                     # stays at-least-once, which is safe because every reader counts
                     # uniqExact(event_id) rather than rows -- docs/DATABASE.md FOUNDATION-1/4.
-                    consumer.commit(asynchronous=True)
+                    try:
+                        if commit_retry_needed:
+                            # A prior async commit failed silently upstream; get a definitive
+                            # resolution now instead of firing another async commit into the
+                            # same uncertainty.
+                            consumer.commit(asynchronous=False)
+                            logger.info("Synchronous retry of a previously failed commit succeeded.")
+                            commit_retry_needed = False
+                        else:
+                            consumer.commit(asynchronous=True)
+                    except Exception as exc:
+                        logger.critical(
+                            "Synchronous retry of a failed commit ALSO failed: %s. Offsets "
+                            "remain uncommitted -- rows are already safe in ClickHouse and will "
+                            "be redelivered (absorbed by event_id dedup) on the next successful "
+                            "commit, rebalance, or restart.",
+                            exc,
+                        )
+                        commit_retry_needed = True
                     batch.clear()
                     last_flush_time = now
                 else:
                     # Sink is down. Keep the batch, do NOT commit, and stop pulling more
-                    # messages until it recovers -- Kafka holds them meanwhile.
-                    logger.error("Holding %d events; pausing consumption until the sink recovers.", len(batch))
+                    # messages until it recovers -- Kafka holds them meanwhile. batch_stuck=True
+                    # is what makes the *next* iteration retry this exact batch instead of
+                    # accepting more messages into it (item 6 bullet 1).
+                    batch_stuck = True
+                    logger.error(
+                        "Holding %d events; batch frozen and consumption paused until the sink recovers.",
+                        len(batch),
+                    )
                     last_flush_time = now
 
     except KeyboardInterrupt:

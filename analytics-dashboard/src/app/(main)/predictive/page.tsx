@@ -5,10 +5,8 @@ import { useQuery } from "@tanstack/react-query";
 import { dashboardAPI } from "@/lib/api";
 import { useDashboardData } from "@/hooks/useDashboard";
 import { useRealtimeEvents } from "@/hooks/useRealtimeEvents";
-import { useIntelligenceData } from "@/hooks/useIntelligenceData";
-import { TrendingUp, TrendingDown, Minus, Activity, Radar, LineChart } from "lucide-react";
+import { TrendingUp, TrendingDown, Minus, Activity, Radar } from "lucide-react";
 import ChartContainer from "@/components/ChartContainer";
-import { ConfidenceBand } from "@/components/intelligence";
 import { PredictivePageSkeleton } from "@/components/Skeletons";
 
 interface Prediction {
@@ -28,7 +26,6 @@ interface Prediction {
 export default function PredictivePage() {
   const { tenantsParam, rangeParam, selectedTenants, timeRange } =
     useDashboardData();
-  const { forecasts } = useIntelligenceData();
   const { lastEvent, isConnected } = useRealtimeEvents({ maxEvents: 1 });
   const lastRealtimeRefetchAt = useRef(0);
 
@@ -389,29 +386,6 @@ export default function PredictivePage() {
             </table>
           </div>
         </div>
-      )}
-
-      {/* Forecasts Section */}
-      {forecasts && forecasts.length > 0 && (
-        <section className="grid grid-cols-1 lg:grid-cols-2 gap-6 mt-6">
-          {forecasts.map((forecast, idx) => (
-            <ChartContainer
-              key={`${forecast.metric_id}-${idx}`}
-              title={`Forecast: ${forecast.metric_id}`}
-              id={`forecast-${idx}`}
-            >
-              <ConfidenceBand
-                data={forecast.points}
-                metricLabel={forecast.metric_id}
-                modelUsed={forecast.model_used}
-                beatNaive={forecast.beat_naive}
-                mase={forecast.mase}
-                crps={forecast.crps}
-                fallbackReason={forecast.fallback_reason}
-              />
-            </ChartContainer>
-          ))}
-        </section>
       )}
 
       {/* Predictions table */}
