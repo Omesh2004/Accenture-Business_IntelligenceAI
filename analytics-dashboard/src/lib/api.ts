@@ -363,8 +363,8 @@ export const dashboardAPI = {
     try {
       const response = await apiClient.get<KPIMetric[]>(`/metrics/kpi?tenants=${tenants.join(',')}&range=${range}`);
       return response.data;
-    } catch {
-      console.error('Failed to fetch KPI metrics');
+    } catch (error) {
+      console.error('Failed to fetch KPI metrics', error);
       return [];
     }
   },
@@ -374,8 +374,8 @@ export const dashboardAPI = {
     try {
       const response = await apiClient.get<KPIMetric[]>(`/metrics/secondary_kpi?tenants=${tenants.join(',')}&range=${range}`);
       return response.data;
-    } catch {
-      console.error('Failed to fetch Secondary KPI metrics');
+    } catch (error) {
+      console.error('Failed to fetch Secondary KPI metrics', error);
       return [];
     }
   },
@@ -393,8 +393,8 @@ export const dashboardAPI = {
         }
         return point as unknown as TimeSeriesDataPoint;
       });
-    } catch {
-      console.error('Failed to fetch traffic data');
+    } catch (error) {
+      console.error('Failed to fetch traffic data', error);
       return [];
     }
   },
@@ -412,8 +412,8 @@ export const dashboardAPI = {
         }
         return point as unknown as FeatureUsageDataPoint;
       });
-    } catch {
-      console.error('Failed to fetch feature usage');
+    } catch (error) {
+      console.error('Failed to fetch feature usage', error);
       return [];
     }
   },
@@ -427,8 +427,8 @@ export const dashboardAPI = {
         name: item.event_name,
         value: item.total_interactions,
       }));
-    } catch {
-      console.error('Failed to fetch top features from backend');
+    } catch (error) {
+      console.error('Failed to fetch top features from backend', error);
       return [];
     }
   },
@@ -494,8 +494,8 @@ export const dashboardAPI = {
         timeToNextStep: '-',
         color: '#1a73e8',
       }));
-    } catch {
-      console.error('Failed to fetch funnel from backend');
+    } catch (error) {
+      console.error('Failed to fetch funnel from backend', error);
       return [];
     }
   },
@@ -543,8 +543,8 @@ export const dashboardAPI = {
     try {
       const response = await apiClient.get<AvailableTenant[]>(`/tenants/available?range=${range}`);
       return response.data;
-    } catch {
-      console.error('Failed to fetch available tenants');
+    } catch (error) {
+      console.error('Failed to fetch available tenants', error);
       return [
         { id: "nexabank", name: "NexaBank", eventCount: 0, uniqueUsers: 0 },
         { id: "safexbank", name: "SafexBank", eventCount: 0, uniqueUsers: 0 },
@@ -781,8 +781,8 @@ export const dashboardAPI = {
     try {
       const response = await apiClient.get<DeviceBreakdown[]>(`/metrics/devices?tenants=${tenants.join(',')}&range=${range}`);
       return response.data;
-    } catch {
-      console.error('Failed to fetch device breakdown');
+    } catch (error) {
+      console.error('Failed to fetch device breakdown', error);
       return [];
     }
   },
@@ -796,8 +796,8 @@ export const dashboardAPI = {
         value: row.value,
         formattedValue: row.formattedValue || row.value.toLocaleString(),
       }));
-    } catch {
-      console.error('Failed to fetch acquisition channels');
+    } catch (error) {
+      console.error('Failed to fetch acquisition channels', error);
       return [];
     }
   },
@@ -807,8 +807,8 @@ export const dashboardAPI = {
     try {
       const response = await apiClient.get<LocationData[]>(`/locations?tenants=${tenants.join(',')}&range=${range}`);
       return response.data;
-    } catch {
-      console.error('Failed to fetch Locations');
+    } catch (error) {
+      console.error('Failed to fetch Locations', error);
       return [];
     }
   },
@@ -829,8 +829,8 @@ export const dashboardAPI = {
     try {
       const response = await apiClient.get<FeatureConfig[]>(`/features/configs?tenants=${tenants.join(',')}&range=${range}`);
       return response.data;
-    } catch {
-      console.error('Failed to fetch feature configs');
+    } catch (error) {
+      console.error('Failed to fetch feature configs', error);
       return [];
     }
   },
@@ -851,8 +851,8 @@ export const dashboardAPI = {
     try {
       const response = await apiClient.get<DeploymentInfoResponse>('/deployment/info');
       return response.data;
-    } catch {
-      console.warn('Failed to fetch deployment info, assuming CLOUD mode');
+    } catch (error) {
+      console.warn('Failed to fetch deployment info, assuming CLOUD mode', error);
       return { mode: 'CLOUD', is_cloud: true, is_on_prem: false, local_tenant: null };
     }
   },
@@ -861,8 +861,8 @@ export const dashboardAPI = {
     try {
       const response = await apiClient.get<AdminSummaryResponse>(`/admin/summary?range=${range}`);
       return response.data;
-    } catch {
-      console.warn(`Failed to fetch admin summary for range ${range}`);
+    } catch (error) {
+      console.warn(`Failed to fetch admin summary for range ${range}`, error);
       return { total_tenants: 0, total_events: 0, top_tenants: [], time_range: range, available: false };
     }
   },
@@ -883,8 +883,8 @@ export const dashboardAPI = {
       }));
 
       return { kpi: payload.kpi || [], insights };
-    } catch {
-      console.error('Failed to fetch admin app summary');
+    } catch (error) {
+      console.error('Failed to fetch admin app summary', error);
       return { kpi: [], insights: [] };
     }
   },
@@ -895,8 +895,8 @@ export const dashboardAPI = {
       const tenantsStr = Array.isArray(tenants) ? tenants.join(',') : tenants;
       const response = await apiClient.get<TransparencyResponse>(`/transparency/cloud-data?tenants=${tenantsStr}`);
       return response.data;
-    } catch {
-      console.warn('Failed to fetch transparency info');
+    } catch (error) {
+      console.warn('Failed to fetch transparency info', error);
       return null;
     }
   },
@@ -907,8 +907,8 @@ export const dashboardAPI = {
     try {
       const response = await apiClient.get<{ pro_users: number; total_users: number; pro_adoption_pct: number }>(`/metrics/pro_users?tenants=${tenants.join(',')}&range=${range}`);
       return response.data;
-    } catch {
-      console.error('Failed to fetch pro users');
+    } catch (error) {
+      console.error('Failed to fetch pro users', error);
       return { pro_users: 0, total_users: 0, pro_adoption_pct: 0 };
     }
   },
@@ -919,8 +919,8 @@ export const dashboardAPI = {
     try {
       const response = await apiClient.get<LicenseUsageResponse>(`/license/usage?tenants=${tenants.join(',')}&range=${range}`);
       return response.data;
-    } catch {
-      console.error('Failed to fetch license usage');
+    } catch (error) {
+      console.error('Failed to fetch license usage', error);
       return { summary: { total_licensed: 0, total_used: 0, waste_pct: 0 }, licensed: [], unused_licensed: [], unlicensed_used: [] };
     }
   },
@@ -929,8 +929,8 @@ export const dashboardAPI = {
     try {
       const response = await apiClient.post<{ status: string }>('/license/sync', { tenant_id: tenants.join(','), features });
       return response.data;
-    } catch {
-      console.error('Failed to sync licenses');
+    } catch (error) {
+      console.error('Failed to sync licenses', error);
       return { status: 'error' };
     }
   },
@@ -949,8 +949,8 @@ export const dashboardAPI = {
         headers,
       });
       return response.data;
-    } catch {
-      console.warn('Failed to fetch tracking toggles');
+    } catch (error) {
+      console.warn('Failed to fetch tracking toggles', error);
       return { toggles: [] };
     }
   },
@@ -976,8 +976,8 @@ export const dashboardAPI = {
         headers,
       });
       return response.data;
-    } catch {
-      console.error('Failed to set tracking toggle');
+    } catch (error) {
+      console.error('Failed to set tracking toggle', error);
       return { status: 'error' };
     }
   },
@@ -988,8 +988,8 @@ export const dashboardAPI = {
     try {
       const response = await apiClient.get<UserJourneyResponse>(`/journey/user?tenants=${encodeURIComponent(tenants.join(','))}&user_id=${encodeURIComponent(userId)}&range=${range}`);
       return response.data;
-    } catch {
-      console.error('Failed to fetch user journey');
+    } catch (error) {
+      console.error('Failed to fetch user journey', error);
       return { tenant_id: '', user_id: userId, total_events: 0, total_sessions: 0, events: [], sessions: [], last_event: null };
     }
   },
@@ -998,8 +998,8 @@ export const dashboardAPI = {
     try {
       const response = await apiClient.get<JourneyUsersResponse>(`/journey/users?tenants=${encodeURIComponent(tenants.join(','))}&range=${range}`);
       return response.data;
-    } catch {
-      console.error('Failed to fetch journey users');
+    } catch (error) {
+      console.error('Failed to fetch journey users', error);
       return { users: [] };
     }
   },
@@ -1010,8 +1010,8 @@ export const dashboardAPI = {
     try {
       const response = await apiClient.get<SegmentationResponse>(`/segmentation/compare?tenants=${tenants.join(',')}`);
       return response.data;
-    } catch {
-      console.error('Failed to fetch segmentation');
+    } catch (error) {
+      console.error('Failed to fetch segmentation', error);
       return { segments: [] };
     }
   },
@@ -1022,8 +1022,8 @@ export const dashboardAPI = {
     try {
       const response = await apiClient.get<PredictiveResponse>(`/predictive/adoption?tenants=${tenants.join(',')}&range=${range}`);
       return response.data;
-    } catch {
-      console.error('Failed to fetch predictive adoption');
+    } catch (error) {
+      console.error('Failed to fetch predictive adoption', error);
       return { predictions: [], total_users: 0 };
     }
   },
@@ -1034,8 +1034,8 @@ export const dashboardAPI = {
     try {
       const response = await apiClient.get(`/tenants/compare?tenants=${tenants.join(',')}&range=${range}`);
       return response.data;
-    } catch {
-      console.error('Failed to fetch tenant comparison');
+    } catch (error) {
+      console.error('Failed to fetch tenant comparison', error);
       return { tenants: [] };
     }
   },
