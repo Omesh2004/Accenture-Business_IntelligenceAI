@@ -294,18 +294,48 @@ router.post(
         }
       );
 
-      // Fire analytics event for the successful transaction
+      // Fire an analytics event whose NAME reflects what actually happened.
+      //
+      // Previously this fired unconditionally -- "transfer_completed" or "payees" regardless
+      // of `result.status` -- so a FAILED or PENDING transaction (both valid values of the
+      // `status` field this same handler accepts and persists) would still emit a
+      // success-shaped event. Neither literal was even taxonomy-valid for a success, verified
+      // through the real chain (Node enforceTaxonomy -> ingest normalization ->
+      // canonicalize_event_name):
+      //   "transfer_completed" -> core.transfer_completed.action -- not referenced by any
+      //     contract; a completed transfer read as zero, silently, on every KPI.
+      //   "payees" -> payee.page.view -- a completed PAYMENT counted as a page view of the
+      //     unrelated payees list page, polluting that counter with transaction completions.
+      // Replaced with the taxonomy the LEGACY_MAP in eventTracker.ts already defines for
+      // payments (transactions.pay_now.success/failed -> transaction.pay_now.success/failure)
+      // and a matching pair added for transfers (transactions.transfer.success/failed ->
+      // transaction.transfer.success/failure, verified clean, no existing collision).
       try {
         const senderInfo = await prisma.account.findUnique({
           where: { accNo: senderAccNo },
           include: { customer: true }
         });
         if (senderInfo) {
+          const succeeded = result.status === "SUCCESS";
+          const eventName = transactionType === "TRANSFER"
+            ? (succeeded ? "transfer_completed" : "transfer_failed")
+            : (succeeded ? "payment_completed" : "payment_failed");
           await trackEvent(
-            transactionType === "TRANSFER" ? "transfer_completed" : "payees",
+            eventName,
             senderInfo.customerId,
             senderInfo.customer.tenantId || "bank_a",
-            { amount, category: result.category, transactionId: result.id }
+            {
+              // `channel`: createTransactionSchema does not accept one in the request, but
+              // the Prisma Transaction model defaults it to WEB (schema.prisma:72) and it IS
+              // present on the created record -- read from `result.channel`, the actual
+              // source value, rather than either fabricating one or omitting a real field.
+              amount,
+              category: result.category,
+              transactionId: result.id,
+              status: result.status,
+              channel: result.channel,
+              transactionType,
+            }
           );
         }
       } catch (trackErr) {

@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import { Suspense } from "react";
 import { Inter } from "next/font/google";
 import "./globals.css";
 import StoreProvider from "@/lib/StoreProvider";
@@ -41,7 +42,14 @@ export default function RootLayout({
     <html lang="en" className={`${inter.variable} h-full antialiased`}>
       <body className="min-h-full flex flex-col font-sans bg-gray-100/50">
         <AuthProvider>
-          <NavigationLoader />
+          {/*
+            Pre-existing build defect, unrelated to the telemetry audit -- fixed only to
+            unblock verifying `npm run build`. Same NavigationLoader/useSearchParams pattern
+            (and the same fix) as NexaBank/frontend/app/layout.tsx.
+          */}
+          <Suspense fallback={null}>
+            <NavigationLoader />
+          </Suspense>
           <StoreProvider>
             <QueryProvider>{children}</QueryProvider>
           </StoreProvider>

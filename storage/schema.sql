@@ -15,6 +15,20 @@ CREATE DATABASE IF NOT EXISTS feature_intelligence;
 -- api/seed_safexbank.py, a third insert site (via storage/client.py's shared insert_events())
 -- that bypasses Kafka and the ingestion API entirely and sets none of these fields. '' means
 -- "not reported by whatever wrote this row", not "assumed kafka".
+--
+-- ENGINE = ReplacingMergeTree(_inserted_at), Phase 3 proposal 1 Option A: this table was
+-- previously a plain MergeTree, which never deduplicates a worker-replayed row -- readers
+-- absorbed that entirely at read time via uniqExact(event_id)/DEDUP_EVENT_KEY. `_inserted_at`
+-- is the version column merges use for deterministic "latest wins" semantics; `event_id` was
+-- added to ORDER BY so it participates in the merge key. Both storage/client.py's
+-- insert_events() and ingestion/main.py's direct-fallback path write `_inserted_at`
+-- unconditionally on every insert -- this DDL and those writers must not drift apart, which is
+-- exactly the gap that let a fresh volume diverge from the live migrated one until this was
+-- caught: a fresh `docker compose up` created the OLD 8-column plain-MergeTree shape here while
+-- the running code already required these columns, so every insert on a fresh volume failed
+-- with "Unrecognized column" and the dead-letter fallback failed too (events_dead_letter's
+-- `stage` column had the same gap) -- events were lost with no trace at all. Verified live:
+-- reproduced the failure on the actual running instance, then closed the gap on both sides.
 CREATE TABLE IF NOT EXISTS feature_intelligence.events_raw (
     event_id String DEFAULT '',
     session_id String DEFAULT '',
@@ -28,10 +42,11 @@ CREATE TABLE IF NOT EXISTS feature_intelligence.events_raw (
     kafka_offset Int64 DEFAULT -1,
     kafka_topic String DEFAULT '',
     ingested_at DateTime DEFAULT now(),
-    ingest_path String DEFAULT ''
-) ENGINE = MergeTree()
+    ingest_path String DEFAULT '',
+    _inserted_at DateTime DEFAULT now()
+) ENGINE = ReplacingMergeTree(_inserted_at)
 PARTITION BY toYYYYMM(timestamp)
-ORDER BY (tenant_id, event_name, timestamp)
+ORDER BY (tenant_id, event_name, timestamp, event_id)
 SETTINGS index_granularity = 8192;
 
 -- Pre-aggregated Daily Feature Usage Table
