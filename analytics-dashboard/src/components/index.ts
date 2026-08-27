@@ -10,7 +10,6 @@ export { default as ChartContainer } from './ChartContainer';
 export { default as TrafficChart } from './TrafficChart';
 export { default as FeatureUsageChart } from './FeatureUsageChart';
 export { default as TopFeaturesChart } from './TopFeaturesChart';
-export { default as FunnelChart } from './FunnelChart';
 export { default as FeatureHeatmap } from './FeatureHeatmap';
 export { default as TenantTable } from './TenantTable';
 export { default as AIInsightsPanel } from './AIInsightsPanel';

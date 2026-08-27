@@ -23,9 +23,32 @@ export interface EventMetadata {
  *
  * Both produce rows with DISTINCT event_ids, so uniqExact(event_id) cannot collapse them --
  * they are a genuine 2x on every live count. The map is module-level so it survives remounts.
+ *
+ * This suppression window existed to catch case 2, but didn't: `measureAndTrack` always adds
+ * `responseTime`, and StrictMode's two invocations independently measure two different timings
+ * for the same action, so the two calls' JSON.stringify(metadata) differ, the suppression key
+ * differs, and both sail through as genuinely distinct rows -- confirmed live in events_raw
+ * (same event/user/second landing twice with two different real event_ids, e.g.
+ * dashboard.page.view / profile.location.success / transactions.page.view pairs). `suppressionKey`
+ * below excludes fields that legitimately vary between two invocations of the same logical
+ * action, so the key actually matches for StrictMode's duplicate instead of only for a
+ * byte-identical call.
  */
 const RECENT_EMIT_TTL_MS = 700;
 const recentEmits = new Map<string, number>();
+
+/** Metadata fields expected to differ between StrictMode's two invocations of the same action
+ * (timing measurements chiefly) -- excluded from the suppression key so a few milliseconds of
+ * jitter doesn't defeat the whole point of this map: the two invocations are still one real
+ * user action. */
+const VOLATILE_METADATA_KEYS = new Set(['responseTime']);
+
+function suppressionKey(eventType: string, metadata?: EventMetadata): string {
+  const stableMetadata = Object.fromEntries(
+    Object.entries(metadata ?? {}).filter(([key]) => !VOLATILE_METADATA_KEYS.has(key))
+  );
+  return `${eventType}|${JSON.stringify(stableMetadata)}`;
+}
 
 function shouldSuppress(key: string): boolean {
   const now = Date.now();
@@ -58,7 +81,7 @@ export const useEventTracker = () => {
       return;
     }
 
-    if (shouldSuppress(`${eventType}|${JSON.stringify(metadata ?? {})}`)) {
+    if (shouldSuppress(suppressionKey(eventType, metadata))) {
       return;
     }
 

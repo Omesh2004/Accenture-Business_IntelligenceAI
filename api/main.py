@@ -376,13 +376,17 @@ def get_available_tenants(
     if _role == "app_admin" and not allowed_tenants:
         return []
     try:
+        # Phase E (item 8, docs/audits/clickhouse_pipeline_audit_phase1_findings.md): reads the
+        # dedup-safe rollup instead of count()/uniq() over raw events_raw rows, which double
+        # count under Kafka replay. Grouping by tenant_id only (dropping event_name/date) is a
+        # valid uniqExactMerge/uniqMerge use -- merging states across dates/events for one tenant.
         sql = """
             SELECT
                 tenant_id as id,
-                count() as event_count,
-                uniq(user_id) as unique_users
-            FROM feature_intelligence.events_raw
-            WHERE timestamp >= today() - %(days)s
+                uniqExactMerge(event_count) as event_count,
+                uniqMerge(unique_users) as unique_users
+            FROM feature_intelligence.daily_feature_usage
+            WHERE date >= today() - %(days)s
             GROUP BY tenant_id
             ORDER BY event_count DESC
         """
@@ -430,13 +434,15 @@ def get_feature_usage(tenants: str = Query(..., description="Comma-separated lis
     cond = "tenant_id = %(tenant_id)s" if len(tenant_list) == 1 else "tenant_id IN %(tenant_ids)s"
     params = {"tenant_id": tenant_list[0], "days": days} if len(tenant_list) == 1 else {"tenant_ids": tuple(tenant_list), "days": days}
 
+    # Phase E (item 8): rollup instead of raw count()/uniq() -- grouped by event_name only
+    # (dropping date), a valid uniqExactMerge/uniqMerge use across the whole range.
     sql = f"""
-        SELECT 
-            event_name, 
-            count() as total_interactions,
-            uniq(user_id) as unique_users
-        FROM feature_intelligence.events_raw
-        WHERE {cond} AND timestamp >= today() - %(days)s
+        SELECT
+            event_name,
+            uniqExactMerge(event_count) as total_interactions,
+            uniqMerge(unique_users) as unique_users
+        FROM feature_intelligence.daily_feature_usage
+        WHERE {cond} AND date >= today() - %(days)s
         GROUP BY event_name
         ORDER BY total_interactions DESC
     """
@@ -711,12 +717,21 @@ def get_kpi_metrics(tenants: str = Query(..., description="Comma-separated list 
         # this synthesises one from a hash. CLAUDE.md forbids fabricating a metric SILENTLY,
         # so also count how many rows were synthesised and surface it as `simulated` on the
         # card. The value stays as-is; what changes is that the UI can now say so.
+        # Phase E (item 8): avg()/count()/countIf() over raw rows double-count a replayed
+        # event. Collapse to one row per logical event first (any() picks a value from the
+        # group -- fine since exact duplicates carry identical fields), then aggregate.
         sql_response = f"""
-            SELECT avg(if(JSONHas(metadata, 'response_time_ms'), JSONExtractFloat(metadata, 'response_time_ms'), 15 + (cityHash64(event_name, toString(timestamp)) %% 285))) as avg_rt,
-                   countIf(NOT JSONHas(metadata, 'response_time_ms')) as synthesised,
+            SELECT avg(rt) as avg_rt,
+                   countIf(NOT has_measured) as synthesised,
                    count() as total_rows
-            FROM feature_intelligence.events_raw
-            WHERE {cond} AND timestamp >= today() - %(days)s
+            FROM (
+                SELECT
+                    any(if(JSONHas(metadata, 'response_time_ms'), JSONExtractFloat(metadata, 'response_time_ms'), 15 + (cityHash64(event_name, toString(timestamp)) %% 285))) as rt,
+                    any(JSONHas(metadata, 'response_time_ms')) as has_measured
+                FROM feature_intelligence.events_raw
+                WHERE {cond} AND timestamp >= today() - %(days)s
+                GROUP BY {DEDUP_EVENT_KEY}
+            )
         """
         res_rt = ch_client.query(sql_response, params)
         rt_synthesised = int(res_rt[0].get("synthesised") or 0) if res_rt else 0
@@ -728,9 +743,14 @@ def get_kpi_metrics(tenants: str = Query(..., description="Comma-separated list 
             avg_rt = int(raw_rt)
 
         sql_response_prev = f"""
-            SELECT avg(if(JSONHas(metadata, 'response_time_ms'), JSONExtractFloat(metadata, 'response_time_ms'), 15 + (cityHash64(event_name, toString(timestamp)) %% 285))) as avg_rt
-            FROM feature_intelligence.events_raw
-            WHERE {cond} AND timestamp >= today() - (%(days)s * 2) AND timestamp < today() - %(days)s
+            SELECT avg(rt) as avg_rt
+            FROM (
+                SELECT
+                    any(if(JSONHas(metadata, 'response_time_ms'), JSONExtractFloat(metadata, 'response_time_ms'), 15 + (cityHash64(event_name, toString(timestamp)) %% 285))) as rt
+                FROM feature_intelligence.events_raw
+                WHERE {cond} AND timestamp >= today() - (%(days)s * 2) AND timestamp < today() - %(days)s
+                GROUP BY {DEDUP_EVENT_KEY}
+            )
         """
         res_rt_prev = ch_client.query(sql_response_prev, params)
         raw_rt_prev = res_rt_prev[0]["avg_rt"] if res_rt_prev and "avg_rt" in res_rt_prev[0] else 0
@@ -744,8 +764,8 @@ def get_kpi_metrics(tenants: str = Query(..., description="Comma-separated list 
 
         sql_error = f"""
             SELECT
-                countIf(lower(event_name) LIKE '%%error%%' OR lower(event_name) LIKE '%%fail%%') as error_events,
-                count() as total
+                uniqExactIf({DEDUP_EVENT_KEY}, lower(event_name) LIKE '%%error%%' OR lower(event_name) LIKE '%%fail%%') as error_events,
+                uniqExact({DEDUP_EVENT_KEY}) as total
             FROM feature_intelligence.events_raw
             WHERE {cond} AND timestamp >= today() - %(days)s
         """
@@ -756,8 +776,8 @@ def get_kpi_metrics(tenants: str = Query(..., description="Comma-separated list 
 
         sql_error_prev = f"""
             SELECT
-                countIf(lower(event_name) LIKE '%%error%%' OR lower(event_name) LIKE '%%fail%%') as error_events,
-                count() as total
+                uniqExactIf({DEDUP_EVENT_KEY}, lower(event_name) LIKE '%%error%%' OR lower(event_name) LIKE '%%fail%%') as error_events,
+                uniqExact({DEDUP_EVENT_KEY}) as total
             FROM feature_intelligence.events_raw
             WHERE {cond} AND timestamp >= today() - (%(days)s * 2) AND timestamp < today() - %(days)s
         """
@@ -824,9 +844,11 @@ def get_secondary_kpi(tenants: str = Query(..., description="Comma-separated lis
             change = ((current_val - previous_val) / previous_val) * 100
             return (round(abs(change), 1), "up" if change >= 0 else "down")
 
+        # Phase E (item 8): uniqExact(DEDUP_EVENT_KEY) instead of count() -- see the constant's
+        # definition above for why this exact expression, not a different fallback shape.
         sql_basic = f"""
-            SELECT 
-                count() as total_visits,
+            SELECT
+                uniqExact({DEDUP_EVENT_KEY}) as total_visits,
                 uniqExact(user_id) as unique_visitors
             FROM feature_intelligence.events_raw
             WHERE {cond} AND timestamp >= today() - %(days)s
@@ -835,8 +857,8 @@ def get_secondary_kpi(tenants: str = Query(..., description="Comma-separated lis
         basic = res_basic[0] if res_basic else {"total_visits": 0, "unique_visitors": 0}
 
         sql_basic_prev = f"""
-            SELECT 
-                count() as total_visits,
+            SELECT
+                uniqExact({DEDUP_EVENT_KEY}) as total_visits,
                 uniqExact(user_id) as unique_visitors
             FROM feature_intelligence.events_raw
             WHERE {cond} AND timestamp >= today() - (%(days)s * 2) AND timestamp < today() - %(days)s
@@ -847,12 +869,16 @@ def get_secondary_kpi(tenants: str = Query(..., description="Comma-separated lis
         visits_change, visits_dir = pct_change(basic['total_visits'], basic_prev['total_visits'])
         unique_change, unique_dir = pct_change(basic['unique_visitors'], basic_prev['unique_visitors'])
 
+        # Phase E: the inner per-user event_count must be dedup-safe -- otherwise a duplicated
+        # single-event visit reads event_count=2 and is wrongly excluded from "bounced". The
+        # outer count() here counts SUBQUERY ROWS (one per distinct user_id), which is already
+        # immune to event-row duplication -- left as-is.
         sql_bounce = f"""
-            SELECT 
+            SELECT
                 count() as total_users,
                 countIf(event_count = 1) as bounced_users
             FROM (
-                SELECT user_id, count() as event_count
+                SELECT user_id, uniqExact({DEDUP_EVENT_KEY}) as event_count
                 FROM feature_intelligence.events_raw
                 WHERE {cond} AND timestamp >= today() - %(days)s
                 GROUP BY user_id
@@ -865,11 +891,11 @@ def get_secondary_kpi(tenants: str = Query(..., description="Comma-separated lis
         bounce_rate = round((b_users / t_users) * 100, 1)
 
         sql_bounce_prev = f"""
-            SELECT 
+            SELECT
                 count() as total_users,
                 countIf(event_count = 1) as bounced_users
             FROM (
-                SELECT user_id, count() as event_count
+                SELECT user_id, uniqExact({DEDUP_EVENT_KEY}) as event_count
                 FROM feature_intelligence.events_raw
                 WHERE {cond} AND timestamp >= today() - (%(days)s * 2) AND timestamp < today() - %(days)s
                 GROUP BY user_id
@@ -971,10 +997,14 @@ def get_traffic_data(tenants: str = Query(..., description="Comma-separated list
     try:
         tenants = [t.strip() for t in tenant_id.split(",") if t.strip()]
         if len(tenants) == 1:
-            sql = """
-                SELECT 
+            # Phase E (item 8): dedup-safe count. Direct pattern, not the rollup -- the +330min
+            # IST offset shifts day boundaries before truncation, which the rollup's own `date`
+            # (plain UTC toDate(timestamp), no offset) does not replicate; swapping to the
+            # rollup here would silently move events near midnight IST into the wrong bucket.
+            sql = f"""
+                SELECT
                     toDate(timestamp + INTERVAL 330 MINUTE) as date,
-                    count() as pageViews,
+                    uniqExact({DEDUP_EVENT_KEY}) as pageViews,
                     uniq(user_id) as visitors
                 FROM feature_intelligence.events_raw
                 WHERE tenant_id = %(tenant_id)s AND timestamp >= today() - %(days)s
@@ -983,11 +1013,11 @@ def get_traffic_data(tenants: str = Query(..., description="Comma-separated list
             """
             return ch_client.query(sql, {"tenant_id": tenants[0], "days": days})
         else:
-            sql = """
-                SELECT 
+            sql = f"""
+                SELECT
                     toDate(timestamp + INTERVAL 330 MINUTE) as date,
                     tenant_id,
-                    count() as pageViews,
+                    uniqExact({DEDUP_EVENT_KEY}) as pageViews,
                     uniq(user_id) as visitors
                 FROM feature_intelligence.events_raw
                 WHERE tenant_id IN %(tenant_ids)s AND timestamp >= today() - %(days)s
@@ -1017,24 +1047,27 @@ def get_feature_usage_series(tenants: str = Query(..., description="Comma-separa
     try:
         tenants = [t.strip() for t in tenant_id.split(",") if t.strip()]
         if len(tenants) == 1:
+            # Phase E (item 8): rollup pattern -- `date` here has no timezone offset, an exact
+            # grain match to daily_feature_usage's own `date`. Dropping event_name from
+            # GROUP BY merges uniqExactMerge states across every feature for that date.
             sql = """
-                SELECT 
-                    toDate(timestamp) as date,
-                    count() as usage
-                FROM feature_intelligence.events_raw
-                WHERE tenant_id = %(tenant_id)s AND timestamp >= today() - %(days)s
+                SELECT
+                    date,
+                    uniqExactMerge(event_count) as usage
+                FROM feature_intelligence.daily_feature_usage
+                WHERE tenant_id = %(tenant_id)s AND date >= today() - %(days)s
                 GROUP BY date
                 ORDER BY date ASC
             """
             return ch_client.query(sql, {"tenant_id": tenants[0], "days": days})
         else:
             sql = """
-                SELECT 
-                    toDate(timestamp) as date,
+                SELECT
+                    date,
                     tenant_id,
-                    count() as usage
-                FROM feature_intelligence.events_raw
-                WHERE tenant_id IN %(tenant_ids)s AND timestamp >= today() - %(days)s
+                    uniqExactMerge(event_count) as usage
+                FROM feature_intelligence.daily_feature_usage
+                WHERE tenant_id IN %(tenant_ids)s AND date >= today() - %(days)s
                 GROUP BY date, tenant_id
                 ORDER BY date ASC
             """
@@ -1064,13 +1097,15 @@ def get_feature_heatmap(tenants: str = Query(..., description="Comma-separated l
             params = {"tenant_ids": tuple(tenants), "days": days}
             groups = tenants
             
+            # Phase E (item 8): rollup pattern -- grouped by (event_name, tenant_id) with no
+            # date, an exact match for merging daily_feature_usage states across the range.
             sql = f"""
-                SELECT 
+                SELECT
                     event_name as feature,
                     tenant_id as group_key,
-                    count() as count
-                FROM feature_intelligence.events_raw
-                WHERE {cond} AND timestamp >= today() - %(days)s
+                    uniqExactMerge(event_count) as count
+                FROM feature_intelligence.daily_feature_usage
+                WHERE {cond} AND date >= today() - %(days)s
                 GROUP BY event_name, tenant_id
             """
             res = ch_client.query(sql, params)
@@ -1090,15 +1125,17 @@ def get_feature_heatmap(tenants: str = Query(..., description="Comma-separated l
             cond = "tenant_id = %(tenant_id)s"
             params = {"tenant_id": tenants[0], "days": days}
             
+            # Phase E (item 8): direct pattern -- the 7-bucket split is finer/different than
+            # the rollup's daily grain, so it can't be expressed via daily_feature_usage.
             sql = f"""
-                WITH 
+                WITH
                     today() - %(days)s AS start_time,
                     today() AS end_time,
                     (toUnixTimestamp(end_time) - toUnixTimestamp(start_time)) / 7 AS bucket_size_sec
-                SELECT 
+                SELECT
                     event_name as feature,
                     toString(LEAST(7, intDiv(toUnixTimestamp(timestamp) - toUnixTimestamp(start_time), bucket_size_sec) + 1)) AS group_key,
-                    count() as count
+                    uniqExact({DEDUP_EVENT_KEY}) as count
                 FROM feature_intelligence.events_raw
                 WHERE {cond} AND timestamp >= start_time
                 GROUP BY event_name, group_key
@@ -1172,17 +1209,21 @@ def get_all_tenants(tenant_id: Optional[str] = None, range: str = Query("7d", de
         # We explicitly remove the restriction on tenant_id so that app_admins 
         # can see all tenants for comparison as requested by the user.
 
+        # Phase E (item 8): rollup pattern for all four -- daily_feature_usage carries
+        # event_name as a plain column (uniqExact still valid, no -Merge needed for it) and
+        # unique_users as a mergeable state; uniqExactMergeIf already has precedent in this
+        # codebase (api/data_layer.py's trending query).
         sql = f"""
-            SELECT 
+            SELECT
                 tenant_id as id,
                 tenant_id as name,
-                toUInt64(count()) as featureUsage,
-                toUInt64(count(distinct event_name)) as activeFeatures,
-                toUInt64(count(distinct user_id)) as uniqueUsers,
-                countIf(lower(event_name) LIKE '%%error%%' OR lower(event_name) LIKE '%%fail%%') as errorCount
-            FROM feature_intelligence.events_raw
+                toUInt64(uniqExactMerge(event_count)) as featureUsage,
+                toUInt64(uniqExact(event_name)) as activeFeatures,
+                toUInt64(uniqMerge(unique_users)) as uniqueUsers,
+                uniqExactMergeIf(event_count, lower(event_name) LIKE '%%error%%' OR lower(event_name) LIKE '%%fail%%') as errorCount
+            FROM feature_intelligence.daily_feature_usage
             {where_clause}
-            WHERE timestamp >= today() - %(days)s
+            WHERE date >= today() - %(days)s
             GROUP BY tenant_id
             ORDER BY featureUsage DESC
         """
@@ -1225,7 +1266,7 @@ def get_device_breakdown(tenants: str = Query(..., description="Comma-separated 
             if(isValidJSON(metadata), lower(ifNull(JSONExtractString(metadata, 'device'), '')), '') as device,
             if(isValidJSON(metadata), lower(ifNull(JSONExtractString(metadata, 'platform'), '')), '') as platform,
             if(isValidJSON(metadata), lower(ifNull(JSONExtractString(metadata, 'channel'), '')), '') as channel,
-            count() as value
+            uniqExact({DEDUP_EVENT_KEY}) as value
         FROM feature_intelligence.events_raw
         WHERE {cond} AND timestamp >= today() - %(days)s
         GROUP BY device_type, device, platform, channel
@@ -1324,7 +1365,7 @@ def get_acquisition_channels(tenants: str = Query(..., description="Comma-separa
             if(JSONHas(metadata, 'channel') AND length(JSONExtractString(metadata, 'channel')) > 0,
                JSONExtractString(metadata, 'channel'),
                'unknown') as channel,
-            count() as total
+            uniqExact({DEDUP_EVENT_KEY}) as total
         FROM feature_intelligence.events_raw
         WHERE {cond} AND timestamp >= today() - %(days)s
         GROUP BY channel
@@ -1360,10 +1401,11 @@ def get_acquisition_channels(tenants: str = Query(..., description="Comma-separa
 
         if not merged:
             # If channel metadata is missing/unreliable, derive a meaningful intent mix from feature events.
+            # Phase E (item 8): rollup pattern -- grouped by event_name only.
             sql_intent = f"""
-                SELECT event_name, count() as total
-                FROM feature_intelligence.events_raw
-                WHERE {cond} AND timestamp >= today() - %(days)s
+                SELECT event_name, uniqExactMerge(event_count) as total
+                FROM feature_intelligence.daily_feature_usage
+                WHERE {cond} AND date >= today() - %(days)s
                 GROUP BY event_name
                 ORDER BY total DESC
             """
@@ -1455,7 +1497,7 @@ def get_locations(tenants: str = Query(..., description="Comma-separated list of
             JSONExtractString(metadata, 'continent') as continent,
             JSONExtractString(metadata, 'city') as city,
             JSONExtractString(metadata, 'ip') as ip,
-            count() as visits
+            uniqExact({DEDUP_EVENT_KEY}) as visits
         FROM feature_intelligence.events_raw
         WHERE {cond} AND timestamp >= today() - %(days)s
         GROUP BY location, continent, city, ip
@@ -1631,10 +1673,12 @@ def get_pages_per_minute(tenants: str = Query(..., description="Comma-separated 
     cond = "tenant_id = %(tenant_id)s" if len(tenants) == 1 else "tenant_id IN %(tenant_ids)s"
     params = {"tenant_id": tenants[0]} if len(tenants) == 1 else {"tenant_ids": tuple(tenants)}
     
+    # Phase E (item 8): direct pattern -- per-minute grouping is finer than the rollup's daily
+    # grain.
     sql = f"""
-        SELECT toStartOfMinute(timestamp) as min, count() as val 
-        FROM feature_intelligence.events_raw 
-        WHERE {cond} AND timestamp >= now('UTC') - INTERVAL 60 MINUTE 
+        SELECT toStartOfMinute(timestamp) as min, uniqExact({DEDUP_EVENT_KEY}) as val
+        FROM feature_intelligence.events_raw
+        WHERE {cond} AND timestamp >= now('UTC') - INTERVAL 60 MINUTE
         GROUP BY min ORDER BY min ASC
     """
     try:
@@ -1682,11 +1726,12 @@ def get_top_pages(tenants: str = Query(..., description="Comma-separated list of
     cond = "tenant_id = %(tenant_id)s" if len(tenants) == 1 else "tenant_id IN %(tenant_ids)s"
     params = {"tenant_id": tenants[0], "days": days} if len(tenants) == 1 else {"tenant_ids": tuple(tenants), "days": days}
 
+    # Phase E (item 8): direct pattern -- metadata.path isn't a rollup dimension.
     sql = f"""
-        SELECT 
+        SELECT
             JSONExtractString(metadata, 'path') as page,
             event_name as raw_feature,
-            count() as cnt
+            uniqExact({DEDUP_EVENT_KEY}) as cnt
         FROM feature_intelligence.events_raw
         WHERE {cond} AND timestamp >= today() - %(days)s
         GROUP BY page, raw_feature
@@ -1775,10 +1820,11 @@ def get_feature_activity(tenants: str = Query(..., description="Comma-separated 
     cond = "tenant_id = %(tenant_id)s" if len(tenants) == 1 else "tenant_id IN %(tenant_ids)s"
     params = {"tenant_id": tenants[0], "days": days} if len(tenants) == 1 else {"tenant_ids": tuple(tenants), "days": days}
 
+    # Phase E (item 8): rollup pattern -- grouped by event_name only.
     sql = f"""
-        SELECT event_name, count() as total
-        FROM feature_intelligence.events_raw 
-        WHERE {cond} AND timestamp >= today() - %(days)s
+        SELECT event_name, uniqExactMerge(event_count) as total
+        FROM feature_intelligence.daily_feature_usage
+        WHERE {cond} AND date >= today() - %(days)s
         GROUP BY event_name ORDER BY total DESC LIMIT 500
     """
     try:
@@ -1812,10 +1858,11 @@ def get_feature_configs(
     cond = "tenant_id = %(tenant_id)s" if len(tenants) == 1 else "tenant_id IN %(tenant_ids)s"
     params = {"tenant_id": tenants[0], "days": days} if len(tenants) == 1 else {"tenant_ids": tuple(tenants), "days": days}
 
+    # Phase E (item 8): rollup pattern -- grouped by event_name only.
     sql = f"""
-        SELECT event_name as feature, count() as total
-        FROM feature_intelligence.events_raw
-        WHERE {cond} AND timestamp >= today() - %(days)s
+        SELECT event_name as feature, uniqExactMerge(event_count) as total
+        FROM feature_intelligence.daily_feature_usage
+        WHERE {cond} AND date >= today() - %(days)s
         GROUP BY feature
         ORDER BY total DESC
         LIMIT 200
@@ -2218,10 +2265,12 @@ def get_license_usage(tenants: str = Query(..., description="Comma-separated lis
             "profile.edit_details.failure": {"plan": "free"},
             "dashboard.location.captured": {"plan": "free"},
         }
+        # Phase E (item 8): direct pattern, not the rollup -- tier_hint reads raw metadata,
+        # which daily_feature_usage doesn't carry, so this can't move to the rollup wholesale.
         sql_used = f"""
-            SELECT 
-                event_name as feature_name, 
-                count() as usage_count, 
+            SELECT
+                event_name as feature_name,
+                uniqExact({DEDUP_EVENT_KEY}) as usage_count,
                 uniqExact(user_id) as unique_users,
                 max(JSONExtractString(metadata, 'tier')) as tier_hint
             FROM feature_intelligence.events_raw
@@ -2265,10 +2314,11 @@ def get_license_usage(tenants: str = Query(..., description="Comma-separated lis
         pro_raw_features.update(pro_features_set)
 
         # ─── Usage trends (last 7 days) ───
+        # Phase E (item 8): rollup pattern -- exact grain match, (event_name, date).
         sql_trends = f"""
-            SELECT event_name as feature_name, toDate(timestamp) as date, count() as count
-            FROM feature_intelligence.events_raw
-            WHERE {cond} AND timestamp >= today() - 7
+            SELECT event_name as feature_name, date, uniqExactMerge(event_count) as count
+            FROM feature_intelligence.daily_feature_usage
+            WHERE {cond} AND date >= today() - 7
             GROUP BY feature_name, date
             ORDER BY date ASC
         """
@@ -2356,11 +2406,14 @@ def get_license_usage(tenants: str = Query(..., description="Comma-separated lis
             """
             total_user_count = max(int((ch_client.query(sql_total, params) or [{"total_users": 1}])[0]["total_users"]), 1)
 
+            # Phase E (item 8): rollup pattern -- filtered by event_name IN (...), a plain
+            # column on daily_feature_usage; uniqExactMergeIf already has precedent in this
+            # codebase (api/data_layer.py's trending query, and /tenants above).
             sql_wow = f"""
                 SELECT
-                    countIf(timestamp >= today() - 7) as current_week,
-                    countIf(timestamp >= today() - 14 AND timestamp < today() - 7) as prev_week
-                FROM feature_intelligence.events_raw
+                    uniqExactMergeIf(event_count, date >= today() - 7) as current_week,
+                    uniqExactMergeIf(event_count, date >= today() - 14 AND date < today() - 7) as prev_week
+                FROM feature_intelligence.daily_feature_usage
                 WHERE {cond} AND event_name IN ({pro_str})
             """
             wow_res = ch_client.query(sql_wow, params)
@@ -2500,10 +2553,12 @@ def get_tracking_toggles(tenants: str = Query(..., description="Comma-separated 
                 existing["changed_at"] = row_changed_at
                 existing["_changed_at_raw"] = row_changed_at_raw
 
+        # Phase E (item 8): rollup pattern -- grouped by event_name only. `total` is used only
+        # to prioritize which 1000 event names to consider, never returned in the response.
         observed_sql = f"""
-            SELECT event_name, count() as total
-            FROM feature_intelligence.events_raw
-            WHERE tenant_id IN ({tenants_sql}) AND timestamp >= today() - 180
+            SELECT event_name, uniqExactMerge(event_count) as total
+            FROM feature_intelligence.daily_feature_usage
+            WHERE tenant_id IN ({tenants_sql}) AND date >= today() - 180
             GROUP BY event_name
             ORDER BY total DESC
             LIMIT 1000
@@ -2806,8 +2861,10 @@ def list_journey_users(
         "days": days,
     }
     try:
+        # Phase E (item 8): direct pattern -- grouped by user_id, a dimension the rollup
+        # doesn't carry.
         sql = f"""
-            SELECT user_id, count() as event_count, min(timestamp) as first_seen, max(timestamp) as last_seen
+            SELECT user_id, uniqExact({DEDUP_EVENT_KEY}) as event_count, min(timestamp) as first_seen, max(timestamp) as last_seen
             FROM feature_intelligence.events_raw
             WHERE {cond} AND timestamp >= today() - %(days)s
             GROUP BY user_id
@@ -3515,12 +3572,14 @@ def get_insights(tenants: str = Query(..., description="Comma-separated list of 
         insights = []
         
         # 1. High Bounce Rate insight
+        # Phase E (item 8): direct pattern for the inner per-user event_count. The outer
+        # count() counts subquery rows (one per distinct user_id) -- already immune.
         bounce_sql = f"""
-            SELECT 
+            SELECT
                 count() as total_users,
                 countIf(event_count = 1) as bounced_users
             FROM (
-                SELECT user_id, count() as event_count
+                SELECT user_id, uniqExact({DEDUP_EVENT_KEY}) as event_count
                 FROM feature_intelligence.events_raw
                 WHERE {cond} AND timestamp >= today() - %(days)s
                 GROUP BY user_id
@@ -3545,10 +3604,11 @@ def get_insights(tenants: str = Query(..., description="Comma-separated list of 
                 })
                 
         # 2. Top feature usage
+        # Phase E (item 8): rollup pattern -- grouped by event_name only.
         feat_sql = f"""
-            SELECT event_name as feature, count() as cnt
-            FROM feature_intelligence.events_raw
-            WHERE {cond} AND timestamp >= today() - %(days)s
+            SELECT event_name as feature, uniqExactMerge(event_count) as cnt
+            FROM feature_intelligence.daily_feature_usage
+            WHERE {cond} AND date >= today() - %(days)s
             GROUP BY event_name ORDER BY cnt DESC LIMIT 1
         """
         f_res = ch_client.query(feat_sql, params)
@@ -3563,8 +3623,9 @@ def get_insights(tenants: str = Query(..., description="Comma-separated list of 
             })
             
         # 3. Peak traffic time
+        # Phase E (item 8): direct pattern -- per-hour grouping is finer than the daily grain.
         time_sql = f"""
-            SELECT toHour(timestamp) as hr, count() as cnt
+            SELECT toHour(timestamp) as hr, uniqExact({DEDUP_EVENT_KEY}) as cnt
             FROM feature_intelligence.events_raw
             WHERE {cond} AND timestamp >= today() - %(days)s
             GROUP BY hr ORDER BY cnt DESC LIMIT 1
@@ -3606,10 +3667,11 @@ def get_tenant_comparison(tenants: str = Query(..., description="Comma-separated
         results = []
         for tid in tenant_list:
             # Total events
+            # Phase E (item 8): rollup pattern, ungrouped sum across the whole tenant/range.
             sql_events = """
-                SELECT count() as total_events
-                FROM feature_intelligence.events_raw
-                WHERE tenant_id = %(tid)s AND timestamp >= today() - %(days)s
+                SELECT uniqExactMerge(event_count) as total_events
+                FROM feature_intelligence.daily_feature_usage
+                WHERE tenant_id = %(tid)s AND date >= today() - %(days)s
             """
             ev = ch_client.query(sql_events, {"tid": tid, "days": days})
             total_events = int(ev[0]["total_events"]) if ev else 0
@@ -3633,10 +3695,12 @@ def get_tenant_comparison(tenants: str = Query(..., description="Comma-separated
             active_features = int(feat[0]["active_features"]) if feat else 0
             
             # Growth rate (current week vs previous week)
-            sql_growth = """
+            # Phase E (item 8): sumIf(1, cond) is a row count under another name -- same
+            # duplicate-vulnerability as count(). Direct pattern, uniqExactIf.
+            sql_growth = f"""
                 SELECT
-                    sumIf(1, timestamp >= today() - 7) as current_week,
-                    sumIf(1, timestamp >= today() - 14 AND timestamp < today() - 7) as prev_week
+                    uniqExactIf({DEDUP_EVENT_KEY}, timestamp >= today() - 7) as current_week,
+                    uniqExactIf({DEDUP_EVENT_KEY}, timestamp >= today() - 14 AND timestamp < today() - 7) as prev_week
                 FROM feature_intelligence.events_raw
                 WHERE tenant_id = %(tid)s
             """
@@ -3646,12 +3710,14 @@ def get_tenant_comparison(tenants: str = Query(..., description="Comma-separated
             growth_rate = round(((cw - pw) / max(pw, 1)) * 100, 1)
             
             # Conversion rate (users with >3 events / total users)
-            sql_conv = """
-                SELECT 
+            # Phase E (item 8): direct pattern for the inner per-user event_count. The outer
+            # count() counts subquery rows (one per distinct user_id) -- already immune.
+            sql_conv = f"""
+                SELECT
                     count() as total,
                     countIf(event_count > 3) as converted
                 FROM (
-                    SELECT user_id, count() as event_count
+                    SELECT user_id, uniqExact({DEDUP_EVENT_KEY}) as event_count
                     FROM feature_intelligence.events_raw
                     WHERE tenant_id = %(tid)s AND timestamp >= today() - %(days)s
                     GROUP BY user_id
@@ -3661,8 +3727,11 @@ def get_tenant_comparison(tenants: str = Query(..., description="Comma-separated
             conversion_rate = round((int(conv[0]["converted"]) / max(int(conv[0]["total"]), 1)) * 100, 1) if conv else 0.0
             
             # Daily event trend (last 7 days)
-            sql_trend = """
-                SELECT toDate(timestamp + INTERVAL 330 MINUTE) as date, count() as events
+            # Phase E (item 8): direct pattern -- the +330min IST offset shifts day boundaries
+            # before truncation, same reasoning as /metrics/traffic; the rollup's own `date`
+            # has no such offset.
+            sql_trend = f"""
+                SELECT toDate(timestamp + INTERVAL 330 MINUTE) as date, uniqExact({DEDUP_EVENT_KEY}) as events
                 FROM feature_intelligence.events_raw
                 WHERE tenant_id = %(tid)s AND timestamp >= today() - 7
                 GROUP BY date
