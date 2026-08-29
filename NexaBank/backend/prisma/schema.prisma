@@ -32,6 +32,19 @@ model Customer {
   kycStatus        KycStatus         @default(NOT_STARTED)
   kycCompletedAt   DateTime?
   lastLogin        DateTime?
+
+  // CRM attributes (source B). Brackets rather than raw values: they are cube dimensions, and a
+  // raw age or salary is neither invariant within a session nor safe to localize on.
+  ageBracket       AgeBracket?
+  incomeBracket    IncomeBracket?
+  employmentStatus EmploymentStatus?
+  riskSegment      RiskSegment?
+  lifetimeValue    Float                 @default(0)
+  branchCode       String?
+  branch           Branch?               @relation(fields: [branchCode], references: [code])
+  interactions     CampaignInteraction[]
+  cards            Card[]
+  notifications    Notification[]
 }
 
 model Tenant {
@@ -41,6 +54,8 @@ model Tenant {
   branchCode String
   customers  Customer[]
   toggles    FeatureToggle[]
+  branches   Branch[]
+  campaigns  Campaign[]
 }
 
 model Account {
@@ -49,7 +64,6 @@ model Account {
   ifsc        String
   accountType AccountType   @default(SAVINGS)
   balance     Float         @default(0)
-  status      Boolean       @default(true)
   createdOn   DateTime      @default(now())
   updatedOn   DateTime      @updatedAt
   deletedOn   DateTime?
@@ -59,23 +73,39 @@ model Account {
   payer       Payee[]
   received    Transaction[] @relation("received")
   sent        Transaction[] @relation("sent")
+
+  /// The ONE account state. Transfers gate on it and analytics reads it, so there is nothing
+  /// for a second flag to disagree with. Only ACTIVE may transact.
+  lifecycleStatus AccountStatus @default(ACTIVE)
+  interestRate    Float         @default(0)
+  branchCode      String?
+  branch          Branch?       @relation(fields: [branchCode], references: [code])
+  cards           Card[]
 }
 
 model Transaction {
-  id              String          @id @default(uuid()) @db.Uuid
+  id              String             @id @default(uuid()) @db.Uuid
   transactionType TransactionType
   senderAccNo     String
   receiverAccNo   String
   amount          Float
-  status          TransactionStatus @default(SUCCESS)
+  status          TransactionStatus  @default(SUCCESS)
   category        String
   channel         TransactionChannel @default(WEB)
   description     String?
   timestamp       DateTime           @default(now())
+  /// Mutation clock. `timestamp` is event time and never moves, so an extract cursoring on it
+  /// can never see a status change (SUCCESS -> PENDING/REVERSED) and the analytics copy keeps a
+  /// settled state forever. Every KPI filtering status = SUCCESS depends on this.
+  updatedOn       DateTime           @default(now()) @updatedAt
   loanId          String?            @db.Uuid
   loan            Loan?              @relation(fields: [loanId], references: [id])
   receiverAccount Account            @relation("received", fields: [receiverAccNo], references: [accNo])
   senderAccount   Account            @relation("sent", fields: [senderAccNo], references: [accNo])
+
+  merchantCategoryCode String? // ISO 18245 MCC
+  merchantName         String?
+  referenceNumber      String?
 }
 
 model Loan {
@@ -87,7 +117,8 @@ model Loan {
   term            Int
   startDate       DateTime
   endDate         DateTime
-  status          Boolean       @default(true)
+  /// Enum, not a boolean: "not active" and "written off" are different facts to a lender.
+  status          LoanStatus    @default(ACTIVE)
   createdOn       DateTime      @default(now())
   updatedOn       DateTime      @updatedAt
   schedule        Json[]
@@ -125,6 +156,8 @@ model Payee {
   payeeAccount    Account      @relation(fields: [payeeAccNo], references: [accNo])
   payeeCustome    Customer     @relation("payee", fields: [payeeCustomerId], references: [id])
   payerCustomer   Customer     @relation("payer", fields: [payerCustomerId], references: [id])
+  bankName        String?
+  nickname        String?
 }
 
 model Event {
@@ -239,4 +272,191 @@ enum TransactionStatus {
   SUCCESS
   FAILED
   PENDING
+  REVERSED
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Source B — CRM & marketing (weekly cadence, customer/campaign grain)
+// Source C — branch operations and macro environment (monthly, regional grain)
+// Both are separate SYSTEMS in the story, so they are separate tables here and
+// separate source_ids downstream. Grain and cadence differ deliberately: one
+// global freshness rule cannot gate all three.
+// ═══════════════════════════════════════════════════════════════════════════
+
+model Branch {
+  code              String     @id @unique
+  name              String
+  region            String
+  city              String
+  managerName       String
+  staffingHeadcount Int        @default(0)
+  openedOn          DateTime
+  tenantId          String     @default("bank_a")
+  tenant            Tenant     @relation(fields: [tenantId], references: [id])
+  updatedOn         DateTime   @updatedAt
+  customers         Customer[]
+  accounts          Account[]
+}
+
+/// One row per region per month. The external driver the engine must reach for when an internal
+/// cause does not explain a deposit movement.
+model MacroEnvironment {
+  id                       String   @id @default(uuid()) @db.Uuid
+  region                   String
+  monthYear                String // YYYY-MM
+  competitorDepositRate    Float
+  centralBankBaseRate      Float
+  regionalUnemploymentRate Float
+  recordedOn               DateTime
+  updatedOn                DateTime @updatedAt
+
+  @@unique([region, monthYear])
+}
+
+model Campaign {
+  id            String                @id @default(uuid()) @db.Uuid
+  name          String
+  channel       CampaignChannel
+  targetSegment String
+  startDate     DateTime
+  endDate       DateTime
+  spend         Float                 @default(0)
+  tenantId      String                @default("bank_a")
+  tenant        Tenant                @relation(fields: [tenantId], references: [id])
+  updatedOn     DateTime              @updatedAt
+  interactions  CampaignInteraction[]
+}
+
+/// The funnel CPA is computed from. Stored as events, never as a pre-aggregated rate: a rate
+/// cannot be re-aggregated across segments.
+model CampaignInteraction {
+  id         String          @id @default(uuid()) @db.Uuid
+  campaignId String          @db.Uuid
+  customerId String          @db.Uuid
+  type       InteractionType
+  occurredAt DateTime
+  updatedOn  DateTime        @updatedAt
+  campaign   Campaign        @relation(fields: [campaignId], references: [id])
+  customer   Customer        @relation(fields: [customerId], references: [id])
+
+  @@index([campaignId, type])
+}
+
+model Card {
+  id              String      @id @default(uuid()) @db.Uuid
+  accNo           String
+  customerId      String      @db.Uuid
+  last4           String
+  cardType        CardType
+  network         CardNetwork
+  /// Product name is the launch dimension: a new product is the sparse-history KPI.
+  productName     String
+  expMonth        Int
+  expYear         Int
+  cardholderName  String
+  status          CardStatus  @default(ACTIVE)
+  creditLimit     Float?
+  availableCredit Float?
+  issuedOn        DateTime
+  updatedOn       DateTime    @updatedAt
+  account         Account     @relation(fields: [accNo], references: [accNo])
+  customer        Customer    @relation(fields: [customerId], references: [id])
+
+  @@index([productName])
+}
+
+model Notification {
+  id         String           @id @default(uuid()) @db.Uuid
+  customerId String           @db.Uuid
+  type       NotificationType
+  message    String
+  isRead     Boolean          @default(false)
+  createdOn  DateTime         @default(now())
+  updatedOn  DateTime         @updatedAt
+  customer   Customer         @relation(fields: [customerId], references: [id])
+}
+
+enum LoanStatus {
+  ACTIVE
+  CLOSED
+  DEFAULTED
+  WRITTEN_OFF
+}
+
+enum AccountStatus {
+  ACTIVE
+  DORMANT
+  FROZEN
+  CLOSED
+}
+
+enum AgeBracket {
+  UNDER_25
+  AGE_25_34
+  AGE_35_49
+  AGE_50_64
+  AGE_65_PLUS
+}
+
+enum IncomeBracket {
+  UNDER_30K
+  INC_30K_60K
+  INC_60K_100K
+  INC_100K_200K
+  INC_200K_PLUS
+}
+
+enum EmploymentStatus {
+  SALARIED
+  SELF_EMPLOYED
+  STUDENT
+  RETIRED
+  UNEMPLOYED
+}
+
+enum RiskSegment {
+  LOW
+  MEDIUM
+  HIGH
+}
+
+enum CampaignChannel {
+  EMAIL
+  SMS
+  APP_PUSH
+  BRANCH
+}
+
+enum InteractionType {
+  SENT
+  OPENED
+  CLICKED
+  CONVERTED
+}
+
+enum CardType {
+  DEBIT
+  CREDIT
+  VIRTUAL
+}
+
+enum CardNetwork {
+  VISA
+  MASTERCARD
+  AMEX
+  RUPAY
+}
+
+enum CardStatus {
+  ACTIVE
+  LOCKED
+  EXPIRED
+  CANCELLED
+}
+
+enum NotificationType {
+  SECURITY
+  TRANSACTION
+  MARKETING
+  SYSTEM
 }

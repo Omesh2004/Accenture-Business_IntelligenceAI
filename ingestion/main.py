@@ -40,6 +40,22 @@ _producer_lock = asyncio.Lock()
 _next_producer_attempt = 0.0
 PRODUCER_RETRY_COOLDOWN_S = 15.0
 
+# `producer is not None` only means an object exists: it stays truthy after the broker dies, so
+# /health reported ingest_path=kafka against a dead broker. These record real outcomes instead.
+_ingest_stats = {"kafka_ok": 0, "kafka_failed": 0, "fallback_ok": 0,
+                 "last_kafka_ok_at": None, "last_error": None, "last_error_at": None}
+
+
+def _stamp(key: str, error: str = "") -> None:
+    from datetime import datetime as _dt
+    now = _dt.now(timezone.utc).isoformat()
+    _ingest_stats[key] = _ingest_stats.get(key, 0) + 1
+    if key == "kafka_ok":
+        _ingest_stats["last_kafka_ok_at"] = now
+    if error:
+        _ingest_stats["last_error"] = error[:200]
+        _ingest_stats["last_error_at"] = now
+
 
 async def _start_producer() -> AIOKafkaProducer | None:
     """Build and start a producer, or return None if the broker is not reachable yet."""
@@ -266,6 +282,7 @@ def _insert_direct_to_clickhouse_once(event_dict: dict, ingest_path: str):
             now,      # ingested_at
             ingest_path,
             now,      # _inserted_at
+            canonicalize_event_name(event_dict["event_name"]) or event_dict["event_name"],
         ]]
         client.insert(
             "feature_intelligence.events_raw",
@@ -273,7 +290,7 @@ def _insert_direct_to_clickhouse_once(event_dict: dict, ingest_path: str):
             column_names=[
                 "event_id", "session_id", "tenant_id", "event_name", "user_id", "channel",
                 "timestamp", "metadata", "kafka_partition", "kafka_offset", "kafka_topic",
-                "ingested_at", "ingest_path", "_inserted_at",
+                "ingested_at", "ingest_path", "_inserted_at", "event_name_canonical",
             ],
         )
         logger.info(f"[Fallback] Inserted event '{event_dict['event_name']}' directly into ClickHouse")
@@ -462,15 +479,24 @@ async def ingest_event(event: FeatureEvent):
     if active_producer is not None:
         try:
             await asyncio.wait_for(
-                active_producer.send_and_wait(settings.KAFKA_TOPIC_EVENTS, event_dict),
+                # P3-6. key=None scatters a tenant's events across partitions the moment the
+                # topic has more than one, breaking every ordering assumption. Harmless today
+                # (--partitions 1) and cheap to get right before it matters.
+                active_producer.send_and_wait(
+                    settings.KAFKA_TOPIC_EVENTS, event_dict,
+                    key=str(event_dict.get("tenant_id", "")).encode("utf-8"),
+                ),
                 timeout=5.0
             )
             kafka_success = True
+            _stamp("kafka_ok")
         except asyncio.TimeoutError:
             logger.warning("Kafka send timed out for '%s', using ClickHouse fallback", event.event_name)
+            _stamp("kafka_failed", "send timeout")
             await drop_producer()
         except Exception as e:
             logger.warning("Kafka send failed (%s), using ClickHouse fallback", e)
+            _stamp("kafka_failed", str(e))
             await drop_producer()
 
     if not kafka_success:
@@ -478,6 +504,7 @@ async def ingest_event(event: FeatureEvent):
             # clickhouse_connect is blocking; keep it off the event loop or one slow insert
             # stalls every concurrent request on this worker.
             await asyncio.to_thread(_insert_direct_to_clickhouse, event_dict, "fallback_cloud")
+            _stamp("fallback_ok")
         except Exception as e:
             logger.error(f"Both Kafka and ClickHouse failed for event: {e}")
             raise HTTPException(status_code=500, detail="Failed to ingest event")
@@ -485,13 +512,28 @@ async def ingest_event(event: FeatureEvent):
     return {"status": "Event queued successfully"}
 
 @app.get("/health")
-def health_check():
+async def health_check():
+    """Honest health: probes the broker rather than trusting that a producer object exists."""
+    broker_reachable = None
+    if producer is not None:
+        try:
+            # A real round trip. cluster.brokers() returns CACHED metadata and stays truthy
+            # after the broker dies, which is how this endpoint used to report a healthy Kafka
+            # against a broker that had crashed.
+            await asyncio.wait_for(producer.client.fetch_all_metadata(), timeout=3.0)
+            broker_reachable = True
+        except Exception as exc:
+            broker_reachable = False
+            _ingest_stats["last_error"] = f"broker probe failed: {exc}"[:200]
+
+    healthy = producer is not None and broker_reachable is not False
     return {
-        "status": "ok",
+        "status": "ok" if healthy else "degraded",
         "deployment": settings.DEPLOYMENT_MODE,
-        "kafka_connected": producer is not None,
-        # Which path events are actually taking. `clickhouse_fallback` here means the worker
-        # is idle and nothing is buffering in Kafka.
-        "ingest_path": "kafka" if producer is not None else "clickhouse_fallback",
+        "kafka_connected": bool(healthy),
+        "broker_reachable": broker_reachable,
+        # `clickhouse_fallback` means the worker is idle and nothing is buffering in Kafka.
+        "ingest_path": "kafka" if healthy else "clickhouse_fallback",
+        "ingest_stats": dict(_ingest_stats),
     }
 

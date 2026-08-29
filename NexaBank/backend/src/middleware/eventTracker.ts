@@ -7,6 +7,32 @@ import { prisma } from "../prisma";
 const INGESTION_API_URL = process.env.INGESTION_API_URL || "http://localhost:8000/events";
 
 /**
+ * P0-10. The forwarder used to swallow every failure, so a 403 (tracking disabled), a 422, a
+ * timeout and a restart were indistinguishable from outside -- and the Trust Gate could not tell
+ * "the KPI dropped" from "the forwarder broke". Counted here and exposed at /health/forwarder.
+ */
+export const forwarderStats = {
+  attempted: 0,
+  ok: 0,
+  failed: 0,
+  byStatus: {} as Record<string, number>,
+  lastErrorAt: null as string | null,
+  lastOkAt: null as string | null,
+};
+
+function recordForwardOutcome(status: string, ok: boolean): void {
+  forwarderStats.attempted += 1;
+  forwarderStats.byStatus[status] = (forwarderStats.byStatus[status] || 0) + 1;
+  if (ok) {
+    forwarderStats.ok += 1;
+    forwarderStats.lastOkAt = new Date().toISOString();
+  } else {
+    forwarderStats.failed += 1;
+    forwarderStats.lastErrorAt = new Date().toISOString();
+  }
+}
+
+/**
  * Hashes a userId using SHA-256 for analytics privacy.
  */
 export function hashUserId(userId: string): string {
@@ -46,6 +72,11 @@ interface SessionProfile {
   geo: GeoProfile;
   deviceType: string;
   channel: "web" | "mobile" | "api" | "batch";
+  /** Last-seen epoch ms. FIFO eviction re-randomised a still-active session's dimensions,
+   *  reintroducing the intra-session flip FOUNDATION-2 fixed. */
+  lastSeen: number;
+  /** Keys this profile invented, so the pipeline can refuse to localize on them (P0-8). */
+  simulatedKeys: string[];
   /** Real browser-reported geo, captured at session creation only (see getSessionProfile). */
   realCountry?: string;
   realCity?: string;
@@ -170,22 +201,44 @@ function getSessionProfile(sessionId: string, metadata: Record<string, unknown> 
   // Localize produces are meaningless. Real geo arriving after the first event is therefore
   // deliberately discarded -- `location` on this path is simulated by design anyway.
   const existing = sessionProfiles.get(sessionId);
-  if (existing) return existing;
+  if (existing) {
+    existing.lastSeen = Date.now();
+    return existing;
+  }
 
   const geo = selectGeoProfile();
   const deviceType = String(safeMetadata.device_type || safeMetadata.device || selectDevice(geo));
   const channel = normalizeChannel((safeMetadata.channel as string) || geo.channelBias[Math.floor(Math.random() * geo.channelBias.length)]);
+  // P0-8: a key is simulated only when THIS producer invented it. A value supplied by a real
+  // signal (POST /events/location, or the simulate console's own per-session geo) is omitted,
+  // so the marker stays honest per event rather than blanket.
+  const simulatedKeys: string[] = [];
+  if (!safeMetadata.country) simulatedKeys.push("location");
+  if (!safeMetadata.city) simulatedKeys.push("city");
+  if (!safeMetadata.continent) simulatedKeys.push("continent");
+  if (!safeMetadata.device_type && !safeMetadata.device) simulatedKeys.push("device_type");
+  if (!safeMetadata.channel) simulatedKeys.push("channel");
+
   const profile: SessionProfile = {
     geo,
     deviceType,
     channel,
+    lastSeen: Date.now(),
+    simulatedKeys,
     realCountry: safeMetadata.country ? String(safeMetadata.country) : undefined,
     realCity: safeMetadata.city ? String(safeMetadata.city) : undefined,
     realContinent: safeMetadata.continent ? String(safeMetadata.continent) : undefined,
   };
 
   if (sessionProfiles.size >= MAX_SESSION_PROFILES) {
-    const oldestKey = sessionProfiles.keys().next().value;
+    let oldestKey: string | undefined;
+    let oldestSeen = Infinity;
+    for (const [key, value] of sessionProfiles) {
+      if (value.lastSeen < oldestSeen) {
+        oldestSeen = value.lastSeen;
+        oldestKey = key;
+      }
+    }
     if (oldestKey) sessionProfiles.delete(oldestKey);
   }
   sessionProfiles.set(sessionId, profile);
@@ -437,6 +490,13 @@ async function forwardToIngestionAPI(
   const simTime = simulateResponseTime();
   const channel = normalizeChannel((metadata.channel as string) || sessionProfile.channel);
 
+  const rawMeasured = metadata.response_time_ms ?? (metadata as Record<string, unknown>).responseTime;
+  const measuredResponseTime =
+    typeof rawMeasured === "number" && Number.isFinite(rawMeasured) ? rawMeasured : undefined;
+
+  const simulatedKeys = [...sessionProfile.simulatedKeys];
+  if (measuredResponseTime === undefined) simulatedKeys.push("response_time_ms");
+
   try {
     const analyticsTenantId = resolveAnalyticsTenantId(tenantId);
     await axios.post(INGESTION_API_URL, {
@@ -462,15 +522,24 @@ async function forwardToIngestionAPI(
         location: sessionProfile.realCountry || geo.country,
         continent: sessionProfile.realContinent || geo.continent,
         city: sessionProfile.realCity || geo.city,
-        // Performance metrics
-        response_time_ms: metadata.response_time_ms || simTime,
+        // P0-9. The frontend measures real latency but wrote it as `responseTime` (camelCase)
+        // while this read `response_time_ms`, so the names never matched and the simulated value
+        // won every time. Both spellings are accepted now, and the field is marked simulated
+        // only when neither was supplied.
+        response_time_ms: measuredResponseTime !== undefined ? measuredResponseTime : simTime,
+        _simulated: simulatedKeys,
         // Page-level path for Top Pages aggregation
         path: metadata.path || derivePathFromEvent(mappedEventName),
         tier: tier || metadata.tier
       },
     }, { timeout: 3000 });
-  } catch (_err: unknown) {
-    // Silent fail — analytics should never break the primary app
+    recordForwardOutcome("202", true);
+  } catch (err: unknown) {
+    // Still swallowed -- telemetry must never break banking (CLAUDE.md rule 7) -- but no longer
+    // silent: the outcome is counted so absence of data is observable.
+    const status = (err as { response?: { status?: number } })?.response?.status;
+    const code = (err as { code?: string })?.code;
+    recordForwardOutcome(status ? String(status) : (code || "network_error"), false);
   }
 }
 
@@ -487,7 +556,12 @@ export async function trackEvent(
   tier?: 'free' | 'pro' | 'enterprise'
 ): Promise<void> {
   try {
-    const hashedUserId = customerId ? hashUserId(customerId) : "anonymous";
+    // NB-4. Every logged-out visitor used to collapse into one user_id of "anonymous", so
+    // windowFunnel GROUP BY user_id saw a single row that had performed every step of every
+    // funnel -- any funnel with a pre-login stage reported near-100% conversion. Anonymous
+    // traffic is now keyed on the session, which is the grain the contracts declare.
+    const anonSessionId = getSessionId(metadata);
+    const hashedUserId = customerId ? hashUserId(customerId) : `anon_${hashUserId(anonSessionId).slice(0, 32)}`;
     const sessionId = getSessionId(metadata);
     const metadataWithSession: Record<string, unknown> = { ...metadata, session_id: sessionId };
     const row = await prisma.event.create({

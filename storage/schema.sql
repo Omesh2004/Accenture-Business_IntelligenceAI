@@ -43,7 +43,12 @@ CREATE TABLE IF NOT EXISTS feature_intelligence.events_raw (
     kafka_topic String DEFAULT '',
     ingested_at DateTime DEFAULT now(),
     ingest_path String DEFAULT '',
-    _inserted_at DateTime DEFAULT now()
+    _inserted_at DateTime DEFAULT now(),
+    -- P0-6. Canonicalised once at ingest so every reader agrees. Before this, each endpoint
+    -- canonicalised in Python afterwards and did so inconsistently: max(a,b) in /features/usage
+    -- under-counted while += in /predictive/adoption over-counted, so one fact gave three
+    -- different unique-user numbers on three pages.
+    event_name_canonical String DEFAULT ''
 ) ENGINE = ReplacingMergeTree(_inserted_at)
 PARTITION BY toYYYYMM(timestamp)
 ORDER BY (tenant_id, event_name, timestamp, event_id)
@@ -56,7 +61,10 @@ CREATE TABLE IF NOT EXISTS feature_intelligence.daily_feature_usage (
     event_name String,
     date Date,
     event_count AggregateFunction(uniqExact, String),
-    unique_users AggregateFunction(uniq, String)
+    unique_users AggregateFunction(uniqExact, String),
+    -- raw_rows counts rows as INSERTED. An MV never sees post-merge state, so this survives the
+    -- ReplacingMergeTree merges that erase a replay from events_raw -- see docs/PROPOSAL.md D1.
+    raw_rows AggregateFunction(sum, UInt64)
 ) ENGINE = AggregatingMergeTree()
 PARTITION BY toYYYYMM(date)
 ORDER BY (tenant_id, event_name, date);
@@ -66,10 +74,13 @@ CREATE MATERIALIZED VIEW IF NOT EXISTS feature_intelligence.mv_daily_feature_usa
 TO feature_intelligence.daily_feature_usage AS
 SELECT
     tenant_id,
-    event_name,
+    -- Group on the canonical name: aliases of one feature are one row, so their uniq states
+    -- merge correctly instead of being reconciled by hand at read time.
+    if(length(event_name_canonical) > 0, event_name_canonical, event_name) AS event_name,
     toDate(timestamp) AS date,
     uniqExactState(if(length(event_id) > 0, event_id, concat('legacy:', user_id, ':', toString(timestamp), ':', event_name, ':', metadata))) AS event_count,
-    uniqState(user_id) AS unique_users
+    uniqExactState(user_id) AS unique_users,
+    sumState(toUInt64(1)) AS raw_rows
 FROM feature_intelligence.events_raw
 GROUP BY tenant_id, event_name, date;
 
@@ -182,7 +193,10 @@ CREATE TABLE IF NOT EXISTS feature_intelligence.investigations (
     termination_reason String DEFAULT '',-- 'not_instrumented'|'defect'|'ambiguous'|'immaterial'
     dataset          String,            -- 'seeded' | 'live'  -- no gate passes on seeded data
     started_at       DateTime,
-    ended_at         DateTime DEFAULT toDateTime(0)
+    ended_at         DateTime DEFAULT toDateTime(0),
+    -- Pinned max(ingested_at): event-time windows alone are not reproducible, because the
+    -- simulate console backdates events into past partitions. See docs/TASK.md P1-4.
+    watermark_ingested_at DateTime DEFAULT toDateTime(0)
 ) ENGINE = ReplacingMergeTree(started_at)
 ORDER BY (tenant_id, kpi_id, investigation_id);
 
@@ -244,7 +258,7 @@ CREATE TABLE IF NOT EXISTS feature_intelligence.root_causes (
     explained_pct Float64,
     engine_type   String DEFAULT 'stats'
 ) ENGINE = ReplacingMergeTree()
-ORDER BY (tenant_id, anomaly_id, rank);
+ORDER BY (tenant_id, anomaly_id, fundamental, rank);
 
 -- Stage 04. Runs as a SCHEDULED BATCH, ahead of Detect. Stage 02 scores residuals against the
 -- band stored here; this is not a sparse-history-only table.
@@ -320,7 +334,7 @@ CREATE TABLE IF NOT EXISTS feature_intelligence.insights (
     abstained     UInt8 DEFAULT 0,
     verifier_pass UInt8 DEFAULT 1
 ) ENGINE = ReplacingMergeTree(generated_at)
-ORDER BY (tenant_id, persona, anomaly_id);
+ORDER BY (tenant_id, persona, kpi_id, anomaly_id);
 
 -- Stage 08. Per-run telemetry. The LLM-vs-non-LLM breakdown reads from here.
 CREATE TABLE IF NOT EXISTS feature_intelligence.model_runs (
@@ -353,3 +367,301 @@ CREATE TABLE IF NOT EXISTS feature_intelligence.outcomes (
     ts         DateTime DEFAULT now()
 ) ENGINE = MergeTree()
 ORDER BY (tenant_id, insight_id, ts);
+
+
+-- ============================================================================
+-- Multi-source facts and reference dimensions (source 2: core banking, source 3:
+-- reference data). Mirrored from storage/migrations/; there is no runner, so a fresh
+-- volume gets these only from this file.
+-- ============================================================================
+
+CREATE TABLE IF NOT EXISTS feature_intelligence.fact_transactions
+(
+    `txn_id` String,
+    `tenant_id` String,
+    `customer_id` String,
+    `account_no` String,
+    `counterparty_acc` String DEFAULT '',
+    `direction` LowCardinality(String) DEFAULT '',
+    `branch_code` LowCardinality(String) DEFAULT '',
+    `region` LowCardinality(String) DEFAULT '',
+    `txn_type` LowCardinality(String),
+    `category` LowCardinality(String),
+    `mcc` LowCardinality(String) DEFAULT '',
+    `merchant_name` LowCardinality(String) DEFAULT '',
+    `reference_number` String DEFAULT '',
+    `channel` LowCardinality(String),
+    `status` LowCardinality(String),
+    `amount` Decimal(18, 2),
+    `occurred_at` DateTime,
+    `loaded_at` DateTime DEFAULT now(),
+    `_version` DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(_version)
+PARTITION BY toYYYYMM(occurred_at)
+ORDER BY (tenant_id, occurred_at, txn_id)
+SETTINGS index_granularity = 8192;
+
+CREATE TABLE IF NOT EXISTS feature_intelligence.fact_loan_applications
+(
+    `application_id` String,
+    `tenant_id` String,
+    `customer_id` String,
+    `loan_type` LowCardinality(String),
+    `status` LowCardinality(String),
+    `principal_amount` Decimal(18, 2),
+    `interest_rate` Decimal(9, 4),
+    `term_months` UInt16,
+    `kyc_step` UInt8,
+    `created_at` DateTime,
+    `decided_at` DateTime DEFAULT toDateTime(0),
+    `loaded_at` DateTime DEFAULT now(),
+    `_version` DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(_version)
+PARTITION BY toYYYYMM(created_at)
+ORDER BY (tenant_id, application_id)
+SETTINGS index_granularity = 8192;
+
+CREATE TABLE IF NOT EXISTS feature_intelligence.fact_loans
+(
+    `loan_id` String,
+    `tenant_id` String,
+    `account_no` String,
+    `loan_type` LowCardinality(String),
+    `principal_amount` Decimal(18, 2),
+    `interest_amount` Decimal(18, 2),
+    `interest_rate` Decimal(9, 4),
+    `term_months` UInt16,
+    `due_amount` Decimal(18, 2),
+    `is_active` UInt8 DEFAULT 1,
+    `started_at` DateTime,
+    `loaded_at` DateTime DEFAULT now(),
+    `_version` DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(_version)
+PARTITION BY toYYYYMM(started_at)
+ORDER BY (tenant_id, loan_id)
+SETTINGS index_granularity = 8192;
+
+CREATE TABLE IF NOT EXISTS feature_intelligence.fact_account_daily
+(
+    `snapshot_date` Date,
+    `tenant_id` String,
+    `account_no` String,
+    `customer_id` String,
+    `account_type` LowCardinality(String),
+    `balance` Decimal(18, 2),
+    `is_active` UInt8,
+    `lifecycle_status` LowCardinality(String) DEFAULT '',
+    `interest_rate` Decimal(9, 4) DEFAULT 0,
+    `branch_code` LowCardinality(String) DEFAULT '',
+    `region` LowCardinality(String) DEFAULT '',
+    `loaded_at` DateTime DEFAULT now(),
+    `_version` DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(_version)
+PARTITION BY toYYYYMM(snapshot_date)
+ORDER BY (tenant_id, snapshot_date, account_no)
+SETTINGS index_granularity = 8192;
+
+CREATE TABLE IF NOT EXISTS feature_intelligence.dim_campaign
+(
+    `campaign_id` String,
+    `tenant_id` String,
+    `name` String,
+    `channel` LowCardinality(String),
+    `segment` String DEFAULT '',
+    `start_date` Date,
+    `end_date` Date,
+    `spend` Decimal(18, 2) DEFAULT 0,
+    `_version` DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(_version)
+ORDER BY (tenant_id, campaign_id)
+SETTINGS index_granularity = 8192;
+
+CREATE TABLE IF NOT EXISTS feature_intelligence.dim_calendar
+(
+    `calendar_date` Date,
+    `tenant_id` String,
+    `is_holiday` UInt8 DEFAULT 0,
+    `is_weekend` UInt8 DEFAULT 0,
+    `is_month_end` UInt8 DEFAULT 0,
+    `season` LowCardinality(String) DEFAULT '',
+    `label` String DEFAULT '',
+    `_version` DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(_version)
+ORDER BY (tenant_id, calendar_date)
+SETTINGS index_granularity = 8192;
+
+CREATE TABLE IF NOT EXISTS feature_intelligence.dim_fee_schedule
+(
+    `tenant_id` String,
+    `txn_type` LowCardinality(String),
+    `channel` LowCardinality(String),
+    `fee_flat` Decimal(18, 2),
+    `fee_pct` Decimal(9, 4),
+    `valid_from` Date,
+    `valid_to` Date DEFAULT toDate('2099-12-31'),
+    `_version` DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(_version)
+ORDER BY (tenant_id, txn_type, channel, valid_from)
+SETTINGS index_granularity = 8192;
+
+CREATE TABLE IF NOT EXISTS feature_intelligence.source_freshness
+(
+    `source_id` String,
+    `tenant_id` String,
+    `grain` LowCardinality(String),
+    `cadence` LowCardinality(String),
+    `sla_minutes` UInt32,
+    `last_loaded_at` DateTime,
+    `max_source_ts` DateTime,
+    `rows_loaded` UInt64 DEFAULT 0,
+    `load_status` LowCardinality(String) DEFAULT 'ok',
+    `note` String DEFAULT '',
+    `_version` DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(_version)
+ORDER BY (source_id, tenant_id)
+SETTINGS index_granularity = 8192;
+
+CREATE TABLE IF NOT EXISTS feature_intelligence.ingest_watermarks
+(
+    `source_id` String,
+    `entity` String,
+    `tenant_id` String,
+    `watermark` DateTime,
+    `cursor_id` String DEFAULT '',
+    `rows_seen` UInt64 DEFAULT 0,
+    `updated_at` DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(updated_at)
+ORDER BY (source_id, entity, tenant_id)
+SETTINGS index_granularity = 8192;
+
+CREATE TABLE IF NOT EXISTS feature_intelligence.dim_branch
+(
+    `branch_code` String,
+    `tenant_id` String,
+    `name` String,
+    `region` LowCardinality(String),
+    `city` LowCardinality(String),
+    `manager_name` String,
+    `staffing_headcount` UInt16 DEFAULT 0,
+    `opened_at` DateTime,
+    `loaded_at` DateTime DEFAULT now(),
+    `_version` DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(_version)
+ORDER BY (tenant_id, branch_code)
+SETTINGS index_granularity = 8192;
+
+CREATE TABLE IF NOT EXISTS feature_intelligence.dim_customer
+(
+    `customer_id` String,
+    `tenant_id` String,
+    `age_bracket` LowCardinality(String) DEFAULT '',
+    `income_bracket` LowCardinality(String) DEFAULT '',
+    `employment_status` LowCardinality(String) DEFAULT '',
+    `risk_segment` LowCardinality(String) DEFAULT '',
+    `lifetime_value` Decimal(18, 2) DEFAULT 0,
+    `kyc_status` LowCardinality(String) DEFAULT '',
+    `branch_code` LowCardinality(String) DEFAULT '',
+    `region` LowCardinality(String) DEFAULT '',
+    `loaded_at` DateTime DEFAULT now(),
+    `_version` DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(_version)
+ORDER BY (tenant_id, customer_id)
+SETTINGS index_granularity = 8192;
+
+CREATE TABLE IF NOT EXISTS feature_intelligence.dim_macro_environment
+(
+    `region` LowCardinality(String),
+    `month_year` LowCardinality(String),
+    `competitor_deposit_rate` Decimal(9, 4),
+    `central_bank_base_rate` Decimal(9, 4),
+    `regional_unemployment_rate` Decimal(9, 4),
+    `recorded_at` DateTime,
+    `loaded_at` DateTime DEFAULT now(),
+    `_version` DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(_version)
+ORDER BY (region, month_year)
+SETTINGS index_granularity = 8192;
+
+CREATE TABLE IF NOT EXISTS feature_intelligence.fact_account_openings
+(
+    `account_no` String,
+    `tenant_id` String,
+    `customer_id` String,
+    `account_type` LowCardinality(String),
+    `lifecycle_status` LowCardinality(String),
+    `interest_rate` Decimal(9, 4) DEFAULT 0,
+    `branch_code` LowCardinality(String) DEFAULT '',
+    `region` LowCardinality(String) DEFAULT '',
+    `opened_at` DateTime,
+    `loaded_at` DateTime DEFAULT now(),
+    `_version` DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(_version)
+PARTITION BY toYYYYMM(opened_at)
+ORDER BY (tenant_id, opened_at, account_no)
+SETTINGS index_granularity = 8192;
+
+CREATE TABLE IF NOT EXISTS feature_intelligence.fact_campaign_interactions
+(
+    `interaction_id` String,
+    `tenant_id` String,
+    `campaign_id` String,
+    `campaign_name` LowCardinality(String),
+    `channel` LowCardinality(String),
+    `customer_id` String,
+    `interaction_type` LowCardinality(String),
+    `risk_segment` LowCardinality(String) DEFAULT '',
+    `region` LowCardinality(String) DEFAULT '',
+    `occurred_at` DateTime,
+    `loaded_at` DateTime DEFAULT now(),
+    `_version` DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(_version)
+PARTITION BY toYYYYMM(occurred_at)
+ORDER BY (tenant_id, campaign_id, interaction_type, interaction_id)
+SETTINGS index_granularity = 8192;
+
+CREATE TABLE IF NOT EXISTS feature_intelligence.fact_cards
+(
+    `card_id` String,
+    `tenant_id` String,
+    `customer_id` String,
+    `account_no` String,
+    `product_name` LowCardinality(String),
+    `card_type` LowCardinality(String),
+    `network` LowCardinality(String),
+    `status` LowCardinality(String),
+    `credit_limit` Decimal(18, 2) DEFAULT 0,
+    `region` LowCardinality(String) DEFAULT '',
+    `issued_at` DateTime,
+    `loaded_at` DateTime DEFAULT now(),
+    `_version` DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(_version)
+PARTITION BY toYYYYMM(issued_at)
+ORDER BY (tenant_id, product_name, card_id)
+SETTINGS index_granularity = 8192;
+
+CREATE TABLE IF NOT EXISTS feature_intelligence.schema_migrations
+(
+    `name` String,
+    `checksum` String,
+    `applied_at` DateTime DEFAULT now(),
+    `ok` UInt8 DEFAULT 1,
+    `error` String DEFAULT ''
+)
+ENGINE = ReplacingMergeTree(applied_at)
+ORDER BY name
+SETTINGS index_granularity = 8192;

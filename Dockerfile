@@ -9,8 +9,13 @@ RUN apt-get update && apt-get install -y \
 WORKDIR /app
 
 # Copy requirements and install
-COPY requirements.txt .
+COPY requirements.txt requirements-dev.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
+
+# Test tooling, off by default so production images stay lean:
+#   docker compose build --build-arg INSTALL_DEV=1 ingestion-api
+ARG INSTALL_DEV=0
+RUN if [ "$INSTALL_DEV" = "1" ]; then pip install --no-cache-dir -r requirements-dev.txt; fi
 
 # Copy source code
 COPY . .

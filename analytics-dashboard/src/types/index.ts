@@ -323,3 +323,182 @@ export interface SegmentData {
   total_usage: number;
   unique_users: number;
 }
+
+/* ─────────────── Intelligence Layer ─────────────── */
+
+export interface EvidenceClaim {
+  claim_id: string;
+  label: string;
+  source: string;
+  unit: string;
+  value: number;
+}
+
+export interface TrustCheck {
+  check_id: string;
+  verdict: 'pass' | 'fail' | 'ambiguous';
+  fingerprint: string;
+  cheapest_check: string;
+  blocks_narrative: number;
+  observed: Record<string, number>;
+}
+
+export interface RootCause {
+  rank: number;
+  dimensions: Record<string, string>;
+  fundamental: string;
+  contribution: number;
+  explained_pct: number;
+  method: string;
+}
+
+/** A root cause tagged with which factor of the identity moved (price / volume / mix). */
+export interface FactorContribution extends RootCause {
+  factor: string;
+}
+
+export interface EngineBreakdown {
+  by_engine: Record<string, { runs: number; latency_ms: number; tokens: number }>;
+  total_runs: number;
+  llm_runs: number;
+  non_llm_runs: number;
+  llm_share_pct: number;
+}
+
+export interface SourceHealth {
+  source_id: string;
+  grain: string;
+  cadence: string;
+  sla_minutes: number;
+  last_loaded_at: string;
+  max_source_ts: string;
+  rows_loaded: number;
+  load_status: string;
+  minutes_behind: number | null;
+  within_sla: boolean;
+}
+
+export interface IntelligenceInsight {
+  insight_id: string;
+  investigation_id: string;
+  tenant_id: string;
+  kpi_id: string;
+  anomaly_id: string;
+  persona: string;
+  generated_at: string;
+  trust_verdict: 'pass' | 'fail' | 'ambiguous';
+  headline: string;
+  narrative: string;
+  evidence: EvidenceClaim[];
+  llm_breakdown: Record<string, number>;
+  confidence: number;
+  simulated: number;
+  abstained: number;
+  verifier_pass: number;
+  engine_breakdown: EngineBreakdown;
+  trust: { checks: TrustCheck[]; passed: number; failed: number; ambiguous: number };
+  causes: RootCause[];
+  factors: FactorContribution[];
+  sources: SourceHealth[];
+}
+
+export interface TelemetryStage {
+  stage: string;
+  engine_type: string;
+  runs: number;
+  latency_ms: number;
+  tokens_in: number;
+  tokens_out: number;
+  cost_usd: number;
+}
+
+export interface RuntimeTelemetry {
+  by_stage: TelemetryStage[];
+  total_runs: number;
+  llm_runs: number;
+  non_llm_runs: number;
+  llm_share_pct: number;
+  total_latency_ms: number;
+  total_tokens: number;
+  total_cost_usd: number;
+}
+
+export interface IntelligenceRecommendation {
+  rec_id: string;
+  anomaly_id: string;
+  action: string;
+  lever: string;
+  owner_role: string;
+  expected_impact: { low: number; high: number };
+  status: string;
+}
+
+/** Answer from the persona query agent. Every figure traces to a Signal Store row. */
+/** One step of the agent loop: reason, act, observe, validate or synthesize. */
+export interface AgentStep {
+  n: number;
+  label: string;
+  tool: string;
+  detail: string;
+  status: 'ok' | 'skipped' | 'abstained' | 'failed';
+  ms: number;
+  kind: 'reason' | 'act' | 'observe' | 'validate' | 'synthesize';
+}
+
+/** Where a figure came from: the capability that produced it and the table it read. */
+export interface AgentCitation {
+  tool: string;
+  source: string;
+}
+
+export interface AgentAnswer {
+  question: string;
+  persona: string;
+  persona_label: string;
+  intent: string;
+  intents: string[];
+  kpi_id: string;
+  answer: string;
+  evidence: EvidenceClaim[];
+  abstained: number;
+  reason: string;
+  verifier_pass: number;
+  engine_type: string;
+  investigation_id: string;
+  sources: SourceHealth[];
+  query_id: string;
+  trace: AgentStep[];
+  suggestions: string[];
+  citations: AgentCitation[];
+  tools_used: string[];
+  issues: string[];
+  escalate: number;
+  rounds: number;
+  /** One block per capability that contributed, so a reader can see which question each part
+   *  of the answer belongs to. `answer` remains the same text, flattened. */
+  sections: AgentSection[];
+  confidence: number;
+  uncertainty: string[];
+}
+
+/** A labelled part of an answer, named after the intent the capability behind it serves. */
+export interface AgentSection {
+  label: string;
+  text: string;
+  tool: string;
+  source: string;
+}
+
+/** A persona view the signed-in role may switch to. The list is server-authored. */
+export interface PersonaOption {
+  id: string;
+  label: string;
+  remit: string;
+  intents: string[];
+  examples: string[];
+}
+
+export interface PersonaChoices {
+  resolved: string;
+  personas: PersonaOption[];
+}

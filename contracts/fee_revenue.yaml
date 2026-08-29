@@ -1,0 +1,155 @@
+id: fee_revenue
+name: Transaction Fee Revenue
+definition: >
+  Fee income earned on customer transactions, priced from the reference fee schedule.
+  Cross-source: transaction volume from core banking, price from reference data.
+formula: sum(transaction_amount * fee_pct + fee_flat)
+unit: currency
+currency: INR
+additivity: additive
+
+grain:
+  time: daily
+  entity: transaction
+
+# Two sources at different cadences. Trust Gate checks BOTH, because a stale fee schedule
+# prices today's volume at last quarter's rates and nothing downstream would notice.
+sources:
+  - id: nexabank_core
+    system: ClickHouse.fact_transactions
+    grain: transaction
+    cadence: hourly_batch
+    freshness_sla_minutes: 120
+  - id: reference_data
+    system: ClickHouse.dim_fee_schedule
+    grain: product
+    cadence: weekly
+    freshness_sla_minutes: 10080
+
+readiness:
+  status: ready
+  gate: >
+    Both sources load on the batch path. Unlike the telemetry KPIs this one has REAL money --
+    fact_transactions.amount is Decimal64(2) carried from the core banking system, so the
+    revenue invariants below are arithmetic rather than vacuous.
+
+identity:
+  txn_id: required
+  customer_id: hashed
+
+fundamentals:
+  - metric: fee_revenue
+    table: fact_transactions
+    measure: amount
+    aggregation: sum
+    filter:
+      status: SUCCESS
+    additivity: additive
+    engine_type: sql
+  - metric: billable_transactions
+    table: fact_transactions
+    measure: "1"
+    aggregation: count
+    filter:
+      status: SUCCESS
+    additivity: additive
+    engine_type: sql
+
+# Factor identity: value = volume x mix x price. LMDI-I gives a zero residual, so the three
+# contributions sum exactly to the observed change.
+decomposition:
+  enabled: true
+  method: lmdi_i
+  factors: [volume, mix, price]
+  mix_dimensions: [txn_type, channel]
+  residual_tolerance: 0.000001
+
+dimensions:
+  # Columns on fact_transactions, not metadata keys. Every value is measured, not fabricated:
+  # this source has no selectGeoProfile equivalent.
+  allowed: [txn_type, channel, category, status]
+  max_depth: 2
+  min_segment_volume: 5
+  availability:
+    txn_type: {seeded: true, live: true}
+    channel: {seeded: true, live: true}
+    category: {seeded: true, live: true}
+    status: {seeded: true, live: true}
+
+quality:
+  freshness_sla_minutes: 120
+  provisional_window_minutes: 60
+  hard_invariants:
+    - id: non_negative_revenue
+      expr: fee_revenue >= 0
+      on_fail: quarantine
+    - id: volume_present
+      expr: billable_transactions > 0
+      on_fail: quarantine
+      note: "Guards the silent zero when the batch loader has not run."
+  soft_invariants:
+    - id: price_within_band
+      expr: fee_revenue / billable_transactions BETWEEN 0.5 AND 5000
+      on_fail: ambiguous
+      note: >
+        A per-transaction fee outside this band is more likely a unit or currency error than a
+        pricing change. Abstain and name the check rather than narrating a collapse.
+  defect_fingerprints:
+    - id: stale_fee_schedule
+      signature: "reference_data freshness beyond its weekly SLA while volume is normal"
+      verdict: ambiguous
+    - id: batch_not_loaded
+      signature: "billable_transactions == 0 while clickstream volume is unchanged"
+      verdict: fail
+
+detection:
+  direction: both
+  band_source: forecast
+  warn_pct_change: 10
+  critical_pct_change: 25
+  min_persistence_windows: 2
+  min_denominator: 20
+  robust_scorer: mad
+  multiple_testing: benjamini_hochberg
+  sparse_history_policy: abstain_with_interval
+
+forecast:
+  enabled: true
+  horizon_days: 7
+  baseline: seasonal_naive
+  interval_required: true
+  fallback: rolling_median
+  min_history_days: 14
+
+causal:
+  enabled: true
+  evidence_rungs: [association, attribution, corroborated_cause]
+  interventions: [campaign, fee_schedule_change]
+  control_dimensions: [channel, txn_type]
+  degrade_to: attribution
+
+decision:
+  owner: revenue_ops
+  allowed_levers: [adjust_fee_schedule, shift_channel_mix, investigate]
+  requires_human_approval: true
+  expected_impact: interval
+
+lineage:
+  tables: [fact_transactions, dim_fee_schedule]
+  sources: [nexabank_core, reference_data]
+  note: >
+    Price comes from dim_fee_schedule and volume from fact_transactions. They refresh at
+    different cadences, so a movement can originate in either -- which is exactly why the
+    factor decomposition separates price from volume rather than reporting one number.
+
+access_restriction:
+  visible_to: [cfo, analyst]
+  suppress_for_others: [fee_revenue, price]
+
+observability:
+  golden_scenarios: [real_movement, multi_factor, sparse_history]
+  verifier_required: true
+  engine_type: sql
+
+interconnection:
+  driven_by: kyc_completion_rate

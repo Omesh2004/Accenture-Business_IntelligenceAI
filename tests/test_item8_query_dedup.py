@@ -60,24 +60,33 @@ TENANT = "phase_e_dedup_test"
 
 
 def _rebuild_rollup_from_source():
-    """The documented procedure (docs/DATABASE.md) for restoring rollup/raw consistency after
-    a delete against events_raw -- materialized views don't observe deletes."""
+    """Drop THIS TENANT's rollup rows after deleting its raw rows.
+
+    Deliberately not TRUNCATE + full rebuild: that rewrites every tenant's rollup from
+    events_raw, and ReplacingMergeTree has already merged away any replayed rows -- so a global
+    rebuild silently erases the duplicate evidence dedup_integrity depends on. A test must not
+    destroy shared state.
+    """
     client = ch_client._get_client()
-    client.command("TRUNCATE TABLE feature_intelligence.daily_feature_usage")
-    client.command("""
-        INSERT INTO feature_intelligence.daily_feature_usage
-        SELECT tenant_id, event_name, toDate(timestamp) AS date,
-               uniqExactState(if(length(event_id) > 0, event_id,
-                   concat('legacy:', user_id, ':', toString(timestamp), ':', event_name, ':', metadata))) AS event_count,
-               uniqState(user_id) AS unique_users
-        FROM feature_intelligence.events_raw
-        GROUP BY tenant_id, event_name, date
-    """)
+    client.command(
+        "ALTER TABLE feature_intelligence.daily_feature_usage DELETE WHERE tenant_id = %(t)s "
+        "SETTINGS mutations_sync = 2",
+        parameters={"t": TENANT},
+    )
 
 
 class Item8DuplicateInjection(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        # Start from a known-empty tenant. A previous run's async mutation may still be pending,
+        # and inheriting its rows makes every count in this file wrong.
+        client = ch_client._get_client()
+        client.command(
+            "ALTER TABLE feature_intelligence.events_raw DELETE WHERE tenant_id = %(t)s "
+            "SETTINGS mutations_sync = 2",
+            parameters={"t": TENANT},
+        )
+        _rebuild_rollup_from_source()
         now = time.time()
         base = {"tenant_id": TENANT, "channel": "web"}
         e1 = {**base, "event_id": "e1", "user_id": "u1", "event_name": "login.auth.success",
@@ -99,10 +108,10 @@ class Item8DuplicateInjection(unittest.TestCase):
     def tearDownClass(cls):
         client = ch_client._get_client()
         client.command(
-            "ALTER TABLE feature_intelligence.events_raw DELETE WHERE tenant_id = %(t)s",
+            "ALTER TABLE feature_intelligence.events_raw DELETE WHERE tenant_id = %(t)s "
+            "SETTINGS mutations_sync = 2",
             parameters={"t": TENANT},
         )
-        time.sleep(2)
         _rebuild_rollup_from_source()
 
     def test_five_physical_rows_landed(self):

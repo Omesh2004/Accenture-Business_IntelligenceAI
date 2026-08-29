@@ -1,0 +1,141 @@
+id: new_product_activations
+name: Student Travel Card Activations
+definition: >
+  Cards issued for the newly launched Student Travel Credit Card. The product launched days ago,
+  so this KPI exists specifically to be under-powered: the correct behaviour is to report early
+  adoption and REFUSE to project a quarter from it.
+formula: count(cards where product_name = 'Student Travel Credit Card')
+unit: count
+additivity: additive
+
+grain:
+  time: daily
+  entity: card
+
+sources:
+  - id: nexabank_core
+    system: ClickHouse.fact_cards
+    grain: card
+    cadence: hourly_batch
+    freshness_sla_minutes: 120
+  - id: nexabank_crm
+    system: ClickHouse.dim_customer
+    grain: customer
+    cadence: weekly
+    freshness_sla_minutes: 10080
+
+readiness:
+  status: ready
+  gate: >
+    fact_cards loads on the batch path with the product name as a real column. The KPI is ready;
+    its HISTORY is short, which is a different thing and is handled by the sparse-history policy
+    rather than by blocking the metric.
+
+identity:
+  card_id: required
+  customer_id: hashed
+
+fundamentals:
+  - metric: cards_issued
+    table: fact_cards
+    measure: "1"
+    aggregation: count
+    filter:
+      product_name: Student Travel Credit Card
+    additivity: additive
+    engine_type: sql
+  - metric: active_cards
+    table: fact_cards
+    measure: "1"
+    aggregation: count
+    filter:
+      product_name: Student Travel Credit Card
+      status: ACTIVE
+    additivity: additive
+    engine_type: sql
+
+dimensions:
+  allowed: [network, region, card_type, status]
+  max_depth: 1
+  min_segment_volume: 2
+  availability:
+    network: {seeded: true, live: true}
+    region: {seeded: true, live: true}
+    card_type: {seeded: true, live: true}
+    status: {seeded: true, live: true}
+
+quality:
+  freshness_sla_minutes: 120
+  provisional_window_minutes: 60
+  hard_invariants:
+    - id: issued_non_negative
+      expr: cards_issued >= 0
+      on_fail: quarantine
+    - id: active_subset_of_issued
+      expr: active_cards <= cards_issued
+      on_fail: quarantine
+  soft_invariants:
+    - id: launch_volume_plausible
+      expr: cards_issued <= 1000
+      on_fail: ambiguous
+  defect_fingerprints:
+    - id: product_renamed
+      signature: "cards_issued drops to zero while total card issuance is unchanged"
+      verdict: fail
+      note: >
+        A renamed product reads as a launch that died overnight. This is the silent-rename
+        failure the taxonomy has hit before, in a different vocabulary.
+
+detection:
+  direction: both
+  band_source: forecast
+  warn_pct_change: 30
+  critical_pct_change: 60
+  min_persistence_windows: 1
+  min_denominator: 3
+  robust_scorer: mad
+  multiple_testing: benjamini_hochberg
+  # The whole point of this contract.
+  sparse_history_policy: abstain_with_interval
+
+forecast:
+  enabled: true
+  horizon_days: 7
+  baseline: rolling_median
+  interval_required: true
+  fallback: rolling_median
+  # More history than the product has. The forecast must therefore come back caveated with a wide
+  # band, and the narrative must say early adoption is being monitored rather than projected.
+  min_history_days: 28
+
+causal:
+  enabled: true
+  evidence_rungs: [association, attribution]
+  interventions: [campaign]
+  control_dimensions: [region]
+  degrade_to: association
+
+decision:
+  owner: product_marketing
+  allowed_levers: [extend_launch_campaign, review_activation_funnel, investigate]
+  requires_human_approval: true
+  expected_impact: interval
+
+lineage:
+  tables: [fact_cards, dim_customer]
+  sources: [nexabank_core, nexabank_crm]
+  note: >
+    Issuance is the only signal available this early. Spend and revenue on the product do not
+    exist yet, so no monetary figure may be reported for it at all.
+
+access_restriction:
+  visible_to: [cfo, ops_manager, analyst]
+  suppress_for_others: []
+
+observability:
+  golden_scenarios: [sparse_history]
+  verifier_required: true
+  engine_type: sql
+
+interconnection:
+  driven_by: cost_per_acquisition

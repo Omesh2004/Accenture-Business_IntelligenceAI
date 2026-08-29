@@ -1,0 +1,14 @@
+{
+  "name": "fininsights-e2e",
+  "private": true,
+  "description": "End-to-end browser tests for the analytics dashboard (3001) and NexaBank (3002).",
+  "scripts": {
+    "test": "playwright test",
+    "report": "playwright show-report"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.49.1",
+    "@panva/hkdf": "1.2.1",
+    "jose": "5.9.6"
+  }
+}

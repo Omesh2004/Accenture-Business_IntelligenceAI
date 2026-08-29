@@ -1,8 +1,8 @@
 # DATABASE.md
 
-Everything about ClickHouse for Phase 1: how it works here, the migration procedure (there is
-no runner), the four Foundation fixes that everything downstream depends on, and the exact
-Signal Store DDL to add.
+Everything about ClickHouse for Phase 1: how it works here, the migration runner and the
+procedure around it, the four Foundation fixes that everything downstream depends on, and the
+Signal Store DDL.
 
 ## How the app talks to ClickHouse
 
@@ -17,16 +17,35 @@ Signal Store DDL to add.
 - Deletes/updates do not happen. Correction relies on `ReplacingMergeTree` merges, which is why
   some queries append `FINAL`. Use `FINAL` sparingly; prefer `GROUP BY` + `-Merge` for rollups.
 
-## Migrations: there is no runner
+## Migrations: the runner, and what it does not cover
 
 `storage/schema.sql` is mounted into the ClickHouse init dir and runs ONLY when the data volume
-is empty. Editing it does nothing to a running stack. To apply a schema change to a live stack:
+is empty. Editing it does nothing to a running stack. `storage/migrate.py` (P1-2) closes that gap
+for everything else: it applies `storage/migrations/*.sql` in name order and records each file in
+`feature_intelligence.schema_migrations` by name and content hash, so re-running is a no-op and an
+**edited** migration is reported rather than silently skipped.
 
-1. Add the DDL to `storage/schema.sql` (so a fresh volume is correct).
-2. ALSO apply it by hand to the running instance:
-   ```bash
-   docker compose exec clickhouse clickhouse-client --multiquery < path/to/change.sql
-   ```
+```bash
+docker compose exec -T ingestion-api python storage/migrate.py --status   # list pending
+docker compose exec -T ingestion-api python storage/migrate.py            # apply pending
+```
+
+> **Baseline an already-migrated database before the first apply.** The runner arrived after
+> eighteen migrations had been applied by hand, so an un-baselined live volume sees all of them as
+> pending and replaying the historic ones drops the live materialized view. `migrate.py --baseline`
+> marks the existing set as applied without running it; `_looks_migrated()` detects the case.
+
+The failure this fixed is documented in `storage/schema.sql`'s own header. A fresh
+`docker compose up` created the old 8-column table while the running code required 14, so every
+insert failed with "Unrecognized column", **and the dead-letter fallback failed too** because
+`events_dead_letter.stage` had the same gap. Events were lost with no trace at all.
+
+To add a schema change:
+
+1. Write it as a file in `storage/migrations/`, and mirror it into `storage/schema.sql` (so a
+   fresh volume is correct). The two have diverged before; that is what cost a fresh volume every
+   insert with no trace.
+2. Apply it: `docker compose exec -T ingestion-api python storage/migrate.py`.
 3. Update every SQL string and column list that references the table (there is no compile check;
    a renamed column is a runtime 500 or a silently empty list).
 
@@ -51,23 +70,64 @@ always safe:
 ```sql
 TRUNCATE TABLE feature_intelligence.daily_feature_usage;
 INSERT INTO feature_intelligence.daily_feature_usage
-SELECT tenant_id, event_name, toDate(timestamp) AS date,
+SELECT tenant_id,
+       if(length(event_name_canonical) > 0, event_name_canonical, event_name) AS event_name,
+       toDate(timestamp) AS date,
        uniqExactState(if(length(event_id) > 0, event_id,
            concat('legacy:', user_id, ':', toString(timestamp), ':', event_name, ':', metadata))) AS event_count,
-       uniqState(user_id) AS unique_users
+       uniqExactState(user_id) AS unique_users,
+       sumState(toUInt64(1)) AS raw_rows
 FROM feature_intelligence.events_raw
 GROUP BY tenant_id, event_name, date;
 ```
+
+> **This rebuild cannot restore `raw_rows` faithfully.** It counts rows as they survive in
+> `events_raw`, and `ReplacingMergeTree` has already collapsed any replay — so duplicates that
+> the MV once counted are gone. After a rebuild, `dedup_integrity` reads clean for historic
+> windows whether or not a storm occurred there. Rebuild only when the alternative is a rollup
+> that is already wrong.
 
 `scripts/verify_data_quality.py` compares the two on every run (the ROLLUP check), so this
 cannot drift unnoticed for long.
 
 ## Current tables
 
-`events_raw` (MergeTree, PARTITION toYYYYMM(timestamp), ORDER BY tenant_id,event_name,timestamp;
-`metadata` is a JSON String read with JSONExtract*), `daily_feature_usage` (AggregatingMergeTree
-rollup via `mv_daily_feature_usage`), `tenant_licenses`, `tracking_toggles`, `config_audit_log`,
-`ai_reports`.
+`events_raw` (ReplacingMergeTree(`_inserted_at`), PARTITION toYYYYMM(timestamp),
+ORDER BY tenant_id,event_name,timestamp,event_id; `metadata` is a JSON String read with
+JSONExtract*; `event_name_canonical` is written at ingest), `daily_feature_usage`
+(AggregatingMergeTree rollup via `mv_daily_feature_usage`), `events_dead_letter`,
+`tenant_licenses`, `tracking_toggles`, `config_audit_log`, `ai_reports`.
+
+Plus the ten Signal Store tables (below), the retail facts and dimensions (next section),
+`dim_calendar`, `dim_fee_schedule`, `source_freshness`, `ingest_watermarks`, and the runner's
+`schema_migrations`.
+
+### Retail banking facts and dimensions
+
+All `ReplacingMergeTree(_version)` keyed on the source system's own `updated_at`, so a **full
+replay of any extract is idempotent rather than additive**. This is the property that lets a
+loader be re-run after a partial failure without reconciling anything by hand.
+
+| Table | Grain | Source | Notes |
+|---|---|---|---|
+| `fact_transactions` | transaction | A | `amount Decimal(18,2)`; carries `direction`, `branch_code`, `region`, `mcc`, `merchant_name` |
+| `fact_account_openings` | account | A | A **change feed**. Additive over time |
+| `fact_account_daily` | account-day | A | A **snapshot**. Never sum across dates |
+| `fact_cards` | card | A | `product_name` is the launch dimension |
+| `fact_loan_applications`, `fact_loans` | application, loan | A | mutating entities, cursored on `updatedOn` |
+| `dim_customer` | customer | B | demographics as **brackets**, not raw age or salary |
+| `fact_campaign_interactions` | interaction | B | the funnel CPA divides by, stored as events |
+| `dim_campaign` | campaign | B | real campaigns with real spend; no longer synthetic |
+| `dim_branch` | branch | C | region, city, manager, staffing |
+| `dim_macro_environment` | region-month | C | competitor rate, base rate, unemployment |
+
+**Openings and the snapshot must not be confused.** `fact_account_openings` counts accounts
+created in a window and is additive; `fact_account_daily` is a point-in-time balance sheet and
+summing it across dates double-counts every account once per day it existed. They are separate
+tables for exactly that reason.
+
+**Money is `Decimal`, never `Float`.** A float sum over a few thousand transactions drifts in the
+cents, and a KPI whose value depends on summation order is not reproducible.
 
 ---
 
@@ -79,9 +139,26 @@ Stages 01-08 are built on these. Each is verified against the code, not assumed.
 
 **The problem.** `processing/worker.py:65-66` inserts a batch then commits Kafka offsets
 asynchronously, with `enable.auto.commit = False`. If the worker dies between the insert and the
-commit landing, the batch is re-consumed and **re-inserted**. `events_raw` is a plain `MergeTree`,
-which never deduplicates, so the rows genuinely double. `mv_daily_feature_usage` fires again on
-the replayed insert, so the rollup doubles too.
+commit landing, the batch is re-consumed and **re-inserted**. `events_raw` was a plain `MergeTree`,
+which never deduplicates, so the rows genuinely doubled. `mv_daily_feature_usage` fires again on
+the replayed insert, so the rollup doubled too.
+
+> **Updated 2026-08-28.** `events_raw` is now `ReplacingMergeTree(_inserted_at)` with `event_id`
+> in the sorting key, so a replayed row is collapsed **on merge**. Reads were already safe via
+> `uniqExact(event_id)`, so this changes nothing for correctness — but it does change one thing
+> that matters a great deal:
+>
+> **`count() == uniqExact(event_id)` is no longer a stable invariant.** That expression is
+> `contracts/kyc_completion_rate.yaml`'s `dedup_integrity` hard invariant and the entire basis of
+> demo scenario 1. A real replay produces rows identical on all four sorting-key columns, so once
+> a merge runs the invariant is satisfied again and the storm is invisible. Whether Trust Gate
+> catches it depends on merge timing, which is neither controllable nor deterministic — a direct
+> violation of `CLAUDE.md` rule 12.
+>
+> The seeded fixture only survives because it emits its duplicate pair one minute apart, so the
+> timestamps differ. See `docs/PROPOSAL.md` §2 Block D-ii for the three options; the
+> recommendation is to detect replays at the write boundary in the worker, where the event
+> actually happens, rather than inferring them from a table that erases them.
 
 **Do not use a hash of (source id + source sequence + timestamp).** That was the previous design
 in this file and it does not work: there is no source sequence anywhere in the producer, so two
@@ -224,7 +301,22 @@ summed when background merges collapse blocks — it silently decays. Confirmed 
 hypothetical.
 
 Replacing it with a `uniqExact` state over `event_id` fixes the decay **and** delivers the
-replay-idempotency FOUNDATION-1 set up, because re-inserting identical `event_id`s collapses:
+replay-idempotency FOUNDATION-1 set up, because re-inserting identical `event_id`s collapses.
+
+> **Two things this fix did not cover (verified 2026-08-28), both of which the intelligence layer
+> inherits:**
+>
+> - **`unique_users` is still `AggregateFunction(uniq, String)`** in both `schema.sql` and the
+>   migration below. `uniq` is HyperLogLog, ~0.5% error — approximate by design. `CLAUDE.md`
+>   rule 12 and `docs/PIPELINE_CONTRACT.md` §0 both forbid it, so **any metric function reading
+>   `unique_users` is non-deterministic by construction** and the Signal Store cannot be
+>   byte-identical across runs. It needs to become `uniqExact` (`docs/TASK.md` P0-6).
+> - **The rollup is keyed on the raw `event_name`**, so aliases of one canonical feature are
+>   separate rows and their `uniq` states cannot be merged across them. The read paths work around
+>   that inconsistently — `max(a, b)` in `/features/usage` under-counts, `+=` in
+>   `/predictive/adoption` over-counts — so the same underlying fact yields different unique-user
+>   numbers on different pages. It also carries **no session state**, so no session-grain ratio
+>   (i.e. every ratio contract) can be served from it at all.
 
 ```sql
 -- 1. shadow table with the corrected shape
@@ -293,6 +385,18 @@ Add these to `storage/schema.sql` and apply via the procedure above. Small demo 
 ORDER BY is enough; no partitioning needed. All findings are written here; the narrator may
 state only what these tables contain.
 
+> **Status: applied.** All ten exist in `storage/schema.sql`, in
+> `storage/migrations/2026-08-25_signal_store.sql`, and on the running instance (P1-3).
+>
+> `investigations.watermark_ingested_at` carries the ingest watermark (P1-4).
+> `docs/INTELLIGENCE_LAYER_PROPOSAL.md` §1.2 pins the window once at the top, which is necessary
+> but not sufficient here, because the window is expressed in **event time** and the simulate
+> console backdates events into past partitions via `trackEvent(..., timestampOverride)`. The MV
+> then updates `daily_feature_usage` for those past days. Pinning `max(ingested_at)` alongside the
+> window is what makes a re-run reproduce what was visible at the time. **A column can never be
+> backfilled onto rows that never carried one**, which is why it was added before the first stage
+> wrote a row.
+
 ## The investigation spine
 
 Every table below is joined by `investigation_id`, minted once when a run starts and threaded
@@ -323,7 +427,8 @@ CREATE TABLE IF NOT EXISTS investigations (
     termination_reason String DEFAULT '',-- 'not_instrumented'|'defect'|'ambiguous'|'immaterial'
     dataset          String,            -- 'seeded' | 'live'  -- no gate passes on seeded data
     started_at       DateTime,
-    ended_at         DateTime DEFAULT toDateTime(0)
+    ended_at         DateTime DEFAULT toDateTime(0),
+    watermark_ingested_at DateTime DEFAULT toDateTime(0)  -- pinned max(ingested_at); see above
 ) ENGINE = ReplacingMergeTree(started_at)
 ORDER BY (tenant_id, kpi_id, investigation_id);
 ```
@@ -387,7 +492,7 @@ CREATE TABLE IF NOT EXISTS root_causes (
     explained_pct Float64,
     engine_type   String DEFAULT 'stats'
 ) ENGINE = ReplacingMergeTree()
-ORDER BY (tenant_id, anomaly_id, rank);
+ORDER BY (tenant_id, anomaly_id, fundamental, rank);
 
 -- Stage 04. Runs as a SCHEDULED BATCH, ahead of Detect. Stage 02 scores residuals against the
 -- band stored here; this is not a sparse-history-only table.
@@ -463,7 +568,7 @@ CREATE TABLE IF NOT EXISTS insights (
     abstained     UInt8 DEFAULT 0,
     verifier_pass UInt8 DEFAULT 1
 ) ENGINE = ReplacingMergeTree(generated_at)
-ORDER BY (tenant_id, persona, anomaly_id);
+ORDER BY (tenant_id, persona, kpi_id, anomaly_id);
 
 -- Stage 08. Per-run telemetry. The LLM-vs-non-LLM breakdown reads from here.
 CREATE TABLE IF NOT EXISTS model_runs (
@@ -499,6 +604,10 @@ ORDER BY (tenant_id, insight_id, ts);
 ```
 
 ## How `/ai_report` changes
+
+**Not done.** `api/main.py`'s `/ai_report` still generates over `PRECOMPUTED_LAYER` and caches into
+`ai_reports`; it reads no `insights` row. The duplicate `/insights` route is resolved as part of
+this rewrite, not before it (`docs/TASK.md`, "Deliberately not scheduled").
 
 Keep the route and its response contract so the dashboard and `/admin/app/{id}/summary` do not
 break. Internally it stops calling the LLM directly and instead reads the latest `insights` row

@@ -114,7 +114,7 @@ export const getAccountsByCustomerId = async (
     const accounts = await prisma.account.findMany({
       where: {
         customerId,
-        status: true,
+        lifecycleStatus: "ACTIVE",
       },
     });
 
@@ -158,12 +158,12 @@ export const transferBetweenOwnAccounts = async (
   try {
     // Verify both accounts exist and are active
     const fromAccount = await prisma.account.findUnique({
-      where: { accNo: fromAccountNo, status: true },
+      where: { accNo: fromAccountNo, lifecycleStatus: "ACTIVE" },
       include: { customer: true },
     });
 
     const toAccount = await prisma.account.findUnique({
-      where: { accNo: toAccountNo, status: true },
+      where: { accNo: toAccountNo, lifecycleStatus: "ACTIVE" },
       include: { customer: true },
     });
 
@@ -278,12 +278,12 @@ export const payToPayee = async (
   try {
     // Verify both accounts exist and are active
     const fromAccount = await prisma.account.findUnique({
-      where: { accNo: fromAccountNo, status: true },
+      where: { accNo: fromAccountNo, lifecycleStatus: "ACTIVE" },
       include: { customer: true },
     });
 
     const toAccount = await prisma.account.findUnique({
-      where: { accNo: toAccountNo, status: true },
+      where: { accNo: toAccountNo, lifecycleStatus: "ACTIVE" },
     });
 
     if (!fromAccount) {

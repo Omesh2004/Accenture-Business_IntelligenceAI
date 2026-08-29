@@ -1,9 +1,22 @@
 # VALIDATION_LAYER.md
 
-Status: **design only, not implemented.** No code, table, or dependency described here exists yet.
-This is a proposal for a KPI-registry validation and feedback layer that sits around the Phase 1
-intelligence pipeline (`docs/PHASE_1.md`). Read that file and `docs/KPI_CONTRACT.md` first --
-most of what this layer needs already exists as those pieces.
+Status: **design only, not implemented, and not scheduled.** No code, table, or dependency
+described here exists yet. This is a proposal for a KPI-registry validation and feedback layer
+that sits around the Phase 1 intelligence pipeline (`docs/PHASE_1.md`). Read that file and
+`docs/KPI_CONTRACT.md` first -- most of what this layer needs already exists as those pieces.
+
+> **Scope note, updated 2026-08-29.** Nothing here appears in `docs/TASK.md`, deliberately. The
+> two blockers that kept it unschedulable are gone — the pipeline runs as the `intelligence`
+> service and every Signal Store table is applied — so what remains is a scoping decision, not a
+> dependency:
+>
+> - **Which set is the registry?** `docs/KPI_CONTRACT.md` defines two tiers, and `discover_tier0`
+>   synthesises a Tier 0 contract per canonical event with data on every sweep. Coverage
+>   validation against ten declared contracts means something quite different from validation
+>   against the discovered set. Decide which before building a comparison against it.
+> - **Anti-join against what?** Tier 0 discovery means a metric the pipeline surfaced without a
+>   declared `kpi_id` is now the *normal* case rather than the gap §2 assumes. Re-read §2 against
+>   `Contract.governed` before building `discovered_metrics`.
 
 ## Why this doc exists
 
@@ -31,8 +44,8 @@ the next investigation; it produces a report a human or a later process reads.
 
 ## 1. The registry: `contracts/*.yaml`, not a new store
 
-The registry this design needs already exists: `contracts/kyc_completion_rate.yaml`,
-`loan_approval_volume.yaml`, `pro_revenue.yaml`. Each already carries id, formula, numerator/
+The registry this design needs already exists: the ten files in `contracts/`. Each already
+carries id, formula, numerator/
 denominator (`fundamentals`), dimensions (`allowed`/`excluded`/`availability`), grain, unit,
 source mappings (`source`, `lineage`), and quality invariants (`hard_invariants`/
 `soft_invariants`/`defect_fingerprints`). Duplicating this into a second hand-maintained store
@@ -79,19 +92,21 @@ LEFT JOIN feature_intelligence.investigations i ON i.kpi_id = r.kpi_id
 GROUP BY r.kpi_id;
 ```
 
-What is missing is a place to record a metric the pipeline **surfaced but that has no `kpi_id` in
-the registry.** That case cannot happen with the pipeline as documented today: Detect/Localize
-only ever operate inside one contract's declared fundamentals and dimensions (see
-`docs/KPI_CONTRACT.md`, "grain.entity decides whether Localize is valid"). There is no open-ended
-"scan the dataset for interesting metrics" capability in any of the nine stages. So:
+What is missing is a place to record a metric the pipeline **surfaced but that has no *declared*
+`kpi_id`.** Detect and Localize still only ever operate inside one contract's fundamentals and
+dimensions (see `docs/KPI_CONTRACT.md`, "grain.entity decides whether Localize is valid") — but
+`contracts.discover_tier0` now synthesises a contract per canonical event with data, so those
+metrics already reach `investigations` under their event name, tier 0.
 
-> **This is the one real gap.** "The pipeline discovers useful new metrics on its own" requires a
-> discovery capability that does not exist yet and is not scoped in `docs/PHASE_1.md`. Per
-> CLAUDE.md rule 1, that is a Phase-2-shaped addition and needs its own explicit scoping before
-> any code lands, not something this validation layer can quietly assume.
+> **The gap moved rather than closing.** Tier 0 discovery is enumeration, not judgement: it makes
+> every series answerable, and says nothing about whether one is worth promoting to a declared
+> contract. "The pipeline discovers useful new metrics on its own" is that second thing, and it is
+> still unscoped in `docs/PHASE_1.md`. Per CLAUDE.md rule 1 it is Phase-2-shaped and needs its own
+> scoping before any code lands. What changed is that the raw material now exists: a promotion rule
+> would count Tier 0 ids by materiality over time rather than needing a new discovery stage.
 
-If/when that capability is designed, its output would land in a small holding table so this layer
-has something to count without re-running discovery itself:
+If/when that promotion rule is designed, its output would land in a small holding table so this
+layer has something to count without re-deriving it from `investigations` every run:
 
 ```sql
 CREATE TABLE IF NOT EXISTS feature_intelligence.discovered_metrics (

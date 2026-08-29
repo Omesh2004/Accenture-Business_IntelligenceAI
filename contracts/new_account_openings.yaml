@@ -1,0 +1,142 @@
+id: new_account_openings
+name: New Account Openings
+definition: >
+  Count of accounts opened, split by product type and region. A change feed, not a balance:
+  openings are additive over time, whereas the account snapshot they are often confused with is
+  a point-in-time stock that must never be summed across dates.
+formula: count(accounts where opened_at in window)
+unit: count
+additivity: additive
+
+grain:
+  time: daily
+  entity: account
+
+sources:
+  - id: nexabank_core
+    system: ClickHouse.fact_account_openings
+    grain: account
+    cadence: hourly_batch
+    freshness_sla_minutes: 120
+  - id: nexabank_crm
+    system: ClickHouse.fact_campaign_interactions
+    grain: interaction
+    cadence: weekly
+    freshness_sla_minutes: 10080
+
+readiness:
+  status: ready
+  gate: >
+    fact_account_openings is keyed on (tenant, opened_at, account_no) and loaded from a watermarked
+    change feed, so a replay collapses rather than double-counting an opening.
+
+identity:
+  account_no: required
+  customer_id: hashed
+
+fundamentals:
+  - metric: accounts_opened
+    table: fact_account_openings
+    measure: "1"
+    aggregation: count
+    additivity: additive
+    engine_type: sql
+  - metric: active_accounts_opened
+    table: fact_account_openings
+    measure: "1"
+    aggregation: count
+    filter:
+      lifecycle_status: ACTIVE
+    additivity: additive
+    engine_type: sql
+
+dimensions:
+  allowed: [account_type, region, branch_code, lifecycle_status]
+  max_depth: 2
+  min_segment_volume: 3
+  availability:
+    account_type: {seeded: true, live: true}
+    region: {seeded: true, live: true}
+    branch_code: {seeded: true, live: true}
+    lifecycle_status: {seeded: true, live: true}
+
+quality:
+  freshness_sla_minutes: 120
+  provisional_window_minutes: 60
+  hard_invariants:
+    - id: openings_non_negative
+      expr: accounts_opened >= 0
+      on_fail: quarantine
+    - id: active_subset_of_total
+      expr: active_accounts_opened <= accounts_opened
+      on_fail: quarantine
+      note: "A subset larger than its superset is a join fan-out, not a business event."
+  soft_invariants:
+    - id: opening_spike_plausible
+      expr: accounts_opened <= 500
+      on_fail: ambiguous
+      note: >
+        A very large single-window spike is as likely to be a bot or a duplicated load as real
+        demand. This is the low-confidence scenario: abstain, name the cheapest check, and do
+        NOT credit a campaign that cannot be corroborated.
+  defect_fingerprints:
+    - id: unattributed_opening_spike
+      signature: "accounts_opened spikes while no campaign in nexabank_crm covers the window"
+      verdict: ambiguous
+    - id: batch_not_loaded
+      signature: "accounts_opened == 0 while clickstream registration events are unchanged"
+      verdict: fail
+
+detection:
+  direction: both
+  band_source: forecast
+  warn_pct_change: 20
+  critical_pct_change: 50
+  min_persistence_windows: 1
+  min_denominator: 5
+  robust_scorer: mad
+  multiple_testing: benjamini_hochberg
+  sparse_history_policy: abstain_with_interval
+
+forecast:
+  enabled: true
+  horizon_days: 7
+  baseline: seasonal_naive
+  interval_required: true
+  fallback: rolling_median
+  min_history_days: 14
+
+# Attribution to a campaign is only permitted when a campaign actually covers the window. An
+# unattributed spike must degrade to association, which is what produces the abstention.
+causal:
+  enabled: true
+  evidence_rungs: [association, attribution, corroborated_cause]
+  interventions: [campaign]
+  control_dimensions: [region, account_type]
+  degrade_to: association
+
+decision:
+  owner: retail_banking
+  allowed_levers: [scale_campaign, review_onboarding_funnel, investigate]
+  requires_human_approval: true
+  expected_impact: interval
+
+lineage:
+  tables: [fact_account_openings, fact_campaign_interactions]
+  sources: [nexabank_core, nexabank_crm]
+  note: >
+    The CRM source is present so a spike can be checked against live campaigns. Its weekly cadence
+    means a fresh spike may legitimately have no campaign row yet -- which is a reason to abstain,
+    not a reason to declare the spike organic.
+
+access_restriction:
+  visible_to: [cfo, ops_manager, analyst]
+  suppress_for_others: []
+
+observability:
+  golden_scenarios: [real_movement, low_confidence]
+  verifier_required: true
+  engine_type: sql
+
+interconnection:
+  drives: [net_deposit_growth]

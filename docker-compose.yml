@@ -63,6 +63,15 @@ services:
       CLICKHOUSE_DB: feature_intelligence
       CLICKHOUSE_USER: default
       CLICKHOUSE_PASSWORD: clickhouse
+      # P0-1: today() is server-local. Unpinned, the KPI card, the traffic chart and the rollup
+      # bucket the same event into different days.
+      TZ: UTC
+    healthcheck:
+      test: ["CMD", "clickhouse-client", "--password", "clickhouse", "--query", "SELECT 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
 
   # ═══════════════════════════════════════════════════════════
   # NUCLEUS PYTHON BACKEND SERVICES
@@ -76,7 +85,7 @@ services:
       broker:
         condition: service_healthy
       clickhouse:
-        condition: service_started
+        condition: service_healthy
     ports:
       - "8000:8000"
     environment:
@@ -85,7 +94,7 @@ services:
       - CLICKHOUSE_HOST=clickhouse
       - CLICKHOUSE_USER=default
       - CLICKHOUSE_PASSWORD=clickhouse
-    command: uvicorn ingestion.main:app --host 0.0.0.0 --port 8000 --reload
+    command: uvicorn ingestion.main:app --host 0.0.0.0 --port 8000
     restart: unless-stopped
 
   processor-worker:
@@ -98,7 +107,7 @@ services:
       broker:
         condition: service_healthy
       clickhouse:
-        condition: service_started
+        condition: service_healthy
     environment:
       - KAFKA_BROKER_URL=broker:29092
       - CLICKHOUSE_HOST=clickhouse
@@ -107,12 +116,38 @@ services:
     command: python processing/worker.py
     restart: unless-stopped
 
+  # D3: the intelligence layer gets its own container -- same image, different command, so it
+  # has an isolated process and scheduler without a second Dockerfile.
+  intelligence:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    environment:
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=clickhouse
+      - INTELLIGENCE_TENANTS=nexabank,safexbank
+      - INTELLIGENCE_WINDOW_DAYS=7
+      - INTELLIGENCE_DATASET=seeded
+      - EXTRACT_API_URL=http://nexabank-backend:5000/api
+      - EXTRACT_API_TOKEN=${EXTRACT_API_TOKEN:-local-dev-extract-token}
+      # Narration is deterministic unless this is 1. The narrator discovers the model from the
+      # server, so no model name is pinned here.
+      - INTELLIGENCE_LLM=${INTELLIGENCE_LLM:-0}
+      - VLLM_URL=http://vllm-server:8000/v1
+    command: python api/intelligence/service.py
+    restart: unless-stopped
+
   analytics-api:
     build:
       context: .
       dockerfile: Dockerfile
     depends_on:
-      - clickhouse
+      clickhouse:
+        condition: service_healthy
     ports:
       - "8001:8001"
     environment:
@@ -121,7 +156,8 @@ services:
       - CLICKHOUSE_USER=default
       - CLICKHOUSE_PASSWORD=clickhouse
       - VLLM_URL=http://vllm-server:8000/v1
-    command: uvicorn api.main:app --host 0.0.0.0 --port 8001 --reload
+      - INTELLIGENCE_LLM=${INTELLIGENCE_LLM:-0}
+    command: uvicorn api.main:app --host 0.0.0.0 --port 8001
     restart: unless-stopped
 
   # ═══════════════════════════════════════════════════════════
@@ -129,6 +165,8 @@ services:
   # ═══════════════════════════════════════════════════════════
 
   vllm-server:
+    # Opt-in: needs an NVIDIA GPU. `docker compose --profile gpu up vllm-server`
+    profiles: ["gpu"]
     image: vllm/vllm-openai:latest
     container_name: nucleus-vllm
     ports:
@@ -140,6 +178,20 @@ services:
       - .env
     environment:
       - HF_TOKEN=${HF_TOKEN}
+      # Pin the weights instead of letting free VRAM choose a tier. Empty = auto-select.
+      - VLLM_MODEL=${VLLM_MODEL:-}
+      - VLLM_MAX_LEN=${VLLM_MAX_LEN:-}
+      - VLLM_GPU_UTIL=${VLLM_GPU_UTIL:-}
+      # vLLM's CUDA platform disables pinned memory on WSL2 by default. Its V1 GPU model runner
+      # then cannot build a UVA buffer and the engine dies with "UVA is not available" before
+      # loading a single weight. Pinned memory does work on WSL2 kernels >= 4.19.121, which is
+      # every current one; this opts back in. Harmless on native Linux, where the WSL branch is
+      # never taken.
+      - VLLM_WSL2_ENABLE_PIN_MEMORY=${VLLM_WSL2_ENABLE_PIN_MEMORY:-1}
+      # huggingface_hub's Xet transfer path fails mid-download behind some networks with
+      # "CAS Client Error: Request middleware error", and the engine dies before loading a weight.
+      # Plain HTTPS is slower on a cold pull and survives a flaky link.
+      - HF_HUB_DISABLE_XET=${HF_HUB_DISABLE_XET:-1}
     deploy:
       resources:
         reservations:
@@ -167,6 +219,7 @@ services:
       - ANALYTICS_API_HOST=analytics-api
       - INGESTION_API_HOST=ingestion-api
       - NEXT_PUBLIC_ANALYTICS_WS_URL=ws://analytics-api:8001
+      - NEXT_MODE=${NEXT_MODE:-development}
     env_file:
       - ./analytics-dashboard/.env.local
     volumes:
@@ -201,6 +254,8 @@ services:
       - PORT=5000
       - FRONTEND_URL=http://localhost:3002
       - INGESTION_API_URL=http://ingestion-api:8000/events
+      # Shared secret for the batch extract; the endpoints refuse to serve without it.
+      - EXTRACT_API_TOKEN=${EXTRACT_API_TOKEN:-local-dev-extract-token}
     volumes:
       # Hot-reload: mount source code (but NOT node_modules)
       - ./NexaBank/backend/src:/app/src
@@ -215,6 +270,7 @@ services:
     ports:
       - "3002:3002"
     environment:
+      - NEXT_MODE=${NEXT_MODE:-development}
       - NEXT_PUBLIC_API_URL=http://localhost:5000/api
     volumes:
       # Hot-reload: mount source directories
@@ -234,6 +290,76 @@ services:
 # PERSISTENT VOLUMES — survive `docker compose down`
 # Only removed with `docker compose down -v`
 # ═══════════════════════════════════════════════════════════
+  # ═══════════════════════════════════════════════════════════
+  # Test runner — dev deps stay out of every runtime image.
+  #   docker compose --profile test run --rm tests
+  # ═══════════════════════════════════════════════════════════
+
+  tests:
+    profiles: ["test"]
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        INSTALL_DEV: "1"
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    environment:
+      - DEPLOYMENT_MODE=CLOUD
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=clickhouse
+      # Service names, not localhost: inside a container localhost is the container itself, and
+      # scripts/seed_data.py would post every scenario event into the void and report success.
+      - INGEST_URL=http://ingestion-api:8000/events
+      - ANALYTICS_URL=http://analytics-api:8001/metrics/realtime_users
+      - EXTRACT_API_URL=http://nexabank-backend:5000/api
+      - EXTRACT_API_TOKEN=${EXTRACT_API_TOKEN:-local-dev-extract-token}
+    volumes:
+      # Mounted, not baked: a gate that lints reader.py must see the working copy.
+      - ./tests:/app/tests:ro
+      - ./scripts:/app/scripts:ro
+      - ./api:/app/api:ro
+      - ./contracts:/app/contracts:ro
+      # Entitlement config the persona tests assert on. Baked, a stale copy passes the gate.
+      - ./rbac.json:/app/rbac.json:ro
+      # NOT read-only, and not baked: seed_data.py WRITES planted_truth.json here and the gates
+      # read it back. Baked into the image, the seed wrote to a container that was then discarded
+      # and every gate scored the previous run's fixture.
+      - ./fixtures:/app/fixtures
+      # Source-only, for the static cross-checks that compare dashboard route policy against the
+      # sidebar. Without it those tests SKIP, which reads as green and guards nothing.
+      - ./analytics-dashboard/src:/app/analytics-dashboard/src:ro
+      # schema.sql is compared against the live database; baked into the image the test
+      # reads a stale copy and reports drift that was already fixed.
+      - ./storage:/app/storage:ro
+    command: python -m pytest tests/ -q
+
+  # ═══════════════════════════════════════════════════════════
+  # Playwright end-to-end tests. Official image so the browsers are
+  # already present -- installing Chromium into the app images would
+  # bloat every runtime container for a dev-only tool.
+  #   docker compose --profile test run --rm e2e
+  # ═══════════════════════════════════════════════════════════
+
+  e2e:
+    profiles: ["test"]
+    image: mcr.microsoft.com/playwright:v1.49.1-noble
+    working_dir: /e2e
+    environment:
+      - DASHBOARD_URL=http://analytics-dashboard:3001
+      - NEXABANK_URL=http://nexabank-frontend:3002
+      - NEXTAUTH_SECRET=nucleus-analytics-secret-key-2026
+      - CI=${CI:-}
+    volumes:
+      - ./e2e:/e2e
+      # rbac.json decides which role an email resolves to; the specs assert against it.
+      - ./rbac.json:/rbac.json:ro
+    # npm ci on first run; the node_modules volume keeps it out of the repo.
+    command: sh -c "npm install --no-audit --no-fund && npx playwright test"
+
+
 volumes:
   clickhouse_data:
     driver: local

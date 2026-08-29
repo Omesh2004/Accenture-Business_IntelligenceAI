@@ -20,6 +20,11 @@ Run from the repo root, in an environment with this project's actual dependencie
     python -m unittest tests.test_phase_g_followup -v
 """
 import asyncio
+import time as _time
+
+# Time-relative: a fixed past literal now fails FeatureEvent's timestamp bounds (P0-4).
+_NOW_TS = _time.time()
+
 import inspect
 import os
 import sys
@@ -100,7 +105,7 @@ class InsertDirectToClickHouseRetry(unittest.TestCase):
 
     BASE_EVENT = {
         "event_id": "evt_1", "tenant_id": "nexabank", "event_name": "x.y.z",
-        "user_id": "u1", "channel": "web", "timestamp": 1718361234.56, "metadata": {},
+        "user_id": "u1", "channel": "web", "timestamp": _NOW_TS, "metadata": {},
     }
 
     def test_succeeds_immediately_when_clickhouse_is_healthy(self):

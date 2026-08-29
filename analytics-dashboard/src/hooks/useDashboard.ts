@@ -4,7 +4,7 @@ import { useEffect, useCallback, useMemo, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAppDispatch, useAppSelector } from '@/lib/store';
 import { setTimeRange, setSelectedTenants, updateRealTimeUsers, updateKPIMetrics } from '@/lib/dashboardSlice';
-import { TimeRange } from '@/types';
+import { TimeRange, LocationData, AuditLog } from '@/types';
 import { useSession } from 'next-auth/react';
 import { usePathname } from 'next/navigation';
 import { dashboardAPI } from '@/lib/api';
@@ -122,9 +122,15 @@ export function useDashboardData() {
     return timeRangeToParam(dashboardState.timeRange);
   }, [dashboardState.timeRange]);
 
+  // Super admins are refused detailed analytics by RBACMiddleware, so asking for these two was a
+  // guaranteed 403 on every page load -- two console errors for a policy the client already
+  // knows. Skip the call rather than make it and swallow the answer.
+  const role = session?.user?.role;
+  const mayReadDetailedAnalytics = role === 'app_admin';
+
   // ─── Core dashboard data (React Query) ───
   const { data: dashboardData, isLoading, isFetching } = useQuery({
-    queryKey: ['dashboardData', tenantsParam, rangeParam],
+    queryKey: ['dashboardData', tenantsParam, rangeParam, role],
     queryFn: async () => {
       const [
         kpiMetrics,
@@ -158,8 +164,12 @@ export function useDashboardData() {
         dashboardAPI.getTopPages(tenantsParam, rangeParam),
         dashboardAPI.getDeviceBreakdown(tenantsParam, rangeParam),
         dashboardAPI.getAcquisitionChannels(tenantsParam, rangeParam),
-        dashboardAPI.getLocations(tenantsParam, rangeParam),
-        dashboardAPI.getAuditLogs(tenantsParam, rangeParam),
+        mayReadDetailedAnalytics
+          ? dashboardAPI.getLocations(tenantsParam, rangeParam)
+          : Promise.resolve([] as LocationData[]),
+        mayReadDetailedAnalytics
+          ? dashboardAPI.getAuditLogs(tenantsParam, rangeParam)
+          : Promise.resolve([] as AuditLog[]),
         dashboardAPI.getFeatureConfigs(tenantsParam, rangeParam),
         dashboardAPI.getRetentionData(tenantsParam, rangeParam),
       ]);

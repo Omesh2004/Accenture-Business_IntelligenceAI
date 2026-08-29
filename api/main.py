@@ -1,9 +1,13 @@
+import json
+import logging
 import sys
 import os
 from urllib.parse import parse_qsl, urlencode
 from typing import List, Optional
 from fastapi import FastAPI, Query, HTTPException, Request
+from pydantic import BaseModel as _BaseModel
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -17,14 +21,22 @@ from core.middleware import require_cloud_mode, require_tenant_access
 # Alias for Python's built-in range() since many endpoints use 'range' as a query param name
 builtins_range = range
 
+MIN_RANGE_DAYS = 1
+MAX_RANGE_DAYS = 365
+
+
 def parse_range(range_str: str) -> int:
-    if not range_str: return 7
+    """Clamped to [1, 365]: a negative range produced a future date and a silently empty
+    result, and an unbounded one a full-table scan."""
+    if not range_str:
+        return 7
     range_str = range_str.lower().strip()
-    if range_str.endswith('d'):
-        try: return int(range_str[:-1])
-        except ValueError: return 7
-    try: return int(range_str)
-    except ValueError: return 7
+    raw = range_str[:-1] if range_str.endswith('d') else range_str
+    try:
+        days = int(raw)
+    except ValueError:
+        return 7
+    return max(MIN_RANGE_DAYS, min(days, MAX_RANGE_DAYS))
 
 
 TENANT_ALIAS_MAP = {
@@ -194,13 +206,14 @@ app = FastAPI(
     description="APIs for feature adoption, funnel analysis, and rule-based insights."
 )
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# P3-13. allow_origins=["*"] with allow_credentials=True is invalid per the CORS spec and
+# browsers reject the combination outright. Explicit origins, overridable per deployment.
+CORS_ALLOW_ORIGINS = [
+    o.strip() for o in os.environ.get(
+        "CORS_ALLOW_ORIGINS",
+        "http://localhost:3000,http://localhost:3001,http://localhost:3002",
+    ).split(",") if o.strip()
+]
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware
 
@@ -215,6 +228,22 @@ class RBACMiddleware(BaseHTTPMiddleware):
     """
     
     # Endpoints that are too sensitive for super_admin (raw data, user-level details, tenant-specific analytics)
+    # /intelligence is persona-gated and entitlement-filtered server-side, so it returns a
+    # narrative, not detailed rows. rbac.json maps super_admin -> the cfo persona; without it here
+    # that mapping is dead config and a CFO can never reach their own narrative.
+    COMPANY_ADMIN_ALLOWED = [
+        "/admin",
+        "/metrics/kpi",
+        "/insights",
+        "/tenants",
+        "/features/usage",
+        "/deployment",
+        "/ai_report",
+        "/tracking",
+        "/config",
+        "/intelligence",
+    ]
+
     COMPANY_ADMIN_BLOCKED = [
         "/audit_logs",
         "/locations",
@@ -265,8 +294,7 @@ class RBACMiddleware(BaseHTTPMiddleware):
                 )
             
             # Explicitly allow only these patterns for super_admin
-            allowed = ["/admin", "/metrics/kpi", "/insights", "/tenants", "/features/usage", "/deployment", "/ai_report", "/tracking", "/config"]
-            if not any(path.startswith(prefix) for prefix in allowed):
+            if not any(path.startswith(p) for p in self.COMPANY_ADMIN_ALLOWED):
                 return JSONResponse(
                     status_code=403, 
                     content={"detail": "Forbidden: Endpoint not available for super admin role."}
@@ -326,7 +354,68 @@ class RBACMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         return response
 
+logger = logging.getLogger(__name__)
+
+
+# rbac.json is mounted read-only into the container; cached because it is read per request.
+# Personas live here so a persona is resolved from the same file that grants tenant scope.
+_RBAC_PATH = os.environ.get("RBAC_CONFIG_PATH", "/rbac.json")
+_rbac_cache: dict | None = None
+
+
+def load_rbac_config() -> dict:
+    global _rbac_cache
+    if _rbac_cache is None:
+        for candidate in (_RBAC_PATH,
+                          os.path.join(os.path.dirname(os.path.dirname(
+                              os.path.abspath(__file__))), "rbac.json")):
+            try:
+                with open(candidate, encoding="utf-8") as fh:
+                    _rbac_cache = json.load(fh)
+                    break
+            except (OSError, ValueError):
+                continue
+        else:
+            _rbac_cache = {}
+    return _rbac_cache
+
+
+class AskRequest(_BaseModel):
+    """An ad-hoc question. Persona is advisory; the server resolves it from identity."""
+    question: str
+    persona: str | None = None
+
+
+class OutcomeRequest(_BaseModel):
+    """Feedback on a published insight."""
+    tenant_id: str
+    investigation_id: str
+    insight_id: str
+    signal: str
+    value: str
+    actor: str
+
+
 app.add_middleware(RBACMiddleware)
+
+# P2-2. Starlette inserts at position 0, so the LAST added middleware is outermost. CORS must be
+# added after RBAC so that RBAC's early 403 still passes back through it and reaches the browser
+# as a 403 rather than an opaque CORS error.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=CORS_ALLOW_ORIGINS,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# Added LAST, so it is outermost and compresses everything the other middleware produce -- including
+# CORS-decorated responses, whose headers are unaffected because only the body is compressed.
+# These endpoints return JSON arrays of per-feature/per-day rows that compress by roughly 6x, and
+# nothing was compressing them: a gzip-requesting client got the identical byte count back.
+# minimum_size keeps small bodies uncompressed, where the CPU and header overhead would exceed
+# the saving.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 from fastapi import WebSocket, WebSocketDisconnect
 from api.websocket_manager import manager, start_websocket_background_tasks
@@ -354,6 +443,12 @@ async def websocket_dashboard(websocket: WebSocket, tenant_id: str):
             # Wait for any incoming keep-alive or message
             _ = await websocket.receive_text()
     except WebSocketDisconnect:
+        pass
+    except Exception:
+        logger.exception("WebSocket closed abnormally for tenant %s", normalized_tenant)
+    finally:
+        # I4: only WebSocketDisconnect was caught, so any other exception stranded the socket
+        # in active_connections and the 10s poller kept querying for a dead tenant.
         manager.disconnect(websocket, normalized_tenant)
 
 
@@ -379,14 +474,16 @@ def get_available_tenants(
         # Phase E (item 8, docs/audits/clickhouse_pipeline_audit_phase1_findings.md): reads the
         # dedup-safe rollup instead of count()/uniq() over raw events_raw rows, which double
         # count under Kafka replay. Grouping by tenant_id only (dropping event_name/date) is a
-        # valid uniqExactMerge/uniqMerge use -- merging states across dates/events for one tenant.
+        # valid uniqExactMerge use -- merging states across dates/events for one tenant.
+        # Both columns are AggregateFunction(uniqExact, String); the Merge suffix MUST match
+        # the state's own function or ClickHouse raises ILLEGAL_TYPE_OF_ARGUMENT.
         sql = """
             SELECT
                 tenant_id as id,
                 uniqExactMerge(event_count) as event_count,
-                uniqMerge(unique_users) as unique_users
+                uniqExactMerge(unique_users) as unique_users
             FROM feature_intelligence.daily_feature_usage
-            WHERE date >= today() - %(days)s
+            WHERE date >= toDate(now('UTC')) - %(days)s AND date < toDate(now('UTC'))
             GROUP BY tenant_id
             ORDER BY event_count DESC
         """
@@ -435,14 +532,14 @@ def get_feature_usage(tenants: str = Query(..., description="Comma-separated lis
     params = {"tenant_id": tenant_list[0], "days": days} if len(tenant_list) == 1 else {"tenant_ids": tuple(tenant_list), "days": days}
 
     # Phase E (item 8): rollup instead of raw count()/uniq() -- grouped by event_name only
-    # (dropping date), a valid uniqExactMerge/uniqMerge use across the whole range.
+    # (dropping date), a valid uniqExactMerge use across the whole range.
     sql = f"""
         SELECT
             event_name,
             uniqExactMerge(event_count) as total_interactions,
-            uniqMerge(unique_users) as unique_users
+            uniqExactMerge(unique_users) as unique_users
         FROM feature_intelligence.daily_feature_usage
-        WHERE {cond} AND date >= today() - %(days)s
+        WHERE {cond} AND date >= toDate(now('UTC')) - %(days)s AND date < toDate(now('UTC'))
         GROUP BY event_name
         ORDER BY total_interactions DESC
     """
@@ -504,9 +601,6 @@ def get_funnel_analysis(
     if len(step_events) < 2:
         raise HTTPException(status_code=400, detail="At least two steps required for a funnel.")
 
-    def sql_quote(value: str) -> str:
-        return value.replace("'", "''")
-
     # The alias dict is hand-maintained and only covers names given an EXPLICIT entry.
     # canonicalize_event_name also collapses names by RULE -- e.g. loan.kyc_started.action
     # (what enforceTaxonomy produces from free.loan.kyc_started) resolves to
@@ -519,7 +613,7 @@ def get_funnel_analysis(
             f"""
             SELECT DISTINCT event_name
             FROM feature_intelligence.events_raw
-            WHERE {cond} AND timestamp >= today() - %(days)s
+            WHERE {cond} AND timestamp >= toDate(now('UTC')) - %(days)s AND timestamp < toDate(now('UTC')) AND timestamp < toDate(now('UTC'))
             """,
             params,
         )
@@ -545,11 +639,17 @@ def get_funnel_analysis(
         })
         return [a for a in sorted(aliases) if a]
 
+    # BOUND, never interpolated. The previous sql_quote() only doubled single quotes, but
+    # ClickHouse honours backslash escapes inside string literals -- so a step name ending in a
+    # backslash escaped the closing quote and broke out of the IN list. Verified: a `steps=a\`
+    # request returned a ClickHouse SYNTAX_ERROR straight to the caller. `steps` is caller
+    # supplied, so that was arbitrary SQL against events_raw.
     step_variants = [expand_step_aliases(step) for step in step_events]
     condition_tokens = []
-    for variants in step_variants:
-        quoted = ", ".join(["'" + sql_quote(v) + "'" for v in variants])
-        condition_tokens.append(f"event_name IN ({quoted})")
+    for i, variants in enumerate(step_variants):
+        key = f"step_variants_{i}"
+        params[key] = tuple(variants) or ("",)
+        condition_tokens.append(f"event_name IN %({key})s")
     conditions = ", ".join(condition_tokens)
     
     sql = f"""
@@ -564,7 +664,7 @@ def get_funnel_analysis(
                     {conditions}
                 ) as level
             FROM feature_intelligence.events_raw
-            WHERE {cond} AND timestamp >= today() - %(days)s
+            WHERE {cond} AND timestamp >= toDate(now('UTC')) - %(days)s AND timestamp < toDate(now('UTC')) AND timestamp < toDate(now('UTC'))
             GROUP BY user_id
         )
         GROUP BY level
@@ -631,18 +731,27 @@ def get_insights(tenants: str = Query(..., description="Comma-separated list of 
     tenant_id = tenants
     require_tenant_access(tenant_id)
 
+    # TTL is enforced on the READ. AI_CACHE_TTL was declared but only ever compared inside
+    # /ai_report, so this path served an entry of any age -- a 56-year-old planted entry came
+    # back as cached: True. `"insights" in` rather than truthiness so an empty-but-fresh result
+    # is also honoured instead of being recomputed on every request.
     cached_data = AI_REPORT_CACHE.get(tenant_id)
-    if cached_data and cached_data.get("insights"):
+    if (cached_data and "insights" in cached_data
+            and time.time() - cached_data.get("timestamp", 0) < AI_CACHE_TTL):
         return {"tenant_id": tenant_id, "insights": cached_data["insights"], "cached": True}
 
     # Try loading from ClickHouse if in-memory cache is empty
     import json as _json
     try:
+        # Bounded by the same TTL. ai_reports is ReplacingMergeTree(generated_at) with no expiry,
+        # so without this bound a report generated weeks ago was returned as cached: True.
         sql_db = """
             SELECT insights FROM feature_intelligence.ai_reports FINAL
-            WHERE tenant_id = %(tenant_id)s LIMIT 1
+            WHERE tenant_id = %(tenant_id)s
+              AND generated_at >= now('UTC') - toIntervalSecond(%(ttl)s)
+            LIMIT 1
         """
-        db_rows = ch_client.query(sql_db, {"tenant_id": tenant_id})
+        db_rows = ch_client.query(sql_db, {"tenant_id": tenant_id, "ttl": int(AI_CACHE_TTL)})
         if db_rows and db_rows[0].get("insights"):
             raw = db_rows[0]["insights"]
             parsed = _json.loads(raw) if isinstance(raw, str) else raw
@@ -652,12 +761,13 @@ def get_insights(tenants: str = Query(..., description="Comma-separated list of 
         pass
 
     insights_data = generate_insights(tenant_id)
-    existing = AI_REPORT_CACHE.get(tenant_id, {})
+    # Stamp the CURRENT time. Carrying the previous entry's timestamp forward meant an entry could
+    # never be refreshed into looking fresh once a TTL was applied to the read.
     AI_REPORT_CACHE[tenant_id] = {
-        **existing,
-        "timestamp": existing.get("timestamp", time.time()),
+        **AI_REPORT_CACHE.get(tenant_id, {}),
+        "timestamp": time.time(),
         "insights": insights_data,
-        "generated_at": existing.get("generated_at", datetime.now(timezone.utc).replace(tzinfo=None).isoformat()),
+        "generated_at": datetime.now(timezone.utc).replace(tzinfo=None).isoformat(),
     }
     return {"tenant_id": tenant_id, "insights": insights_data, "cached": False}
 
@@ -681,7 +791,7 @@ def get_kpi_metrics(tenants: str = Query(..., description="Comma-separated list 
                 uniqExact({DEDUP_EVENT_KEY}) as total_events,
                 groupUniqArray(event_name) as event_names
             FROM feature_intelligence.events_raw
-            WHERE {cond} AND timestamp >= today() - %(days)s
+            WHERE {cond} AND timestamp >= toDate(now('UTC')) - %(days)s AND timestamp < toDate(now('UTC')) AND timestamp < toDate(now('UTC'))
         """
         res_current = ch_client.query(sql_current, params)
         cur = res_current[0] if res_current else {"total_events": 0, "event_names": []}
@@ -695,7 +805,7 @@ def get_kpi_metrics(tenants: str = Query(..., description="Comma-separated list 
                 uniqExact({DEDUP_EVENT_KEY}) as total_events,
                 groupUniqArray(event_name) as event_names
             FROM feature_intelligence.events_raw
-            WHERE {cond} AND timestamp >= today() - (%(days)s * 2) AND timestamp < today() - %(days)s
+            WHERE {cond} AND timestamp >= toDate(now('UTC')) - (%(days)s * 2) AND timestamp < toDate(now('UTC')) - %(days)s
         """
         res_prev = ch_client.query(sql_prev, params)
         prev = res_prev[0] if res_prev else {"total_events": 0, "event_names": []}
@@ -726,10 +836,15 @@ def get_kpi_metrics(tenants: str = Query(..., description="Comma-separated list 
                    count() as total_rows
             FROM (
                 SELECT
-                    any(if(JSONHas(metadata, 'response_time_ms'), JSONExtractFloat(metadata, 'response_time_ms'), 15 + (cityHash64(event_name, toString(timestamp)) %% 285))) as rt,
-                    any(JSONHas(metadata, 'response_time_ms')) as has_measured
+                    min(if(JSONHas(metadata, 'response_time_ms'), JSONExtractFloat(metadata, 'response_time_ms'), 15 + (cityHash64(event_name, toString(timestamp)) %% 285))) as rt,
+                    -- P0-9. Presence of the key proved nothing: the producer always set it, to a
+                    -- simulated value, so `synthesised` was structurally 0 and the honesty badge
+                    -- could never fire. The producer now declares what it invented in
+                    -- metadata._simulated, so ask that instead.
+                    min(JSONHas(metadata, 'response_time_ms')
+                        AND NOT has(JSONExtractArrayRaw(metadata, '_simulated'), '\"response_time_ms\"')) as has_measured
                 FROM feature_intelligence.events_raw
-                WHERE {cond} AND timestamp >= today() - %(days)s
+                WHERE {cond} AND timestamp >= toDate(now('UTC')) - %(days)s AND timestamp < toDate(now('UTC')) AND timestamp < toDate(now('UTC'))
                 GROUP BY {DEDUP_EVENT_KEY}
             )
         """
@@ -746,9 +861,9 @@ def get_kpi_metrics(tenants: str = Query(..., description="Comma-separated list 
             SELECT avg(rt) as avg_rt
             FROM (
                 SELECT
-                    any(if(JSONHas(metadata, 'response_time_ms'), JSONExtractFloat(metadata, 'response_time_ms'), 15 + (cityHash64(event_name, toString(timestamp)) %% 285))) as rt
+                    min(if(JSONHas(metadata, 'response_time_ms'), JSONExtractFloat(metadata, 'response_time_ms'), 15 + (cityHash64(event_name, toString(timestamp)) %% 285))) as rt
                 FROM feature_intelligence.events_raw
-                WHERE {cond} AND timestamp >= today() - (%(days)s * 2) AND timestamp < today() - %(days)s
+                WHERE {cond} AND timestamp >= toDate(now('UTC')) - (%(days)s * 2) AND timestamp < toDate(now('UTC')) - %(days)s
                 GROUP BY {DEDUP_EVENT_KEY}
             )
         """
@@ -767,7 +882,7 @@ def get_kpi_metrics(tenants: str = Query(..., description="Comma-separated list 
                 uniqExactIf({DEDUP_EVENT_KEY}, lower(event_name) LIKE '%%error%%' OR lower(event_name) LIKE '%%fail%%') as error_events,
                 uniqExact({DEDUP_EVENT_KEY}) as total
             FROM feature_intelligence.events_raw
-            WHERE {cond} AND timestamp >= today() - %(days)s
+            WHERE {cond} AND timestamp >= toDate(now('UTC')) - %(days)s AND timestamp < toDate(now('UTC')) AND timestamp < toDate(now('UTC'))
         """
         res_err = ch_client.query(sql_error, params)
         err_row = res_err[0] if res_err else {"error_events": 0, "total": 1}
@@ -779,7 +894,7 @@ def get_kpi_metrics(tenants: str = Query(..., description="Comma-separated list 
                 uniqExactIf({DEDUP_EVENT_KEY}, lower(event_name) LIKE '%%error%%' OR lower(event_name) LIKE '%%fail%%') as error_events,
                 uniqExact({DEDUP_EVENT_KEY}) as total
             FROM feature_intelligence.events_raw
-            WHERE {cond} AND timestamp >= today() - (%(days)s * 2) AND timestamp < today() - %(days)s
+            WHERE {cond} AND timestamp >= toDate(now('UTC')) - (%(days)s * 2) AND timestamp < toDate(now('UTC')) - %(days)s
         """
         res_err_prev = ch_client.query(sql_error_prev, params)
         err_prev_row = res_err_prev[0] if res_err_prev else {"error_events": 0, "total": 1}
@@ -851,7 +966,7 @@ def get_secondary_kpi(tenants: str = Query(..., description="Comma-separated lis
                 uniqExact({DEDUP_EVENT_KEY}) as total_visits,
                 uniqExact(user_id) as unique_visitors
             FROM feature_intelligence.events_raw
-            WHERE {cond} AND timestamp >= today() - %(days)s
+            WHERE {cond} AND timestamp >= toDate(now('UTC')) - %(days)s AND timestamp < toDate(now('UTC')) AND timestamp < toDate(now('UTC'))
         """
         res_basic = ch_client.query(sql_basic, params)
         basic = res_basic[0] if res_basic else {"total_visits": 0, "unique_visitors": 0}
@@ -861,7 +976,7 @@ def get_secondary_kpi(tenants: str = Query(..., description="Comma-separated lis
                 uniqExact({DEDUP_EVENT_KEY}) as total_visits,
                 uniqExact(user_id) as unique_visitors
             FROM feature_intelligence.events_raw
-            WHERE {cond} AND timestamp >= today() - (%(days)s * 2) AND timestamp < today() - %(days)s
+            WHERE {cond} AND timestamp >= toDate(now('UTC')) - (%(days)s * 2) AND timestamp < toDate(now('UTC')) - %(days)s
         """
         res_basic_prev = ch_client.query(sql_basic_prev, params)
         basic_prev = res_basic_prev[0] if res_basic_prev else {"total_visits": 0, "unique_visitors": 0}
@@ -880,7 +995,7 @@ def get_secondary_kpi(tenants: str = Query(..., description="Comma-separated lis
             FROM (
                 SELECT user_id, uniqExact({DEDUP_EVENT_KEY}) as event_count
                 FROM feature_intelligence.events_raw
-                WHERE {cond} AND timestamp >= today() - %(days)s
+                WHERE {cond} AND timestamp >= toDate(now('UTC')) - %(days)s AND timestamp < toDate(now('UTC')) AND timestamp < toDate(now('UTC'))
                 GROUP BY user_id
             )
         """
@@ -897,7 +1012,7 @@ def get_secondary_kpi(tenants: str = Query(..., description="Comma-separated lis
             FROM (
                 SELECT user_id, uniqExact({DEDUP_EVENT_KEY}) as event_count
                 FROM feature_intelligence.events_raw
-                WHERE {cond} AND timestamp >= today() - (%(days)s * 2) AND timestamp < today() - %(days)s
+                WHERE {cond} AND timestamp >= toDate(now('UTC')) - (%(days)s * 2) AND timestamp < toDate(now('UTC')) - %(days)s
                 GROUP BY user_id
             )
         """
@@ -914,7 +1029,7 @@ def get_secondary_kpi(tenants: str = Query(..., description="Comma-separated lis
             FROM (
                 SELECT user_id, toDate(timestamp) as d, dateDiff('second', min(timestamp), max(timestamp)) as session_duration
                 FROM feature_intelligence.events_raw
-                WHERE {cond} AND timestamp >= today() - %(days)s
+                WHERE {cond} AND timestamp >= toDate(now('UTC')) - %(days)s AND timestamp < toDate(now('UTC')) AND timestamp < toDate(now('UTC'))
                 GROUP BY user_id, d
                 HAVING session_duration > 0 AND session_duration < 3600 * 4
             )
@@ -932,7 +1047,7 @@ def get_secondary_kpi(tenants: str = Query(..., description="Comma-separated lis
             FROM (
                 SELECT user_id, toDate(timestamp) as d, dateDiff('second', min(timestamp), max(timestamp)) as session_duration
                 FROM feature_intelligence.events_raw
-                WHERE {cond} AND timestamp >= today() - (%(days)s * 2) AND timestamp < today() - %(days)s
+                WHERE {cond} AND timestamp >= toDate(now('UTC')) - (%(days)s * 2) AND timestamp < toDate(now('UTC')) - %(days)s
                 GROUP BY user_id, d
                 HAVING session_duration > 0 AND session_duration < 3600 * 4
             )
@@ -1003,11 +1118,11 @@ def get_traffic_data(tenants: str = Query(..., description="Comma-separated list
             # rollup here would silently move events near midnight IST into the wrong bucket.
             sql = f"""
                 SELECT
-                    toDate(timestamp + INTERVAL 330 MINUTE) as date,
+                    toDate(timestamp) as date,
                     uniqExact({DEDUP_EVENT_KEY}) as pageViews,
                     uniq(user_id) as visitors
                 FROM feature_intelligence.events_raw
-                WHERE tenant_id = %(tenant_id)s AND timestamp >= today() - %(days)s
+                WHERE tenant_id = %(tenant_id)s AND timestamp >= toDate(now('UTC')) - %(days)s AND timestamp < toDate(now('UTC')) AND timestamp < toDate(now('UTC'))
                 GROUP BY date
                 ORDER BY date ASC
             """
@@ -1015,12 +1130,12 @@ def get_traffic_data(tenants: str = Query(..., description="Comma-separated list
         else:
             sql = f"""
                 SELECT
-                    toDate(timestamp + INTERVAL 330 MINUTE) as date,
+                    toDate(timestamp) as date,
                     tenant_id,
                     uniqExact({DEDUP_EVENT_KEY}) as pageViews,
                     uniq(user_id) as visitors
                 FROM feature_intelligence.events_raw
-                WHERE tenant_id IN %(tenant_ids)s AND timestamp >= today() - %(days)s
+                WHERE tenant_id IN %(tenant_ids)s AND timestamp >= toDate(now('UTC')) - %(days)s AND timestamp < toDate(now('UTC')) AND timestamp < toDate(now('UTC'))
                 GROUP BY date, tenant_id
                 ORDER BY date ASC
             """
@@ -1055,7 +1170,7 @@ def get_feature_usage_series(tenants: str = Query(..., description="Comma-separa
                     date,
                     uniqExactMerge(event_count) as usage
                 FROM feature_intelligence.daily_feature_usage
-                WHERE tenant_id = %(tenant_id)s AND date >= today() - %(days)s
+                WHERE tenant_id = %(tenant_id)s AND date >= toDate(now('UTC')) - %(days)s AND date < toDate(now('UTC'))
                 GROUP BY date
                 ORDER BY date ASC
             """
@@ -1067,7 +1182,7 @@ def get_feature_usage_series(tenants: str = Query(..., description="Comma-separa
                     tenant_id,
                     uniqExactMerge(event_count) as usage
                 FROM feature_intelligence.daily_feature_usage
-                WHERE tenant_id IN %(tenant_ids)s AND date >= today() - %(days)s
+                WHERE tenant_id IN %(tenant_ids)s AND date >= toDate(now('UTC')) - %(days)s AND date < toDate(now('UTC'))
                 GROUP BY date, tenant_id
                 ORDER BY date ASC
             """
@@ -1105,7 +1220,7 @@ def get_feature_heatmap(tenants: str = Query(..., description="Comma-separated l
                     tenant_id as group_key,
                     uniqExactMerge(event_count) as count
                 FROM feature_intelligence.daily_feature_usage
-                WHERE {cond} AND date >= today() - %(days)s
+                WHERE {cond} AND date >= toDate(now('UTC')) - %(days)s AND date < toDate(now('UTC'))
                 GROUP BY event_name, tenant_id
             """
             res = ch_client.query(sql, params)
@@ -1129,8 +1244,8 @@ def get_feature_heatmap(tenants: str = Query(..., description="Comma-separated l
             # the rollup's daily grain, so it can't be expressed via daily_feature_usage.
             sql = f"""
                 WITH
-                    today() - %(days)s AS start_time,
-                    today() AS end_time,
+                    toDate(now('UTC')) - %(days)s AS start_time,
+                    toDate(now('UTC')) AS end_time,
                     (toUnixTimestamp(end_time) - toUnixTimestamp(start_time)) / 7 AS bucket_size_sec
                 SELECT
                     event_name as feature,
@@ -1219,11 +1334,11 @@ def get_all_tenants(tenant_id: Optional[str] = None, range: str = Query("7d", de
                 tenant_id as name,
                 toUInt64(uniqExactMerge(event_count)) as featureUsage,
                 toUInt64(uniqExact(event_name)) as activeFeatures,
-                toUInt64(uniqMerge(unique_users)) as uniqueUsers,
+                toUInt64(uniqExactMerge(unique_users)) as uniqueUsers,
                 uniqExactMergeIf(event_count, lower(event_name) LIKE '%%error%%' OR lower(event_name) LIKE '%%fail%%') as errorCount
             FROM feature_intelligence.daily_feature_usage
             {where_clause}
-            WHERE date >= today() - %(days)s
+            WHERE date >= toDate(now('UTC')) - %(days)s AND date < toDate(now('UTC'))
             GROUP BY tenant_id
             ORDER BY featureUsage DESC
         """
@@ -1268,7 +1383,7 @@ def get_device_breakdown(tenants: str = Query(..., description="Comma-separated 
             if(isValidJSON(metadata), lower(ifNull(JSONExtractString(metadata, 'channel'), '')), '') as channel,
             uniqExact({DEDUP_EVENT_KEY}) as value
         FROM feature_intelligence.events_raw
-        WHERE {cond} AND timestamp >= today() - %(days)s
+        WHERE {cond} AND timestamp >= toDate(now('UTC')) - %(days)s AND timestamp < toDate(now('UTC')) AND timestamp < toDate(now('UTC'))
         GROUP BY device_type, device, platform, channel
     """
     try:
@@ -1367,7 +1482,7 @@ def get_acquisition_channels(tenants: str = Query(..., description="Comma-separa
                'unknown') as channel,
             uniqExact({DEDUP_EVENT_KEY}) as total
         FROM feature_intelligence.events_raw
-        WHERE {cond} AND timestamp >= today() - %(days)s
+        WHERE {cond} AND timestamp >= toDate(now('UTC')) - %(days)s AND timestamp < toDate(now('UTC')) AND timestamp < toDate(now('UTC'))
         GROUP BY channel
         ORDER BY total DESC
     """
@@ -1405,7 +1520,7 @@ def get_acquisition_channels(tenants: str = Query(..., description="Comma-separa
             sql_intent = f"""
                 SELECT event_name, uniqExactMerge(event_count) as total
                 FROM feature_intelligence.daily_feature_usage
-                WHERE {cond} AND date >= today() - %(days)s
+                WHERE {cond} AND date >= toDate(now('UTC')) - %(days)s AND date < toDate(now('UTC'))
                 GROUP BY event_name
                 ORDER BY total DESC
             """
@@ -1499,7 +1614,7 @@ def get_locations(tenants: str = Query(..., description="Comma-separated list of
             JSONExtractString(metadata, 'ip') as ip,
             uniqExact({DEDUP_EVENT_KEY}) as visits
         FROM feature_intelligence.events_raw
-        WHERE {cond} AND timestamp >= today() - %(days)s
+        WHERE {cond} AND timestamp >= toDate(now('UTC')) - %(days)s AND timestamp < toDate(now('UTC')) AND timestamp < toDate(now('UTC'))
         GROUP BY location, continent, city, ip
     """
     try:
@@ -1568,7 +1683,7 @@ def get_audit_logs(tenants: str = Query(..., description="Comma-separated list o
             timestamp,
             metadata
         FROM feature_intelligence.events_raw
-        WHERE {cond} AND timestamp >= today() - %(days)s
+        WHERE {cond} AND timestamp >= toDate(now('UTC')) - %(days)s AND timestamp < toDate(now('UTC')) AND timestamp < toDate(now('UTC'))
         ORDER BY timestamp DESC
         LIMIT 50
     """
@@ -1733,7 +1848,7 @@ def get_top_pages(tenants: str = Query(..., description="Comma-separated list of
             event_name as raw_feature,
             uniqExact({DEDUP_EVENT_KEY}) as cnt
         FROM feature_intelligence.events_raw
-        WHERE {cond} AND timestamp >= today() - %(days)s
+        WHERE {cond} AND timestamp >= toDate(now('UTC')) - %(days)s AND timestamp < toDate(now('UTC')) AND timestamp < toDate(now('UTC'))
         GROUP BY page, raw_feature
     """
     try:
@@ -1824,7 +1939,7 @@ def get_feature_activity(tenants: str = Query(..., description="Comma-separated 
     sql = f"""
         SELECT event_name, uniqExactMerge(event_count) as total
         FROM feature_intelligence.daily_feature_usage
-        WHERE {cond} AND date >= today() - %(days)s
+        WHERE {cond} AND date >= toDate(now('UTC')) - %(days)s AND date < toDate(now('UTC'))
         GROUP BY event_name ORDER BY total DESC LIMIT 500
     """
     try:
@@ -1862,7 +1977,7 @@ def get_feature_configs(
     sql = f"""
         SELECT event_name as feature, uniqExactMerge(event_count) as total
         FROM feature_intelligence.daily_feature_usage
-        WHERE {cond} AND date >= today() - %(days)s
+        WHERE {cond} AND date >= toDate(now('UTC')) - %(days)s AND date < toDate(now('UTC'))
         GROUP BY feature
         ORDER BY total DESC
         LIMIT 200
@@ -1956,7 +2071,7 @@ def get_retention(tenants: str = Query(..., description="Comma-separated list of
                     user_id,
                     toStartOfWeek(min(timestamp)) as cohort_week
                 FROM feature_intelligence.events_raw
-                WHERE {cond} AND timestamp >= today() - %(days)s
+                WHERE {cond} AND timestamp >= toDate(now('UTC')) - %(days)s AND timestamp < toDate(now('UTC')) AND timestamp < toDate(now('UTC'))
                 GROUP BY user_id
             ),
             activity AS (
@@ -1964,7 +2079,7 @@ def get_retention(tenants: str = Query(..., description="Comma-separated list of
                     user_id,
                     toStartOfWeek(timestamp) as activity_week
                 FROM feature_intelligence.events_raw
-                WHERE {cond} AND timestamp >= today() - %(days)s
+                WHERE {cond} AND timestamp >= toDate(now('UTC')) - %(days)s AND timestamp < toDate(now('UTC')) AND timestamp < toDate(now('UTC'))
                 GROUP BY user_id, activity_week
             )
             SELECT
@@ -2038,7 +2153,7 @@ def get_admin_summary(range: str = Query("30d", description="Time range like 7d,
             SELECT count(distinct tenant_id) as total_tenants, 
                    uniqExactMerge(event_count) as total_events
             FROM feature_intelligence.daily_feature_usage
-            WHERE date >= today() - %(days)s
+            WHERE date >= toDate(now('UTC')) - %(days)s AND date < toDate(now('UTC'))
         """
         basic_rows = ch_client.query(sql, {"days": days})
         basic = basic_rows[0] if basic_rows else {"total_tenants": 0, "total_events": 0}
@@ -2046,7 +2161,7 @@ def get_admin_summary(range: str = Query("30d", description="Time range like 7d,
         sql_top = """
             SELECT tenant_id as name, uniqExactMerge(event_count) as events
             FROM feature_intelligence.daily_feature_usage
-            WHERE date >= today() - %(days)s
+            WHERE date >= toDate(now('UTC')) - %(days)s AND date < toDate(now('UTC'))
             GROUP BY tenant_id
             ORDER BY events DESC LIMIT 5
         """
@@ -2167,7 +2282,7 @@ def get_pro_users(
         sql = f"""
             SELECT uniqExact(user_id) as pro_users
             FROM feature_intelligence.events_raw
-            WHERE {cond} AND event_name IN ({pro_str}) AND timestamp >= today() - %(days)s
+            WHERE {cond} AND event_name IN ({pro_str}) AND timestamp >= toDate(now('UTC')) - %(days)s AND timestamp < toDate(now('UTC')) AND timestamp < toDate(now('UTC'))
         """
         
         result = ch_client.query(sql, params)
@@ -2177,7 +2292,7 @@ def get_pro_users(
         sql_total = f"""
             SELECT uniqExact(user_id) as total_users
             FROM feature_intelligence.events_raw
-            WHERE {cond} AND timestamp >= today() - %(days)s
+            WHERE {cond} AND timestamp >= toDate(now('UTC')) - %(days)s AND timestamp < toDate(now('UTC')) AND timestamp < toDate(now('UTC'))
         """
         total_result = ch_client.query(sql_total, params)
         total_users = max(int(total_result[0]["total_users"]) if total_result else 0, 1)
@@ -2274,7 +2389,7 @@ def get_license_usage(tenants: str = Query(..., description="Comma-separated lis
                 uniqExact(user_id) as unique_users,
                 max(JSONExtractString(metadata, 'tier')) as tier_hint
             FROM feature_intelligence.events_raw
-            WHERE {cond} AND timestamp >= today() - %(days)s
+            WHERE {cond} AND timestamp >= toDate(now('UTC')) - %(days)s AND timestamp < toDate(now('UTC')) AND timestamp < toDate(now('UTC'))
             GROUP BY feature_name
             ORDER BY usage_count DESC
         """
@@ -2318,7 +2433,7 @@ def get_license_usage(tenants: str = Query(..., description="Comma-separated lis
         sql_trends = f"""
             SELECT event_name as feature_name, date, uniqExactMerge(event_count) as count
             FROM feature_intelligence.daily_feature_usage
-            WHERE {cond} AND date >= today() - 7
+            WHERE {cond} AND date >= toDate(now('UTC')) - 7
             GROUP BY feature_name, date
             ORDER BY date ASC
         """
@@ -2394,7 +2509,7 @@ def get_license_usage(tenants: str = Query(..., description="Comma-separated lis
             sql_pro_users = f"""
                 SELECT uniqExact(user_id) as pro_users
                 FROM feature_intelligence.events_raw
-                WHERE {cond} AND event_name IN ({pro_str}) AND timestamp >= today() - %(days)s
+                WHERE {cond} AND event_name IN ({pro_str}) AND timestamp >= toDate(now('UTC')) - %(days)s AND timestamp < toDate(now('UTC')) AND timestamp < toDate(now('UTC'))
             """
             pro_res = ch_client.query(sql_pro_users, params)
             pro_user_count = int(pro_res[0]["pro_users"]) if pro_res else 0
@@ -2402,7 +2517,7 @@ def get_license_usage(tenants: str = Query(..., description="Comma-separated lis
             sql_total = f"""
                 SELECT uniqExact(user_id) as total_users 
                 FROM feature_intelligence.events_raw 
-                WHERE {cond} AND timestamp >= today() - %(days)s
+                WHERE {cond} AND timestamp >= toDate(now('UTC')) - %(days)s AND timestamp < toDate(now('UTC')) AND timestamp < toDate(now('UTC'))
             """
             total_user_count = max(int((ch_client.query(sql_total, params) or [{"total_users": 1}])[0]["total_users"]), 1)
 
@@ -2411,8 +2526,8 @@ def get_license_usage(tenants: str = Query(..., description="Comma-separated lis
             # codebase (api/data_layer.py's trending query, and /tenants above).
             sql_wow = f"""
                 SELECT
-                    uniqExactMergeIf(event_count, date >= today() - 7) as current_week,
-                    uniqExactMergeIf(event_count, date >= today() - 14 AND date < today() - 7) as prev_week
+                    uniqExactMergeIf(event_count, date >= toDate(now('UTC')) - 7) as current_week,
+                    uniqExactMergeIf(event_count, date >= toDate(now('UTC')) - 14 AND date < toDate(now('UTC')) - 7) as prev_week
                 FROM feature_intelligence.daily_feature_usage
                 WHERE {cond} AND event_name IN ({pro_str})
             """
@@ -2484,9 +2599,11 @@ def get_tracking_toggles(tenants: str = Query(..., description="Comma-separated 
     tenant_id = tenant_list[0] if tenant_list else str(tenants).strip()
     require_tenant_access(tenant_id)
 
-    GLOBAL_TOGGLE_TENANTS = ["nexabank", "safexbank"]
-    scope_tenants = sorted(set(GLOBAL_TOGGLE_TENANTS + tenant_list))
-    tenants_sql = ", ".join([f"'{t}'" for t in scope_tenants])
+    # P1-7. This used to union a hardcoded global list, so a safexbank-scoped admin always
+    # received nexabank's toggles including changed_by (an email) -- the middleware's scope check
+    # bypassed inside the handler. Scope is now exactly what the caller is entitled to.
+    scope_tenants = sorted(set(tenant_list))
+    toggle_params = {"scope_tenants": tuple(scope_tenants) or ("",)}
 
     def normalize_tracking_feature_key(raw_key: str) -> str:
         key = str(raw_key or "").strip().lower()
@@ -2519,9 +2636,9 @@ def get_tracking_toggles(tenants: str = Query(..., description="Comma-separated 
         sql = f"""
             SELECT tenant_id, feature_name, is_enabled, changed_by, changed_at
             FROM feature_intelligence.tracking_toggles FINAL
-            WHERE tenant_id IN ({tenants_sql})
+            WHERE tenant_id IN %(scope_tenants)s
         """
-        results = ch_client.query(sql)
+        results = ch_client.query(sql, toggle_params)
 
         overrides = {}
         for r in results:
@@ -2558,12 +2675,12 @@ def get_tracking_toggles(tenants: str = Query(..., description="Comma-separated 
         observed_sql = f"""
             SELECT event_name, uniqExactMerge(event_count) as total
             FROM feature_intelligence.daily_feature_usage
-            WHERE tenant_id IN ({tenants_sql}) AND date >= today() - 180
+            WHERE tenant_id IN %(scope_tenants)s AND date >= toDate(now('UTC')) - 180
             GROUP BY event_name
             ORDER BY total DESC
             LIMIT 1000
         """
-        observed_rows = ch_client.query(observed_sql)
+        observed_rows = ch_client.query(observed_sql, toggle_params)
 
         feature_catalog = set(FEATURE_DISPLAY_NAMES.keys())
         for row in observed_rows:
@@ -2639,9 +2756,8 @@ def set_tracking_toggle(req: TrackingToggleRequest):
     tenant_list = [t.strip() for t in str(req.tenant_id).split(",") if t.strip()]
     target_tenant = tenant_list[0] if tenant_list else str(req.tenant_id).strip()
     require_tenant_access(target_tenant)
-    GLOBAL_TOGGLE_TENANTS = ["nexabank", "safexbank"]
-    scope_tenants = sorted(set(GLOBAL_TOGGLE_TENANTS + tenant_list))
-    tenants_sql = ", ".join([f"'{t}'" for t in scope_tenants])
+    scope_tenants = sorted(set(tenant_list))
+    toggle_params = {"scope_tenants": tuple(scope_tenants) or ("",)}
     try:
         from datetime import datetime
         now = datetime.now(timezone.utc).replace(tzinfo=None)
@@ -2671,14 +2787,14 @@ def set_tracking_toggle(req: TrackingToggleRequest):
             .replace("..", ".")
             for f in alias_features if str(f or "").strip()
         })
-        aliases_sql = ", ".join(["'" + f.replace("'", "''") + "'" for f in alias_features])
-        
+        toggle_params["alias_features"] = tuple(alias_features) or ("",)
+
         # Get existing state for audit
-        sql_old = f"""
+        sql_old = """
             SELECT is_enabled FROM feature_intelligence.tracking_toggles FINAL
-            WHERE tenant_id IN ({tenants_sql}) AND feature_name IN ({aliases_sql})
+            WHERE tenant_id IN %(scope_tenants)s AND feature_name IN %(alias_features)s
         """
-        old = ch_client.query(sql_old)
+        old = ch_client.query(sql_old, toggle_params)
         # Default behavior is enabled when no explicit toggle row exists.
         old_enabled = all(bool(row.get("is_enabled", 1)) for row in old) if old else True
         old_val = "enabled" if old_enabled else "disabled"
@@ -2778,7 +2894,7 @@ def get_user_journey(
         sql = f"""
             SELECT event_name, channel, timestamp, metadata
             FROM feature_intelligence.events_raw
-            WHERE {cond} AND user_id = %(user_id)s AND timestamp >= today() - %(days)s
+            WHERE {cond} AND user_id = %(user_id)s AND timestamp >= toDate(now('UTC')) - %(days)s AND timestamp < toDate(now('UTC')) AND timestamp < toDate(now('UTC'))
             ORDER BY timestamp ASC
             LIMIT 500
         """
@@ -2866,7 +2982,7 @@ def list_journey_users(
         sql = f"""
             SELECT user_id, uniqExact({DEDUP_EVENT_KEY}) as event_count, min(timestamp) as first_seen, max(timestamp) as last_seen
             FROM feature_intelligence.events_raw
-            WHERE {cond} AND timestamp >= today() - %(days)s
+            WHERE {cond} AND timestamp >= toDate(now('UTC')) - %(days)s AND timestamp < toDate(now('UTC')) AND timestamp < toDate(now('UTC'))
             GROUP BY user_id
             ORDER BY event_count DESC
             LIMIT 50
@@ -2915,9 +3031,9 @@ def get_segmentation_comparison(tenants: str = Query(..., description="Comma-sep
         
         # Get usage
         sql_usage = """
-            SELECT event_name, uniqExactMerge(event_count) as total, uniqMerge(unique_users) as users
+            SELECT event_name, uniqExactMerge(event_count) as total, uniqExactMerge(unique_users) as users
             FROM feature_intelligence.daily_feature_usage
-            WHERE tenant_id = %(tenant_id)s AND date >= today() - 30
+            WHERE tenant_id = %(tenant_id)s AND date >= toDate(now('UTC')) - 30
             GROUP BY event_name
         """
         usage = ch_client.query(sql_usage, {"tenant_id": tenant_id})
@@ -2968,10 +3084,10 @@ def get_predictive_adoption(tenants: str = Query(..., description="Comma-separat
         sql_trend = """
             SELECT 
                 event_name,
-                uniqExactMergeIf(event_count, date >= today() - 7) as recent_7d,
-                uniqExactMergeIf(event_count, date >= today() - 14 AND date < today() - 7) as prev_7d
+                uniqExactMergeIf(event_count, date >= toDate(now('UTC')) - 7) as recent_7d,
+                uniqExactMergeIf(event_count, date >= toDate(now('UTC')) - 14 AND date < toDate(now('UTC')) - 7) as prev_7d
             FROM feature_intelligence.daily_feature_usage
-            WHERE tenant_id IN %(tenant_ids)s AND date >= today() - 14
+            WHERE tenant_id IN %(tenant_ids)s AND date >= toDate(now('UTC')) - 14
             GROUP BY event_name
         """
         trend_data = ch_client.query(sql_trend, {"tenant_ids": tuple(tenant_list)})
@@ -2989,7 +3105,7 @@ def get_predictive_adoption(tenants: str = Query(..., description="Comma-separat
         sql_total_users = """
             SELECT uniqExact(user_id) as total_users
             FROM feature_intelligence.events_raw
-            WHERE tenant_id IN %(tenant_ids)s AND timestamp >= today() - %(days)s
+            WHERE tenant_id IN %(tenant_ids)s AND timestamp >= toDate(now('UTC')) - %(days)s AND timestamp < toDate(now('UTC')) AND timestamp < toDate(now('UTC'))
         """
         total_users_result = ch_client.query(sql_total_users, {"tenant_ids": tuple(tenant_list), "days": days})
         total_users = int(total_users_result[0]["total_users"]) if total_users_result else 1
@@ -2999,7 +3115,7 @@ def get_predictive_adoption(tenants: str = Query(..., description="Comma-separat
         sql_feature_users = """
             SELECT event_name, uniqExact(user_id) as feature_users
             FROM feature_intelligence.events_raw
-            WHERE tenant_id IN %(tenant_ids)s AND timestamp >= today() - 14
+            WHERE tenant_id IN %(tenant_ids)s AND timestamp >= toDate(now('UTC')) - 14
             GROUP BY event_name
         """
         feature_users = ch_client.query(sql_feature_users, {"tenant_ids": tuple(tenant_list)})
@@ -3014,7 +3130,7 @@ def get_predictive_adoption(tenants: str = Query(..., description="Comma-separat
         sql_frequency = """
             SELECT event_name, count(distinct date) as active_days
             FROM feature_intelligence.daily_feature_usage
-            WHERE tenant_id IN %(tenant_ids)s AND date >= today() - 14
+            WHERE tenant_id IN %(tenant_ids)s AND date >= toDate(now('UTC')) - 14
             GROUP BY event_name
         """
         frequency_data = ch_client.query(sql_frequency, {"tenant_ids": tuple(tenant_list)})
@@ -3084,6 +3200,173 @@ def get_predictive_adoption(tenants: str = Query(..., description="Comma-separat
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# ═══════════════════════════════════════════════════════════
+# INTELLIGENCE LAYER (Phase 1) -- read-only over the Signal Store.
+# The narrator may state only what these tables contain, so these endpoints return stored rows
+# and never recompute a number. Persona is resolved SERVER-SIDE from rbac.json: a persona query
+# parameter must never widen access (CLAUDE.md rule 11).
+# ═══════════════════════════════════════════════════════════
+
+def _persona_config() -> dict:
+    return (load_rbac_config() or {}).get("personas") or {}
+
+
+def selectable_personas(request: Request) -> list[str]:
+    """Personas this caller's ROLE may switch to, from rbac.json -- never from the request.
+
+    An empty or missing allowlist collapses to the resolved persona alone, so a config mistake
+    narrows the view rather than opening it.
+    """
+    cfg = _persona_config()
+    allowed = cfg.get("allowed") or ["analyst"]
+    role = (request.headers.get("X-User-Role") or "user").strip()
+    choices = (cfg.get("selectable_by_role") or {}).get(role) or []
+    resolved = resolve_persona(request)
+    out = [p for p in choices if p in allowed]
+    return out or [resolved]
+
+
+def resolve_persona(request: Request, requested: str | None = None) -> str:
+    """Role -> persona from rbac.json.
+
+    A requested persona is honoured only when the caller's ROLE lists it in
+    `personas.selectable_by_role`. That allowlist is server-side config, so switching persona can
+    never widen what a role may read -- the requirement in CLAUDE.md rule 11. Previously a request
+    was honoured only when it already equalled the resolved persona, which made the parameter
+    inert and left every role locked to one narrative shape.
+    """
+    cfg = _persona_config()
+    allowed = cfg.get("allowed") or ["analyst"]
+    by_email = cfg.get("by_email") or {}
+    by_role = cfg.get("by_role") or {}
+    email = (request.headers.get("X-User-Email") or "").strip().lower()
+    role = (request.headers.get("X-User-Role") or "user").strip()
+    resolved = by_email.get(email) or by_role.get(role) or cfg.get("default", "analyst")
+    resolved = resolved if resolved in allowed else "analyst"
+    if not requested or requested == resolved:
+        return resolved
+    choices = (cfg.get("selectable_by_role") or {}).get(role) or []
+    return requested if requested in choices and requested in allowed else resolved
+
+
+@app.get("/intelligence/personas")
+def list_intelligence_personas(
+    request: Request,
+    tenants: str = Query(None, description="Tenant scope; required for an app_admin caller"),
+):
+    """Which persona views this caller may switch between, and what each one covers.
+
+    The list comes from the caller's ROLE via rbac.json, never from the request, so the dashboard
+    can offer a switcher without it becoming a way to widen access.
+
+    `tenants` is unused here but must be accepted: RBACMiddleware scopes an app_admin from the
+    query string and refuses the request without it, so omitting it 403s for exactly the role the
+    switcher exists for -- and the switcher then silently does not render.
+    """
+    from api.intelligence import personas as persona_registry
+    resolved = resolve_persona(request)
+    return {
+        "resolved": resolved,
+        "personas": [persona_registry.as_dict(p) for p in selectable_personas(request)],
+    }
+
+
+@app.get("/intelligence/insight")
+def get_intelligence_insight(
+    request: Request,
+    tenants: str = Query(..., description="Tenant id"),
+    kpi_id: str = Query(None, description="Optional KPI filter"),
+    persona: str = Query(None, description="Advisory only; the server resolves the persona"),
+):
+    """Latest insight with its evidence card, trust verdict and engine breakdown."""
+    from api.intelligence import reader
+    tenant_id = [t.strip() for t in tenants.split(",") if t.strip()][0]
+    row = reader.latest_insight(tenant_id, resolve_persona(request, persona), kpi_id)
+    if not row:
+        return {"tenant_id": tenant_id, "insight": None,
+                "detail": "no investigation has produced an insight for this persona yet"}
+    return {"tenant_id": tenant_id, "insight": row}
+
+
+@app.get("/intelligence/insights")
+def list_intelligence_insights(
+    request: Request,
+    tenants: str = Query(..., description="Tenant id"),
+    limit: int = Query(20, ge=1, le=100),
+):
+    from api.intelligence import reader
+    tenant_id = [t.strip() for t in tenants.split(",") if t.strip()][0]
+    return {"tenant_id": tenant_id,
+            "insights": reader.list_insights(tenant_id, resolve_persona(request), limit)}
+
+
+@app.get("/intelligence/sources")
+def get_intelligence_sources(tenants: str = Query(..., description="Tenant id")):
+    """Per-source freshness: grain, cadence, SLA and how far behind each source is."""
+    from api.intelligence import reader
+    tenant_id = [t.strip() for t in tenants.split(",") if t.strip()][0]
+    return {"tenant_id": tenant_id, "sources": reader.source_health(tenant_id)}
+
+
+@app.get("/intelligence/telemetry")
+def get_intelligence_telemetry(tenants: str = Query(..., description="Tenant id")):
+    """Runtime telemetry: latency, model calls, tokens, cost, LLM vs non-LLM."""
+    from api.intelligence import reader
+    tenant_id = [t.strip() for t in tenants.split(",") if t.strip()][0]
+    return {"tenant_id": tenant_id, "telemetry": reader.runtime_telemetry(tenant_id)}
+
+
+@app.get("/intelligence/recommendations")
+def get_intelligence_recommendations(
+    tenants: str = Query(..., description="Tenant id"),
+    limit: int = Query(20, ge=1, le=100),
+):
+    """Proposals only. Phase 1 executes nothing; every action needs a human signature."""
+    from api.intelligence import reader
+    tenant_id = [t.strip() for t in tenants.split(",") if t.strip()][0]
+    return {"tenant_id": tenant_id, "recommendations": reader.recommendations(tenant_id, limit)}
+
+
+@app.post("/intelligence/ask")
+def ask_intelligence(
+    request: Request,
+    req: AskRequest,
+    tenants: str = Query(..., description="Tenant id"),
+):
+    """Answer a question from recorded evidence only.
+
+    Routes to a closed set of intents over the Signal Store rather than generating a query, so no
+    answer can contain a number no stage computed. Abstains when the question does not map.
+
+    The tenant is a QUERY parameter, not a body field: RBACMiddleware scopes an app_admin from
+    query params, so a body-only tenant would bypass the check it is meant to pass.
+    """
+    from api.intelligence import agent
+    tenant_id = [t.strip() for t in tenants.split(",") if t.strip()][0]
+    question = (req.question or "").strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="question is required")
+    if len(question) > 500:
+        raise HTTPException(status_code=400, detail="question is too long")
+    return agent.ask(tenant_id, question, resolve_persona(request, req.persona))
+
+
+@app.post("/intelligence/outcome")
+def record_intelligence_outcome(req: OutcomeRequest):
+    """Human feedback. Closes the loop stage 08 needs; never trains anything automatically."""
+    from api.intelligence import signal_store
+    from api.intelligence.ids import outcome_id
+    from datetime import datetime as _dt
+    now = _dt.now(timezone.utc).replace(tzinfo=None)
+    signal_store.write_outcome({
+        "outcome_id": outcome_id(req.insight_id, req.signal, req.actor),
+        "investigation_id": req.investigation_id, "insight_id": req.insight_id,
+        "tenant_id": req.tenant_id, "signal": req.signal, "value": req.value,
+        "actor": req.actor, "ts": now,
+    })
+    return {"status": "recorded"}
+
 
 @app.get("/ai_report")
 def get_ai_report(
@@ -3581,7 +3864,7 @@ def get_insights(tenants: str = Query(..., description="Comma-separated list of 
             FROM (
                 SELECT user_id, uniqExact({DEDUP_EVENT_KEY}) as event_count
                 FROM feature_intelligence.events_raw
-                WHERE {cond} AND timestamp >= today() - %(days)s
+                WHERE {cond} AND timestamp >= toDate(now('UTC')) - %(days)s AND timestamp < toDate(now('UTC')) AND timestamp < toDate(now('UTC'))
                 GROUP BY user_id
             )
         """
@@ -3608,7 +3891,7 @@ def get_insights(tenants: str = Query(..., description="Comma-separated list of 
         feat_sql = f"""
             SELECT event_name as feature, uniqExactMerge(event_count) as cnt
             FROM feature_intelligence.daily_feature_usage
-            WHERE {cond} AND date >= today() - %(days)s
+            WHERE {cond} AND date >= toDate(now('UTC')) - %(days)s AND date < toDate(now('UTC'))
             GROUP BY event_name ORDER BY cnt DESC LIMIT 1
         """
         f_res = ch_client.query(feat_sql, params)
@@ -3627,7 +3910,7 @@ def get_insights(tenants: str = Query(..., description="Comma-separated list of 
         time_sql = f"""
             SELECT toHour(timestamp) as hr, uniqExact({DEDUP_EVENT_KEY}) as cnt
             FROM feature_intelligence.events_raw
-            WHERE {cond} AND timestamp >= today() - %(days)s
+            WHERE {cond} AND timestamp >= toDate(now('UTC')) - %(days)s AND timestamp < toDate(now('UTC')) AND timestamp < toDate(now('UTC'))
             GROUP BY hr ORDER BY cnt DESC LIMIT 1
         """
         t_res = ch_client.query(time_sql, params)
@@ -3671,7 +3954,7 @@ def get_tenant_comparison(tenants: str = Query(..., description="Comma-separated
             sql_events = """
                 SELECT uniqExactMerge(event_count) as total_events
                 FROM feature_intelligence.daily_feature_usage
-                WHERE tenant_id = %(tid)s AND date >= today() - %(days)s
+                WHERE tenant_id = %(tid)s AND date >= toDate(now('UTC')) - %(days)s AND date < toDate(now('UTC'))
             """
             ev = ch_client.query(sql_events, {"tid": tid, "days": days})
             total_events = int(ev[0]["total_events"]) if ev else 0
@@ -3680,7 +3963,7 @@ def get_tenant_comparison(tenants: str = Query(..., description="Comma-separated
             sql_users = """
                 SELECT uniqExact(user_id) as unique_users
                 FROM feature_intelligence.events_raw
-                WHERE tenant_id = %(tid)s AND timestamp >= today() - %(days)s
+                WHERE tenant_id = %(tid)s AND timestamp >= toDate(now('UTC')) - %(days)s AND timestamp < toDate(now('UTC')) AND timestamp < toDate(now('UTC'))
             """
             usr = ch_client.query(sql_users, {"tid": tid, "days": days})
             unique_users = int(usr[0]["unique_users"]) if usr else 0
@@ -3689,7 +3972,7 @@ def get_tenant_comparison(tenants: str = Query(..., description="Comma-separated
             sql_features = """
                 SELECT uniqExact(event_name) as active_features
                 FROM feature_intelligence.events_raw
-                WHERE tenant_id = %(tid)s AND timestamp >= today() - %(days)s
+                WHERE tenant_id = %(tid)s AND timestamp >= toDate(now('UTC')) - %(days)s AND timestamp < toDate(now('UTC')) AND timestamp < toDate(now('UTC'))
             """
             feat = ch_client.query(sql_features, {"tid": tid, "days": days})
             active_features = int(feat[0]["active_features"]) if feat else 0
@@ -3699,8 +3982,8 @@ def get_tenant_comparison(tenants: str = Query(..., description="Comma-separated
             # duplicate-vulnerability as count(). Direct pattern, uniqExactIf.
             sql_growth = f"""
                 SELECT
-                    uniqExactIf({DEDUP_EVENT_KEY}, timestamp >= today() - 7) as current_week,
-                    uniqExactIf({DEDUP_EVENT_KEY}, timestamp >= today() - 14 AND timestamp < today() - 7) as prev_week
+                    uniqExactIf({DEDUP_EVENT_KEY}, timestamp >= toDate(now('UTC')) - 7) as current_week,
+                    uniqExactIf({DEDUP_EVENT_KEY}, timestamp >= toDate(now('UTC')) - 14 AND timestamp < toDate(now('UTC')) - 7) as prev_week
                 FROM feature_intelligence.events_raw
                 WHERE tenant_id = %(tid)s
             """
@@ -3719,7 +4002,7 @@ def get_tenant_comparison(tenants: str = Query(..., description="Comma-separated
                 FROM (
                     SELECT user_id, uniqExact({DEDUP_EVENT_KEY}) as event_count
                     FROM feature_intelligence.events_raw
-                    WHERE tenant_id = %(tid)s AND timestamp >= today() - %(days)s
+                    WHERE tenant_id = %(tid)s AND timestamp >= toDate(now('UTC')) - %(days)s AND timestamp < toDate(now('UTC')) AND timestamp < toDate(now('UTC'))
                     GROUP BY user_id
                 )
             """
@@ -3731,9 +4014,9 @@ def get_tenant_comparison(tenants: str = Query(..., description="Comma-separated
             # before truncation, same reasoning as /metrics/traffic; the rollup's own `date`
             # has no such offset.
             sql_trend = f"""
-                SELECT toDate(timestamp + INTERVAL 330 MINUTE) as date, uniqExact({DEDUP_EVENT_KEY}) as events
+                SELECT toDate(timestamp) as date, uniqExact({DEDUP_EVENT_KEY}) as events
                 FROM feature_intelligence.events_raw
-                WHERE tenant_id = %(tid)s AND timestamp >= today() - 7
+                WHERE tenant_id = %(tid)s AND timestamp >= toDate(now('UTC')) - 7
                 GROUP BY date
                 ORDER BY date ASC
             """

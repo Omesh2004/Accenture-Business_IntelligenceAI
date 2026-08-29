@@ -42,6 +42,11 @@ interface UseRealtimeEventsOptions {
 
 export function useRealtimeEvents(options: UseRealtimeEventsOptions = {}) {
   const { maxEvents = 50, reconnectDelay = 3000 } = options;
+  // Set before we close deliberately. Without it, the cleanup below clears the
+  // reconnect timer and THEN calls close(), whose onclose handler schedules a fresh
+  // reconnect -- so every unmount left an immortal socket behind, and a tenant change
+  // left two.
+  const teardownRef = useRef(false);
   const [events, setEvents] = useState<RealtimeEvent[]>([]);
   const [isConnected, setIsConnected] = useState(false);
   const [lastEvent, setLastEvent] = useState<RealtimeEvent | null>(null);
@@ -62,6 +67,14 @@ export function useRealtimeEvents(options: UseRealtimeEventsOptions = {}) {
 
   const connect = useCallback(() => {
     if (!selectedTenant) return;
+    // Do not stack a second socket on a live one. `connect` is recreated whenever the tenant
+    // changes, so the effect re-runs and would otherwise open a new socket while the previous
+    // one was still closing.
+    const existing = wsRef.current;
+    if (existing && (existing.readyState === WebSocket.OPEN
+                     || existing.readyState === WebSocket.CONNECTING)) {
+      return;
+    }
     try {
       const baseUrl = resolveAnalyticsWsBaseUrl(process.env.NEXT_PUBLIC_ANALYTICS_WS_URL);
       const wsUrl = `${baseUrl}/ws/dashboard/${selectedTenant}`;
@@ -112,6 +125,8 @@ export function useRealtimeEvents(options: UseRealtimeEventsOptions = {}) {
           clearInterval(pingTimerRef.current);
           pingTimerRef.current = null;
         }
+        // Never reconnect a socket we closed on purpose.
+        if (teardownRef.current) return;
         if (reconnectDelay > 0) {
           reconnectTimerRef.current = setTimeout(connect, reconnectDelay);
         }
@@ -126,11 +141,23 @@ export function useRealtimeEvents(options: UseRealtimeEventsOptions = {}) {
   }, [maxEvents, reconnectDelay, selectedTenant]);
 
   useEffect(() => {
+    teardownRef.current = false;
     connect();
     return () => {
-      if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
-      if (pingTimerRef.current) clearInterval(pingTimerRef.current);
-      if (wsRef.current) wsRef.current.close();
+      // Order matters: flag FIRST, so the close() below cannot schedule a reconnect.
+      teardownRef.current = true;
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+      if (pingTimerRef.current) {
+        clearInterval(pingTimerRef.current);
+        pingTimerRef.current = null;
+      }
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
     };
   }, [connect]);
 

@@ -1,7 +1,7 @@
 import express, { Request, Response } from "express";
 import { prisma } from "../prisma";
 import { isLoggedIn, isAdmin } from "../middleware/IsLoggedIn";
-import { trackEvent } from "../middleware/eventTracker";
+import { trackEvent, forwarderStats } from "../middleware/eventTracker";
 import {
   BehaviorOverride,
   describeOverride,
@@ -45,6 +45,18 @@ function toAnalyticsTenant(tenantId: string): string {
   const key = String(tenantId || "").toLowerCase();
   return TENANT_ALIAS_MAP[key] || key;
 }
+
+// ─── GET /health/forwarder ─────────────────────────────────────
+// P0-10. Trust Gate cannot tell "the KPI dropped" from "the forwarder broke" unless forwarding
+// outcomes are counted. pro_revenue's tracking_disabled fingerprint reads the 403 rate here.
+router.get("/health/forwarder", (_req: Request, res: Response): void => {
+  const total = forwarderStats.attempted || 1;
+  res.json({
+    ...forwarderStats,
+    failure_rate: Number((forwarderStats.failed / total).toFixed(4)),
+    forbidden_count: forwarderStats.byStatus["403"] || 0,
+  });
+});
 
 // ─── POST /events/track ────────────────────────────────────────
 // Generic custom event tracker for frontend
@@ -318,6 +330,86 @@ function pick<T>(arr: T[]): T {
   return arr[Math.floor(Math.random() * arr.length)];
 }
 
+/** The newly launched product. Its whole point is that it has almost no history. */
+const NEW_CARD_PRODUCT = "Student Travel Credit Card";
+const NEW_PRODUCT_DAYS = 10;
+
+/** Trailing days over which the Northeast deposit outflow runs. */
+const DEPOSIT_FLIGHT_DAYS = 7;
+
+// ─── Source A/B enrichment ────────────────────────────────────────────────
+// Merchant category codes, so spend has a real classification rather than a free-text label.
+const MCC_TABLE: Array<{ mcc: string; merchant: string; category: string }> = [
+  { mcc: "5411", merchant: "FreshMart Grocery", category: "GROCERIES" },
+  { mcc: "5812", merchant: "The Copper Kettle", category: "DINING" },
+  { mcc: "5541", merchant: "Northgate Fuel", category: "FUEL" },
+  { mcc: "4900", merchant: "Metro Utilities", category: "UTILITIES" },
+  { mcc: "5732", merchant: "PixelWorks Electronics", category: "ELECTRONICS" },
+  { mcc: "4111", merchant: "CityTransit", category: "TRANSPORT" },
+  { mcc: "5912", merchant: "Wellspring Pharmacy", category: "HEALTHCARE" },
+  { mcc: "7832", merchant: "Odeon Cinemas", category: "ENTERTAINMENT" },
+  { mcc: "5651", merchant: "Rowan & Fields", category: "RETAIL" },
+  { mcc: "4722", merchant: "Skyline Travel", category: "TRAVEL" },
+];
+
+function referenceNumber(): string {
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ0123456789";
+  let out = "";
+  for (let i = 0; i < 12; i++) out += chars[Math.floor(Math.random() * chars.length)];
+  return out;
+}
+
+type CrmProfile = {
+  ageBracket: "UNDER_25" | "AGE_25_34" | "AGE_35_49" | "AGE_50_64" | "AGE_65_PLUS";
+  incomeBracket: "UNDER_30K" | "INC_30K_60K" | "INC_60K_100K" | "INC_100K_200K" | "INC_200K_PLUS";
+  employmentStatus: "SALARIED" | "SELF_EMPLOYED" | "STUDENT" | "RETIRED" | "UNEMPLOYED";
+  riskSegment: "LOW" | "MEDIUM" | "HIGH";
+  lifetimeValue: number;
+};
+
+/**
+ * Correlated demographics. Drawing each field independently would make every segment
+ * statistically identical, and Localize would rank cells over noise -- ranked, confident and
+ * meaningless, which is the worst failure this system has.
+ */
+function drawCrmProfile(persona: UserPersona): CrmProfile {
+  const roll = Math.random();
+  if (persona.userType === "business_user") {
+    return {
+      ageBracket: roll < 0.5 ? "AGE_35_49" : "AGE_50_64",
+      incomeBracket: roll < 0.35 ? "INC_200K_PLUS" : "INC_100K_200K",
+      employmentStatus: "SELF_EMPLOYED",
+      riskSegment: roll < 0.25 ? "HIGH" : "MEDIUM",
+      lifetimeValue: Math.round(8000 + Math.random() * 22000),
+    };
+  }
+  if (persona.userType === "power_user") {
+    return {
+      ageBracket: roll < 0.6 ? "AGE_25_34" : "AGE_35_49",
+      incomeBracket: roll < 0.5 ? "INC_100K_200K" : "INC_60K_100K",
+      employmentStatus: "SALARIED",
+      riskSegment: roll < 0.7 ? "LOW" : "MEDIUM",
+      lifetimeValue: Math.round(5000 + Math.random() * 12000),
+    };
+  }
+  if (persona.userType === "salary_user") {
+    return {
+      ageBracket: roll < 0.45 ? "AGE_25_34" : roll < 0.8 ? "AGE_35_49" : "AGE_50_64",
+      incomeBracket: roll < 0.55 ? "INC_60K_100K" : "INC_30K_60K",
+      employmentStatus: "SALARIED",
+      riskSegment: roll < 0.75 ? "LOW" : "MEDIUM",
+      lifetimeValue: Math.round(2000 + Math.random() * 6000),
+    };
+  }
+  return {
+    ageBracket: roll < 0.55 ? "UNDER_25" : "AGE_25_34",
+    incomeBracket: roll < 0.6 ? "UNDER_30K" : "INC_30K_60K",
+    employmentStatus: roll < 0.5 ? "STUDENT" : roll < 0.85 ? "SALARIED" : "UNEMPLOYED",
+    riskSegment: roll < 0.4 ? "MEDIUM" : roll < 0.85 ? "LOW" : "HIGH",
+    lifetimeValue: Math.round(200 + Math.random() * 2200),
+  };
+}
+
 // Helper: Weighted random pick
 function weightedPick<T>(items: T[], weights: number[]): T {
   const total = weights.reduce((a, b) => a + b, 0);
@@ -579,10 +671,27 @@ router.post(
     try {
       const bcrypt = await import("bcryptjs");
       const startedAt = Date.now();
+
+      // Source C is reference data: it must already exist. Generating customers against an
+      // unseeded branch table would leave every account with a null branch and silently remove
+      // region from every KPI that localizes on it.
+      const branches = await prisma.branch.findMany({ where: { tenantId } });
+      if (!branches.length) {
+        res.status(409).json({
+          error: "No branches for this tenant",
+          detail: "Run: npx tsx src/scripts/seedReferenceData.ts",
+        });
+        return;
+      }
+      const campaigns = await prisma.campaign.findMany({ where: { tenantId } });
       let usersCreated = 0;
       let transactionsCreated = 0;
       let eventsCreated = 0;
       let applicationsCreated = 0;
+      let loansCreated = 0;
+      let cardsIssued = 0;
+      let notificationsCreated = 0;
+      let interactionsCreated = 0;
       let compliantUsers = 0;
       let analyticsOptInUsers = 0;
       let skippedUsers = 0;
@@ -617,6 +726,11 @@ router.post(
 
         // ─── 4. Create customer ─────────────────────────────
         const streets = STREET_NAMES[location.continent] || STREET_NAMES["Asia"];
+        const homeBranch = pick(branches);
+        const crm = drawCrmProfile(persona);
+        // The bank's own posted rate. Held flat while the competitor's moves, so the gap -- not
+        // the level -- is what a deposit outflow tracks.
+        const savingsRate = 3.5;
         let customer;
         try {
           const hasAnalyticsOptIn = Math.random() < 0.78;
@@ -630,6 +744,14 @@ router.post(
               },
               address: { street: `${Math.floor(1 + Math.random() * 500)}, ${pick(streets)}`, city: location.city, state: location.country, zip: `${400000 + Math.floor(Math.random() * 200000)}` },
               kycStatus: "NOT_STARTED",
+              // Source B attributes. Correlated on purpose -- a student is rarely in the top
+              // income bracket -- so segment analysis finds structure rather than noise.
+              ageBracket: crm.ageBracket,
+              incomeBracket: crm.incomeBracket,
+              employmentStatus: crm.employmentStatus,
+              riskSegment: crm.riskSegment,
+              lifetimeValue: crm.lifetimeValue,
+              branchCode: homeBranch.code,
             },
           });
 
@@ -709,6 +831,9 @@ router.post(
               ifsc: `${tenant.ifscPrefix}${tenant.branchCode}`,
               accountType: "SAVINGS",
               balance: 0,
+              branchCode: homeBranch.code,
+              interestRate: savingsRate,
+              lifecycleStatus: "ACTIVE",
             },
           });
         } catch (e) {
@@ -746,6 +871,78 @@ router.post(
         let currentBalance = salary;
         await prisma.account.update({ where: { accNo }, data: { balance: currentBalance } });
 
+        // ─── Cards ────────────────────────────────────────
+        // Every account gets a debit card. The credit product is the launch: it is issued only to
+        // customers who joined inside NEW_PRODUCT_DAYS, so its history is genuinely sparse and the
+        // forecast has to say so rather than project a quarter from ten days.
+        const joinedDaysAgo = Math.floor((Date.now() / 1000 - baseTs) / 86400);
+        const cardsToIssue: Array<{ type: "DEBIT" | "CREDIT"; product: string; limit: number | null }> = [
+          { type: "DEBIT", product: "NexaBank Everyday Debit", limit: null },
+        ];
+        if (joinedDaysAgo <= NEW_PRODUCT_DAYS
+            && (crm.employmentStatus === "STUDENT" || crm.ageBracket === "UNDER_25")
+            && Math.random() < 0.7) {
+          cardsToIssue.push({ type: "CREDIT", product: NEW_CARD_PRODUCT, limit: 1500 });
+        } else if (crm.incomeBracket === "INC_100K_200K" || crm.incomeBracket === "INC_200K_PLUS") {
+          if (Math.random() < 0.5) {
+            cardsToIssue.push({ type: "CREDIT", product: "NexaBank Signature Credit", limit: 12000 });
+          }
+        }
+        for (const spec of cardsToIssue) {
+          const expYear = new Date().getUTCFullYear() + 3;
+          await prisma.card.create({
+            data: {
+              accNo, customerId: customer.id,
+              last4: String(1000 + Math.floor(Math.random() * 9000)),
+              cardType: spec.type,
+              network: spec.type === "CREDIT" ? pick(["VISA", "MASTERCARD", "AMEX"] as const)
+                                              : pick(["VISA", "MASTERCARD", "RUPAY"] as const),
+              productName: spec.product,
+              expMonth: 1 + Math.floor(Math.random() * 12),
+              expYear,
+              cardholderName: name.toUpperCase(),
+              creditLimit: spec.limit,
+              availableCredit: spec.limit,
+              issuedOn: new Date(baseTs * 1000),
+            },
+          });
+          cardsIssued++;
+        }
+
+        await prisma.notification.create({
+          data: {
+            customerId: customer.id, type: "SYSTEM",
+            message: `Welcome to NexaBank. Your ${cardsToIssue[0].product} is on its way.`,
+            createdOn: new Date(baseTs * 1000),
+          },
+        });
+        notificationsCreated++;
+
+        // ─── Campaign funnel (source B) ───────────────────
+        // Stored as a funnel, never as a rate: CPA must be re-aggregatable across segments.
+        const targeted = campaigns.filter((c) =>
+          c.targetSegment === "ALL" || c.targetSegment === crm.riskSegment
+          || c.targetSegment === crm.employmentStatus);
+        for (const campaign of targeted) {
+          const sentAt = new Date(Math.max(baseTs * 1000, campaign.startDate.getTime()));
+          if (sentAt > campaign.endDate || sentAt.getTime() > Date.now()) continue;
+          const step = async (type: "SENT" | "OPENED" | "CLICKED" | "CONVERTED", offsetH: number) => {
+            await prisma.campaignInteraction.create({
+              data: { campaignId: campaign.id, customerId: customer.id, type,
+                      occurredAt: new Date(sentAt.getTime() + offsetH * 3600 * 1000) },
+            });
+            interactionsCreated++;
+          };
+          await step("SENT", 0);
+          if (Math.random() < 0.42) {
+            await step("OPENED", 2);
+            if (Math.random() < 0.35) {
+              await step("CLICKED", 5);
+              if (Math.random() < 0.22) await step("CONVERTED", 26);
+            }
+          }
+        }
+
         // Store initial location with worldwide data
         await prisma.userLocation.create({
           data: {
@@ -767,7 +964,14 @@ router.post(
         let unlockedFeature = "";
 
         for (let day = 0; day <= joinDaysAgo; day++) {
-          const dayTs = baseTs + (day * 86400) + Math.floor(Math.random() * 43200); // random hour within the day
+          // Clamped to the recent past: a jittered final day can land hours ahead of now, and
+          // ingestion rejects a future timestamp -- which silently thinned the newest day, the
+          // one inside the scored window. Trailing offsets add up to ~1h more, so leave headroom.
+          const nowTs = Math.floor(Date.now() / 1000);
+          const dayTs = Math.min(
+            baseTs + (day * 86400) + Math.floor(Math.random() * 43200), // random hour within the day
+            nowTs - 7200
+          );
 
           // ── Salary deposit on 1st and 15th of month ───────
           const dayOfMonth = new Date(dayTs * 1000).getDate();
@@ -889,6 +1093,7 @@ router.post(
               const txChannel = weightedPick(CHANNELS, CHANNEL_WEIGHTS);
               const success = !simFail("payment.failed.action", persona.failureRate, inScope);
 
+              const mcc = pick(MCC_TABLE);
               await prisma.transaction.create({
                 data: {
                   transactionType: "PAYMENT",
@@ -897,6 +1102,9 @@ router.post(
                   status: success ? "SUCCESS" : "FAILED",
                   category, channel: txChannel,
                   description: success ? `${category} purchase` : `Failed: ${pick(["Network Error", "Card Declined", "Timeout", "Server Error"])}`,
+                  merchantCategoryCode: mcc.mcc,
+                  merchantName: mcc.merchant,
+                  referenceNumber: referenceNumber(),
                   timestamp: new Date((dayTs + 1200 + Math.floor(Math.random() * 3600)) * 1000),
                 }
               });
@@ -911,18 +1119,60 @@ router.post(
               }
             }
 
+            // ── Deposit flight (the multi-factor scenario) ──────────────────────
+            // Northeast savings customers move money OUT in the recent window. The competitor
+            // deposit rate in Source C stepped to 5.0% over the same months. Neither table says
+            // the two are connected: the engine has to pair an internal segment with an external
+            // factor, which is the whole point of a multi-source driver.
+            const inRecentWindow = (Date.now() / 1000 - dayTs) <= DEPOSIT_FLIGHT_DAYS * 86400;
+            if (homeBranch.region === "Northeast" && inRecentWindow
+                && currentBalance > 5000 && Math.random() < 0.34) {
+              const outflow = Math.round(Math.min(currentBalance * 0.45,
+                                                  8000 + Math.random() * 22000));
+              await prisma.transaction.create({
+                data: {
+                  transactionType: "WITHDRAWAL",
+                  senderAccNo: accNo, receiverAccNo: "EXTERNAL-BANK",
+                  amount: outflow, status: "SUCCESS",
+                  category: "External Transfer", channel: pick(CHANNELS),
+                  description: "Transfer to external institution",
+                  referenceNumber: referenceNumber(),
+                  timestamp: new Date((dayTs + 6400) * 1000),
+                }
+              });
+              currentBalance -= outflow;
+              await prisma.account.update({ where: { accNo }, data: { balance: currentBalance } });
+              transactionsCreated++;
+              await prisma.notification.create({
+                data: {
+                  customerId: customer.id, type: "TRANSACTION",
+                  message: `A transfer of ${outflow} to an external institution has completed.`,
+                  createdOn: new Date((dayTs + 6500) * 1000),
+                },
+              });
+              notificationsCreated++;
+              await trackEvent("free.payment.success", customer.id, tenantId,
+                               { amount: outflow, category: "External Transfer", ...lMeta },
+                               dayTs + 6600);
+              eventsCreated++;
+            }
+
             // ── Second transaction (some users do multiple per day)
             if (Math.random() < 0.3 && currentBalance > 2000) {
               const amount2 = Math.floor(gaussianRandom(persona.averageSpend * 0.5, persona.averageSpend * 0.3));
               const clamped2 = Math.min(amount2, currentBalance * 0.15);
               if (clamped2 >= 100) {
                 const cat2 = pick(SPEND_CATEGORIES);
+                const mcc2 = pick(MCC_TABLE);
                 await prisma.transaction.create({
                   data: {
                     transactionType: "PAYMENT",
                     senderAccNo: accNo, receiverAccNo: "MERCHANT-ID",
                     amount: clamped2, status: "SUCCESS", category: cat2,
                     channel: pick(CHANNELS),
+                    merchantCategoryCode: mcc2.mcc,
+                    merchantName: mcc2.merchant,
+                    referenceNumber: referenceNumber(),
                     timestamp: new Date((dayTs + 5000 + Math.floor(Math.random() * 7200)) * 1000),
                   }
                 });
@@ -1061,6 +1311,42 @@ router.post(
                 data: { status: "APPROVED" },
               });
               await simEmit("loan_approved", 1, { loanType, amount: principalAmount, term, ...lMeta }, dayTs + 4200, { inScope, applyTraffic: false });
+
+              // Disbursement. An approved application must become a real Loan and a real credit,
+              // or the core-banking extract ships an empty loans table while applications claim
+              // lending is active.
+              const interestAmount = principalAmount * (interestRate / 100) * (term / 12);
+              const startDate = new Date(dayTs * 1000);
+              const endDate = new Date(startDate);
+              endDate.setMonth(endDate.getMonth() + term);
+              const loan = await prisma.loan.create({
+                data: {
+                  accNo, loanType, term,
+                  interestRate: parseFloat(interestRate.toFixed(2)),
+                  principalAmount,
+                  interestAmount: parseFloat(interestAmount.toFixed(2)),
+                  dueAmount: parseFloat((principalAmount + interestAmount).toFixed(2)),
+                  startDate, endDate, schedule: [],
+                },
+              });
+              loansCreated++;
+
+              currentBalance += principalAmount;
+              await prisma.transaction.create({
+                data: {
+                  transactionType: "DEPOSIT",
+                  senderAccNo: "EXTERNAL-BANK", receiverAccNo: accNo,
+                  amount: principalAmount, status: "SUCCESS",
+                  category: "Loan Disbursement", channel: "WEB",
+                  loanId: loan.id,
+                  timestamp: new Date((dayTs + 4300) * 1000),
+                },
+              });
+              transactionsCreated++;
+              await prisma.account.update({ where: { accNo }, data: { balance: currentBalance } });
+              // Not in the journey model, so simEmit emits it unconditionally -- same effect as the
+              // raw trackEvent it replaces, but it stays on the file's one emit path.
+              await simEmit("lending.loan.disbursed", 1, { loanType, amount: principalAmount, term, ...lMeta }, dayTs + 4400, { inScope, applyTraffic: false });
             }
           }
 
@@ -1318,6 +1604,10 @@ router.post(
         eventsCreated,
         applicationsCreated,
         loansApplied: applicationsCreated,
+        loansDisbursed: loansCreated,
+        cardsIssued,
+        notificationsCreated,
+        interactionsCreated,
         compliantUsers,
         kycCompleted: compliantUsers,
         analyticsOptInUsers,
@@ -1343,6 +1633,10 @@ router.post(
           generated: {
             eventsCreated,
             transactionsCreated,
+            loansCreated,
+            cardsIssued,
+            notificationsCreated,
+            interactionsCreated,
             payeesCreated,
           },
         },

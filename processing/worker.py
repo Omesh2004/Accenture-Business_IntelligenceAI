@@ -31,7 +31,7 @@ RETRY_BACKOFF_BASE_S = 1.0
 RETRY_BACKOFF_MAX_S = 30.0
 
 
-def _dead_letter(records, error: str) -> None:
+def _dead_letter(records, error: str) -> bool:
     """Park rows that fail on their own so one bad event cannot block every good one."""
     if not records:
         return
@@ -56,13 +56,16 @@ def _dead_letter(records, error: str) -> None:
             column_names=["event_id", "tenant_id", "event_name", "payload", "error", "stage"],
         )
         logger.error("Dead-lettered %d unrecoverable event(s): %s", len(rows), error[:200])
+        return True
     except Exception as exc:
-        # Losing the DLQ write is bad but must not stall the pipeline; the payload is still
-        # in Kafka until the offset commits, and the offset only commits on a clean flush.
+        # Return False so the caller can hold the offset. Previously this swallowed the failure
+        # and flush_batch still returned True, so the offset committed and the payload was lost
+        # permanently -- the opposite of what the comment claimed.
         logger.critical("Dead-letter insert FAILED for %d event(s): %s", len(records), exc)
+        return False
 
 
-def _dead_letter_undecodable(msg, error: str) -> None:
+def _dead_letter_undecodable(msg, error: str) -> bool:
     """Dead-letter a Kafka message that failed to become JSON at all (Phase G follow-up).
 
     Previously this case was only logged and the message silently dropped from the batch --
@@ -87,7 +90,7 @@ def _dead_letter_undecodable(msg, error: str) -> None:
         "kafka_offset": msg.offset(),
         "kafka_topic": msg.topic(),
     }
-    _dead_letter([record], error)
+    return _dead_letter([record], error)
 
 
 def _attach_kafka_metadata(event_data: dict, msg) -> dict:
@@ -237,19 +240,24 @@ def flush_batch(batch: list) -> bool:
                 "All %d rows failed but ClickHouse is reachable -- dead-lettering the batch.",
                 len(batch),
             )
-            for record, err in poison:
-                _dead_letter([record], err)
-            return True
+            dlq_ok = all(_dead_letter([record], err) for record, err in list(poison))
+            if not dlq_ok:
+                logger.error("Dead-letter write failed -- holding the offset for replay.")
+            return dlq_ok
         logger.error("All %d rows failed and ClickHouse is unreachable -- holding for replay.", len(batch))
         return False
 
-    for record, err in poison:
-        _dead_letter([record], err)
+    dlq_ok = all(_dead_letter([record], err) for record, err in list(poison))
     logger.info(
         "Recovered %d/%d rows; %d dead-lettered.",
         len(batch) - len(poison), len(batch), len(poison),
     )
-    return True
+    if not dlq_ok:
+        # The good rows are already in ClickHouse and are idempotent under replay
+        # (ReplacingMergeTree on event_id), so replaying the batch is safe; losing the poison
+        # record is not.
+        logger.error("Dead-letter write failed -- holding the offset for replay.")
+    return dlq_ok
 
 def get_consumer(on_commit=None):
     """Build and return a Kafka consumer.
@@ -267,7 +275,15 @@ def get_consumer(on_commit=None):
         'bootstrap.servers': settings.KAFKA_BROKER_URL,
         'group.id': 'feature-processor-group',
         'auto.offset.reset': 'earliest',
-        'enable.auto.commit': False  # We commit manually after DB insert
+        'enable.auto.commit': False,  # We commit manually after DB insert
+        # P3-4. While batch_stuck we used to stop calling poll() entirely. librdkafka enforces
+        # max.poll.interval.ms (default 300000), so a sink outage over ~5 minutes got the
+        # consumer evicted from the group -- and because on_revoke is dispatched FROM poll(),
+        # the handler could not run cleanly either. We now keep polling and use pause()/resume()
+        # instead, which is what they are for. Stated explicitly rather than inherited.
+        'max.poll.interval.ms': 600000,
+        'session.timeout.ms': 45000,
+        'heartbeat.interval.ms': 15000,
     }
     if on_commit is not None:
         conf['on_commit'] = on_commit
@@ -294,6 +310,10 @@ def run_worker():
     consumer = get_consumer(on_commit=on_commit)
 
     batch = []
+    # P3-5: set by a dead-letter as well as by a successful insert, so an offset is never stranded.
+    dirty = False
+    # P3-4: tracks whether the assignment is currently resumed, so we only toggle on change.
+    polling_active = True
     last_flush_time = time.time()
     # True while `batch` failed to flush and is awaiting retry -- Phase F item 6 bullet 1.
     # Gates both new-message polling (_should_poll) and forces an immediate retry attempt below,
@@ -355,10 +375,22 @@ def run_worker():
             # batch that hasn't resolved yet (item 6), or turn a sink outage into unbounded
             # growth (the pre-existing size-based case). Kafka is the buffer -- that is what it
             # is for.
-            should_poll = _should_poll(len(batch), batch_stuck)
-            msg = consumer.poll(timeout=1.0) if should_poll else None
-            if msg is None and not should_poll:
-                time.sleep(1.0)
+            # P3-4. Always poll -- that is what keeps the consumer in the group and lets
+            # on_revoke be dispatched. Backpressure is applied by pausing the ASSIGNMENT, not
+            # by skipping poll(), which used to get us evicted after max.poll.interval.ms.
+            want_messages = _should_poll(len(batch), batch_stuck)
+            if want_messages != polling_active:
+                try:
+                    assignment = consumer.assignment()
+                    if assignment:
+                        if want_messages:
+                            consumer.resume(assignment)
+                        else:
+                            consumer.pause(assignment)
+                    polling_active = want_messages
+                except Exception as exc:
+                    logger.warning("pause/resume failed: %s", exc)
+            msg = consumer.poll(timeout=1.0)
 
             if msg is not None:
                 if msg.error():
@@ -372,13 +404,35 @@ def run_worker():
                         event_data = json.loads(msg.value().decode('utf-8'))
                         event_data = _attach_kafka_metadata(event_data, msg)
                         batch.append(event_data)
-                    except json.JSONDecodeError as e:
-                        logger.error(f"Failed to decode message: {e}")
-                        # Phase G follow-up: previously dropped silently. The consumer position
-                        # has already advanced past this message (poll() returned it), so it
-                        # would be committed as "handled" either way -- dead-letter it first so
-                        # that's actually true instead of a silent loss.
-                        _dead_letter_undecodable(msg, str(e))
+                    except (json.JSONDecodeError, UnicodeDecodeError,
+                            AttributeError, TypeError) as e:
+                        # NOT just JSONDecodeError. `.decode()` raises UnicodeDecodeError on
+                        # invalid bytes, and `msg.value()` is None for a tombstone, which makes
+                        # `.decode` an AttributeError. Neither is a JSONDecodeError, and neither
+                        # is caught by run_worker -- so one bad byte killed the process, and
+                        # because the offset had not committed, restart replayed the same
+                        # message forever.
+                        logger.error(f"Failed to decode message: {type(e).__name__}: {e}")
+                        # P3-5. The offset for an undecodable message must still commit. It is
+                        # not appended to `batch`, and the flush condition requires len(batch)>0,
+                        # so on an otherwise idle partition nothing committed -- and on restart
+                        # the same message was redelivered and dead-lettered again, forever.
+                        # Phase G follow-up: previously dropped silently. Dead-letter it first
+                        # so "handled" is actually true.
+                        #
+                        # Only mark the offset committable if that write SUCCEEDED. P3-5 is why
+                        # a decodable-but-poison message must still commit (else one bad message
+                        # on an idle partition blocks the partition forever) -- but that argument
+                        # holds only when the payload is safely in the DLQ. If the DLQ write
+                        # failed, committing would destroy the only remaining copy, so hold and
+                        # let the redelivery retry once ClickHouse is back.
+                        if _dead_letter_undecodable(msg, str(e)):
+                            dirty = True
+                        else:
+                            logger.error(
+                                "Undecodable message could not be dead-lettered; holding "
+                                "offset (partition=%s offset=%s).",
+                                msg.partition(), msg.offset())
 
             now = time.time()
             # Flush if batch limit is reached, time interval passed, or a previous flush of this
@@ -386,10 +440,21 @@ def run_worker():
             # stuck since polling is paused, so this doesn't wait out a stale FLUSH_INTERVAL
             # window; flush_batch()'s own internal backoff (up to ~7s per call) is what actually
             # paces the retries.
+            if dirty and not batch and (now - last_flush_time >= FLUSH_INTERVAL):
+                # Nothing to insert, but an offset is owed a commit (see P3-5 above).
+                try:
+                    consumer.commit(asynchronous=False)
+                    logger.info("Committed offsets for dead-lettered message(s) with empty batch.")
+                except Exception as exc:
+                    logger.error("Commit after dead-letter failed: %s", exc)
+                dirty = False
+                last_flush_time = now
+
             if len(batch) >= BATCH_SIZE or batch_stuck or (now - last_flush_time >= FLUSH_INTERVAL and len(batch) > 0):
                 logger.info(f"Flushing batch of {len(batch)} events to ClickHouse.")
                 if flush_batch(batch):
                     batch_stuck = False
+                    dirty = False
                     # Offsets commit only after the batch is durably accounted for. Delivery
                     # stays at-least-once, which is safe because every reader counts
                     # uniqExact(event_id) rather than rows -- docs/DATABASE.md FOUNDATION-1/4.

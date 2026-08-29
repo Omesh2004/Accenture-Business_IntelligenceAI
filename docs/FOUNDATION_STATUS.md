@@ -3,11 +3,24 @@
 What has been fixed in the data path, what it was verified against, and what is still missing
 before `docs/PHASE_1.md`'s nine stages can be built.
 
-Last updated: 2026-08-26.
+Last updated: 2026-08-29, after Gates P0 and P1 closed.
 
 Read this before re-doing any Foundation work. Several items in this repo were recorded as
 `resolved` while still being completely inert — the section "Fixes that were recorded as done
 but were not" exists so that does not happen again.
+
+**It happened again, in this file's own neighbours — and then it happened in reverse.** The
+2026-08-28 audit checked six claims across the status documents by running the code and found all
+six false or stale (`docs/INTELLIGENCE_LAYER_PREREQUISITES.md` §2). Gates P0 and P1 then closed most
+of them, and this file went stale in the opposite direction: it recorded as *missing* several things
+that had shipped. Both failure modes are the same one — a status column nobody re-ran.
+
+The one finding from that audit that still stands here:
+
+- **There are two live producer paths, not three.** `nexaTracker.track()` in
+  `NexaBank/frontend/lib/tracker.ts` has no call site, and `analytics-dashboard`'s tracker is
+  imported by nothing. Live geo/device is the `eventTracker.ts` per-session dice roll unless
+  `POST /events/location` supplied a real value, in which case `sessionProfile.realCountry` wins.
 
 ---
 
@@ -16,21 +29,44 @@ but were not" exists so that does not happen again.
 | Area | State |
 |---|---|
 | FOUNDATION-1 `event_id` | done, verified end to end including replay |
-| FOUNDATION-2 `session_id` + session-invariant dimensions | done, verified on the live path |
-| FOUNDATION-3 taxonomy remaps | done, all 3 contracts reach every lineage event on both paths |
-| FOUNDATION-4 rollup `uniqExactState` | done, rollup agrees with `events_raw` |
-| Signal Store tables | exist, all 10 empty — no writer yet (that is the pipeline) |
-| Kafka → worker → ClickHouse | **now actually running**; had never carried an event before |
-| Metric layer (the doorway stages read through) | **not built — critical path** |
-| Contract loader | not built (`PyYAML` now declared) |
-| Personas | do not exist anywhere |
-| Dashboard / NexaBank UIs | **unverified — see "Not verified"** |
+| FOUNDATION-2 `session_id` + session-invariant dimensions | done, verified on the live path — but see the caveat below the table |
+| FOUNDATION-3 taxonomy remaps | done, all 10 contracts reach every lineage event on both paths |
+| FOUNDATION-4 rollup `uniqExactState` | done for `event_count` **and** `unique_users` (P0-6); `raw_rows` added alongside (D1) |
+| Signal Store tables | applied to the running instance (P1-3), via `storage/migrate.py` (P1-2) |
+| Kafka → worker → ClickHouse | running; had never carried an event before |
+| Metric layer (the doorway stages read through) | built — `api/intelligence/metrics.py`, with a `StubMetricLayer` twin |
+| Contract loader | built — `api/intelligence/contracts.py`, Tier 0 discovery + Tier 1 declared |
+| Personas | built (P2-3) in `rbac.json` and `api/intelligence/personas.py`; **the identity they resolve from is still caller-asserted** |
+| `_simulated` marker | on the wire (P0-8), and read by discovery, `validate()` and `sliceable_dimensions` |
+| Canonical event name at rest | `events_raw.event_name_canonical`, written at ingest (P0-6) |
+| `investigations` ingest watermark | `watermark_ingested_at` (P1-4) |
+| Dashboard / NexaBank UIs | verified — 12 Playwright specs green against :3001, see `docs/HANDOFF.md` §1 |
+
+**Caveat on FOUNDATION-2.** It made the dimensions session-*invariant*, which is what makes ratio
+localization additive. It did not make them *informative*: `selectGeoProfile`/`selectDevice` still
+pick `location`, `city`, `continent`, `device_type` and `channel` at random, once per session.
+Session-invariant randomness is still randomness — and it passes an invariance test cleanly, which
+is why the `_simulated` marker rather than the invariance test is the load-bearing gate.
+`sliceable_dimensions` now refuses a marked key on any dataset but `seeded`.
+
+**Caveat on the `dedup_integrity` invariant — resolved by D1.** `events_raw` is
+`ReplacingMergeTree(_inserted_at)` ordered by `(tenant_id, event_name, timestamp, event_id)`, so a
+real worker replay is collapsed by a background merge and `count() == uniqExact(event_id)` becomes
+true again. The check therefore no longer reads `events_raw`: it compares
+`sumMerge(raw_rows)` against `uniqExactMerge(event_count)` in `daily_feature_usage`. An MV fires on
+the *inserted block* and never sees post-merge state, so a replay raises `raw_rows` while distinct
+ids stay flat. The fixture emits byte-identical duplicates (P1-5). See `docs/PROPOSAL.md` §3 D1.
 
 Re-assert the data claims rather than trusting this table:
 
 ```bash
-python scripts/verify_data_quality.py     # 18 checks, exit 0 only when all pass
+python scripts/verify_data_quality.py     # host-only; exit 0 only when every check passes
 ```
+
+The emitted check count is **not fixed** — several `record()` calls sit inside loops over the
+contract set and its declared dimensions, so it grows with `contracts/*.yaml`. Earlier versions of
+this file and of `CLAUDE.md` quoted 18 and 16 respectively; neither was a stable number. Judge the
+exit code, not a count.
 
 ---
 
@@ -209,49 +245,46 @@ created applications but never approved one. It now emits approvals at a control
 
 ## Not verified
 
-**Neither Next.js UI has been confirmed to render.** Everything above is backend, API, and
-compiler evidence. `tsc --noEmit` passes for the analytics dashboard, NexaBank frontend and
-NexaBank backend, but a type-clean change can still throw at runtime, and no page was loaded in
-a browser. Files edited that both apps load at runtime: `lib/api.ts`, `useEventTracker.ts`,
-`useGeoLocation.ts`, `UserContext.tsx`, the simulate page, `KPICard.tsx`,
-`transparency/page.tsx`, `useRealtimeEvents.ts`.
+**The LLM narrator's English quality.** Its logic is validated end to end against a scriptable
+OpenAI-compatible server (`tests/test_intelligence_llm_narrator.py`) — model discovery, guided-
+decoding fallback, a hallucinated figure rejected so the template wins. What a specific model
+actually writes needs vLLM, a GPU and an `HF_TOKEN`, and is Gate L (`docs/TASK.md` B-8).
 
-At the time of writing there is an open report that `localhost:3001` and `localhost:3002` are
-unreachable, not yet diagnosed.
+Browser rendering **is** now verified: `tsc --noEmit` is clean for all three TypeScript projects,
+and the Playwright suite in `e2e/` covers the dashboard, its RBAC surface, the agent panel and
+NexaBank navigation. Note the trap in `docs/HANDOFF.md` §5 — Turbopack does not reliably see writes
+through a Windows bind mount, so a frontend change may need
+`docker compose restart analytics-dashboard` before it is judged.
 
 ---
 
 ## What is still missing before the pipeline
 
-These are Stage 00 substrate items, not pipeline stages.
+**Ten of the twelve items this section used to list are closed.** The metric layer, contract
+loader, personas, migration runner, canonical name at rest, `_simulated` marker, ingest watermark
+and one-definition-of-a-day all landed in Gates P0 and P1; the demo dataset question was settled as
+**seeded** (decision D4) and `scripts/seed_data.py` is the generator. Per-task evidence and the
+verification command for each is `docs/TASK.md`.
 
-1. **The metric layer — critical path.** `docs/PIPELINE_CONTRACT.md` §3: *"Localize must not
-   receive raw rows. It receives a `dict[cell_tuple, (numerator, denominator)]` already
-   aggregated by the metric layer."* With rule 4, every stage reads through this doorway.
-   Nothing provides it — `/funnels` is user-grain, which its own contract lineage note says is
-   display-only. Stages 01–06 have nothing to read through until this exists.
+What is genuinely still open:
 
-2. **Contract loader.** Stages take "the loaded contract" in their `ctx`. `PyYAML` is declared;
-   the loader is not written.
+1. **Provisional windows are half-implemented.** Contracts declare
+   `provisional_window_minutes: 10`, and Trust Gate folds it into the grain-scaled freshness floor
+   (`stages/trust_gate.py`). Detect does **not** suppress on a provisional window. This matters
+   because the simulation console backdates events — a window can gain rows after it has been
+   scored.
 
-3. **The dataset is too thin to exercise the pipeline.** 28 days of history satisfies
-   `min_history_days: 14`, but daily KYC denominators run 1–6 sessions against a contract floor
-   of `min_denominator: 30`. Detect would abstain on every window and no scenario could fire.
-   Either 100-user simulate runs (~20 min each, Postgres-bound) or `scripts/seed_data.py`, which
-   posts straight to ingestion and generates thousands of events in seconds. Decide which is the
-   demo dataset before building Detect against it.
+2. **`event_id` is not mandatory at every writer.** `api/seed_safexbank.py` still inserts through
+   `storage/client.py` with no `event_id`, no `session_id` and no taxonomy pass, which is what
+   keeps the legacy `concat('legacy:', ...)` dedup key load-bearing — and that key merges genuinely
+   distinct events sharing user, second, name and metadata. (`docs/TASK.md` P1-6)
 
-4. **Personas do not exist.** `cfo`/`ops_manager`/`analyst` appear nowhere — not in `rbac.json`,
-   not in `api/main.py`. Rule 11 requires resolving them server-side, with a persona query
-   parameter never widening access. Scenario 5 is entirely blocked on this.
+3. **The identity entitlement resolves from is caller-asserted.** Personas exist and cannot widen
+   access, but `RBACMiddleware` still trusts `X-User-Role`/`X-User-Email`/`X-Admin-Apps` and :8001
+   is published to the host. (`docs/TASK.md` P2-1, P2-4, P2-5)
 
-5. **Provisional windows.** All three contracts declare `provisional_window_minutes: 10`;
-   nothing implements it. This matters more than it looks because the simulation console
-   backdates events — a window can gain rows after it has been scored.
-
-**Not a blocker:** the scheduling pattern `docs/PIPELINE_CONTRACT.md` §2 says to reuse is real
-and correct — `start_data_layer_refresh` guards every iteration inside its `while True`, so
-copying it will not silently kill the task.
+**Not a blocker:** the scheduler. `api/intelligence/service.py` guards every iteration inside each
+`while True`, so a stage exception cannot silently kill a loop.
 
 ---
 
@@ -259,10 +292,18 @@ copying it will not silently kill the task.
 
 | Path | Purpose |
 |---|---|
-| `scripts/verify_data_quality.py` | the 18 checks above |
+| `scripts/verify_data_quality.py` | the checks above; count varies with the contract set |
 | `scripts/taxonomy_probe.js` | executes the real Node `enforceTaxonomy` |
 | `core/event_names.py` | the ingest dialect, importable without pydantic |
 | `NexaBank/backend/src/helper/simulationBehavior.ts` | behaviour knobs for the simulate console |
 | `NexaBank/frontend/components/admin/BehaviorControls.tsx` | the scenario dropdown |
 | `.gitattributes` | forces LF on `*.sh` so container entrypoints keep working |
 | `feature_intelligence.events_dead_letter` | worker DLQ table (also in `storage/schema.sql`) |
+| `storage/migrate.py` | idempotent migration runner + `schema_migrations` ledger (P1-2) |
+| `core/config.py`, `core/security.py` | settings and PII redaction, importable without FastAPI |
+| `requirements-dev.txt`, the `tests` compose service | the only image carrying `pytest` |
+| `scripts/run_intelligence_gates.py` | the executable Gate D suite |
+| `fixtures/planted_truth.json` | recorded ground truth for the five scenarios (P1-9) |
+| `e2e/` | Playwright specs + NextAuth JWT minting, and the `e2e` compose service |
+| `NexaBank/backend/src/routes/extract*.ts` | the watermarked extract API for sources A, B and C |
+| `NexaBank/backend/src/scripts/` | `resetDemoData`, `seedReferenceData`, `generateDemoData`, `applyLifecycle` |

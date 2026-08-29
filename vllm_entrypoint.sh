@@ -6,6 +6,29 @@
 
 set -e
 
+# ── Operator override ─────────────────────────────────────────
+# VLLM_MODEL pins the weights and skips VRAM-based selection entirely. Without it a large GPU
+# always loads the 7B tier, which silently overrides a deliberate choice of a smaller model.
+# The narrator asks the server which model it serves, so nothing downstream needs to agree.
+if [ -n "${VLLM_MODEL:-}" ]; then
+    MODEL="$VLLM_MODEL"
+    GPU_UTIL="${VLLM_GPU_UTIL:-0.60}"
+    MAX_LEN="${VLLM_MAX_LEN:-2048}"
+    EXTRA_FLAGS="${VLLM_EXTRA_FLAGS:---enforce-eager}"
+    echo "═══════════════════════════════════════════════════════"
+    echo "  vLLM: model PINNED by VLLM_MODEL (VRAM tiering skipped)"
+    echo "  ▸ Model:    $MODEL"
+    echo "  ▸ GPU Util: $GPU_UTIL"
+    echo "  ▸ Max Len:  $MAX_LEN"
+    echo "═══════════════════════════════════════════════════════"
+    exec vllm serve \
+        --model "$MODEL" \
+        --quantization awq \
+        --gpu-memory-utilization "$GPU_UTIL" \
+        --max-model-len "$MAX_LEN" \
+        $EXTRA_FLAGS
+fi
+
 # Query free VRAM in MiB from nvidia-smi
 VRAM_FREE_MIB=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits | head -n1 | tr -d ' ')
 VRAM_TOTAL_MIB=$(nvidia-smi --query-gpu=memory.total --format=csv,noheader,nounits | head -n1 | tr -d ' ')

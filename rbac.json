@@ -14,5 +14,34 @@
       "abhishekkumawat1008@gmail.com",
       "vinodrathore2107@gmail.com"
     ]
+  },
+  "personas": {
+    "_comment": "Persona shapes the narrative only. Tenant scope still comes from role + app_admins. selectable_by_role is the ONLY way a caller may switch persona: the allowlist is server-side config, so a persona query parameter can never widen what a role may read (CLAUDE.md rule 11).",
+    "default": "analyst",
+    "by_role": {
+      "super_admin": "cfo",
+      "app_admin": "ops_manager",
+      "user": "analyst"
+    },
+    "by_email": {},
+    "allowed": [
+      "cfo",
+      "ops_manager",
+      "analyst"
+    ],
+    "selectable_by_role": {
+      "super_admin": [
+        "cfo",
+        "ops_manager",
+        "analyst"
+      ],
+      "app_admin": [
+        "ops_manager",
+        "analyst"
+      ],
+      "user": [
+        "analyst"
+      ]
+    }
   }
 }

@@ -6,7 +6,16 @@ aiokafka==0.10.0
 confluent-kafka==2.4.0
 clickhouse-connect==0.7.16
 python-dotenv==1.0.1
-# Contract loader for contracts/*.yaml -- the one new runtime dependency Phase 1 adds
-# (CLAUDE.md rule 2). It was already present transitively; relying on that is how a
-# dependency silently disappears when an unrelated package is upgraded.
+# Contract loader for contracts/*.yaml. It was already present transitively; relying on that
+# is how a dependency silently disappears when an unrelated package is upgraded.
 PyYAML==6.0.3
+
+# --- intelligence layer: robust statistics ---
+numpy==2.1.3             # robust statistics (median/MAD, BH correction)
+scipy==1.14.1            # quantiles, distribution checks
+
+# --- optional, feature-detected at runtime; each stage falls back without them ---
+# statsmodels==0.14.4    # ETS / SARIMA classical forecast tier
+# psqueeze               # Localize on large cubes (MIT) -- github.com/NetManAIOps/PSqueeze
+# chronos-forecasting    # zero-shot TSFM forecaster; pulls torch, GPU optional
+
