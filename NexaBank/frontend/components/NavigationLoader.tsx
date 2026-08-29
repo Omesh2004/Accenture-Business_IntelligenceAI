@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import { usePathname, useSearchParams } from "next/navigation";
 
 export default function NavigationLoader() {
@@ -54,23 +54,17 @@ export default function NavigationLoader() {
   }, []);
 
   useEffect(() => {
-    if (!loading) return;
-
-    const doneTimer = setTimeout(() => {
-      setLoading(false);
-      if (fallbackTimerRef.current) {
-        clearTimeout(fallbackTimerRef.current);
-        fallbackTimerRef.current = null;
-      }
-    }, 250);
-
-    return () => clearTimeout(doneTimer);
-  }, [routeKey, loading]);
+    setLoading(false);
+    if (fallbackTimerRef.current) {
+      clearTimeout(fallbackTimerRef.current);
+      fallbackTimerRef.current = null;
+    }
+  }, [routeKey]);
 
   if (!loading) return null;
 
   return (
-    <div className="min-h-screen pointer-events-none fixed inset-0 z-[9999] flex items-center justify-center bg-white">
+    <div className="min-h-screen fixed inset-0 z-[9999] flex items-center justify-center bg-white/70 backdrop-blur-sm">
       <div className="relative h-10 w-10 shrink-0">
         <div className="absolute inset-0 rounded-full border-2 border-blue-100" />
         <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-[#8f1ae8] border-r-[#961ae8] animate-spin" />

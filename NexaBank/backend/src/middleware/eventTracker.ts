@@ -263,6 +263,13 @@ function enforceTaxonomy(eventName: string): string {
     'payees': 'payees.page.view',
     'payment_completed': 'transactions.pay_now.success',
     'payment_failed': 'transactions.pay_now.failed',
+    // Added during the NexaBank telemetry audit: transactionRoutes.ts's POST /transactions
+    // handler was firing the untaxonomized literal "transfer_completed" for every TRANSFER
+    // regardless of outcome. With no LEGACY_MAP entry it fell through to the generic fallback
+    // (core.transfer_completed.action), which no contract references -- an invisible silent
+    // zero, verified through the real chain. Mirrors the payment_* pair immediately above.
+    'transfer_completed': 'transactions.transfer.success',
+    'transfer_failed': 'transactions.transfer.failed',
     'loan_applied': 'loans.applied.success',
     'loan_approved': 'loans.approved.success',
     'loans_page_view': 'loans.page.view',

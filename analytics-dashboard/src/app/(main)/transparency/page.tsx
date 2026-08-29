@@ -159,24 +159,6 @@ const sensitivityConfig = {
   low: { bg: 'bg-blue-50', text: 'text-blue-700', border: 'border-blue-200', dot: 'bg-blue-500' },
 };
 
-/**
- * TrustVerdict.verdict, TrustBadge and VerdictChip each use a different vocabulary for the
- * same three states. Translate explicitly rather than widening any of them -- a shared
- * fourth vocabulary is how this repo's event taxonomy ended up with three dialects that
- * disagree (CLAUDE.md coupling point 2).
- */
-function toBadgeStatus(verdict: TrustVerdict['verdict']): TrustBadgeStatus {
-  if (verdict === 'pass') return 'pass';
-  if (verdict === 'flag') return 'flagged';
-  return 'quarantined';
-}
-
-function toVerdictValue(verdict: TrustVerdict['verdict']): VerdictValue {
-  if (verdict === 'pass') return 'proceed';
-  if (verdict === 'flag') return 'flagged';
-  return 'suppressed';
-}
-
 export default function TransparencyPage() {
   const [viewMode, setViewMode] = useState<ViewMode>('on-prem');
   const dashboardData = useDashboardData();
