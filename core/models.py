@@ -13,6 +13,12 @@ from core.event_names import (  # noqa: F401
     normalize_ingest_event_name,
 )
 
+# P0-4 bounds. 90 days back covers any legitimate backfill or simulate-console backdating;
+# 5 minutes forward covers ordinary clock skew.
+MAX_EVENT_AGE_S = 90 * 24 * 3600
+MAX_EVENT_SKEW_S = 5 * 60
+
+
 class ChannelEnum(str, Enum):
     web = "web"
     mobile = "mobile"
@@ -83,6 +89,23 @@ class FeatureEvent(BaseModel):
             raise ValueError(
                 "event_id must be a non-empty, stable ID -- required for replay-safe analytics "
                 "(uniqExact(event_id) dedup depends on it)."
+            )
+        return v
+
+    @field_validator('timestamp')
+    @classmethod
+    def validate_timestamp(cls, v: float) -> float:
+        # P0-4. timestamp is client-supplied (Date.now()/1000 from a browser, or the Express
+        # clock). Unbounded, a skewed clock or a producer sending milliseconds puts events in
+        # the year 55000, where -- with no upper bound on any query window -- they are counted
+        # in every "last N days" window forever and cannot be evicted.
+        import time as _time
+        now = _time.time()
+        if not (now - MAX_EVENT_AGE_S) <= v <= (now + MAX_EVENT_SKEW_S):
+            raise ValueError(
+                f"timestamp {v} is outside the accepted window "
+                f"[now-{MAX_EVENT_AGE_S}s, now+{MAX_EVENT_SKEW_S}s]. "
+                "Check the producer clock and whether it is sending milliseconds."
             )
         return v
 

@@ -47,7 +47,10 @@ readiness:
         (scoped to first-party hosts). Re-measured: 5 events, 1 session.
         Verify with scripts/verify_data_quality.py, check SESSIONS.
     - id: live-dimensions-are-noise
-      status: resolved
+      # Was `resolved`; FOUNDATION-2 fixed additivity, not informativeness. See correction_2.
+      status: partially_resolved
+      resolved_aspect: additivity
+      unresolved_aspect: informativeness
       affects: [live]
       detail: >
         forwardToIngestionAPI called selectGeoProfile() and selectDevice() PER EVENT, so
@@ -63,6 +66,10 @@ readiness:
         41 events carrying 10 distinct locations and 4 distinct devices. After the interceptor
         fix the same shape of traffic yields 1 location and 1 device per session.
         scripts/verify_data_quality.py asserts session-invariance per declared dimension.
+      correction_2: >
+        FOUNDATION-2 made these session-invariant (additivity), not measured. selectGeoProfile()/
+        selectDevice() still fabricate them, so Localize is valid on the seeded path only until
+        metadata._simulated exists. See docs/INTELLIGENCE_LAYER_PREREQUISITES.md Block A.
     - id: live-kyc-started-misrouted
       status: resolved
       affects: [live]
@@ -78,6 +85,9 @@ readiness:
     Both paths are instrumented; Trust Gate no longer needs to force fail:not_instrumented for
     this KPI on readiness grounds alone. Ordinary Trust Gate invariant checks (dedup_integrity,
     session_present, funnel_order) still apply per run.
+    Computable is not localizable: the ratio computes on both paths, but every allowed dimension
+    is fabricated on the live path, so Localize is seeded-path-only until metadata._simulated
+    exists.
 
 source:
   name: nexabank_clickstream
@@ -117,10 +127,11 @@ dimensions:
   session_invariant: true
   max_depth: 3
   min_segment_volume: 20
+  # live_fabricated: present and session-invariant, but generated -- disqualifying for cube search.
   availability:
-    device_type: {seeded: true, live: true}   # FOUNDATION-2: session-cached, no longer re-rolled per event
-    location: {seeded: true, live: true}      # FOUNDATION-2: session-cached, no longer re-rolled per event
-    continent: {seeded: true, live: true}
+    device_type: {seeded: true, live: true, live_fabricated: true}
+    location: {seeded: true, live: true, live_fabricated: true}
+    continent: {seeded: true, live: true, live_fabricated: true}
   excluded:
     - key: channel
       reason: >
@@ -154,6 +165,9 @@ quality:
       note: >
         Detects the duplicate-event storm (worker replay). This is the Phase 1 hero defect;
         see docs/SCENARIOS.md scenario 1.
+      caveat: >
+        Not merge-stable: ReplacingMergeTree collapses a real replay, making this true again.
+        Do not implement as written -- decision D1, docs/PROPOSAL.md section 2 Block D-ii.
     - id: session_present
       expr: countIf(session_id = '') == 0
       on_fail: quarantine

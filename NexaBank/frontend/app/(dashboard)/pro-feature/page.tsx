@@ -112,7 +112,7 @@ function ProFeatureContent() {
   const { track } = useEventTracker()
 
   useEffect(() => {
-    track(`pro-feature.${featureId}.view`)
+    track(`${featureId}.page.view`)
   }, [featureId, track])
 
   useEffect(() => {
@@ -308,7 +308,7 @@ function FinanceLibraryModule() {
 
   const handleAccessBook = async (book: typeof books[0]) => {
     try {
-      await measureAndTrack("pro-feature.ai-insights.read_online", async () => {
+      await measureAndTrack("ai-insights.book", async () => {
         await axios.post(`${API_BASE_URL}/pro/access_book`, {
           title: book.title,
           url: book.url,
@@ -445,7 +445,7 @@ function CryptoTradingModule() {
 
     setTrading(true)
     try {
-      await measureAndTrack(`pro-feature.crypto-trading.${type.toLowerCase()}`, async () => {
+      await measureAndTrack(`crypto-trading.trade_execution`, async () => {
         await axios.post(`${API_BASE_URL}/pro/trade`, {
           asset: selectedAsset,
           amount: parseFloat(amount),
@@ -493,7 +493,7 @@ function CryptoTradingModule() {
           <Card
             key={a.id}
             className={`cursor-pointer transition-all duration-200 hover:shadow-md ${selectedAsset === a.id ? 'border-2 border-violet-500 shadow-lg shadow-violet-100' : 'border-zinc-100'}`}
-            onClick={() => { setSelectedAsset(a.id); track(`pro-feature.crypto-trading.select_${a.id.toLowerCase()}`) }}
+            onClick={() => { setSelectedAsset(a.id); track(`crypto-trading.asset_select.success`) }}
           >
             <CardContent className="p-4 space-y-1">
               <div className="flex items-center justify-between">
@@ -616,7 +616,7 @@ function WealthManagementModule() {
 
   useEffect(() => {
     fetchInsights()
-    track('pro-feature.wealth-management-pro.insights_view');
+    track('wealth-management-pro.insights.view');
   }, [track])
 
   const fetchInsights = async () => {
@@ -634,7 +634,7 @@ function WealthManagementModule() {
   const handleRebalance = async () => {
     setRebalancing(true)
     try {
-      await measureAndTrack("pro-feature.wealth-management-pro.rebalance", async () => {
+      await measureAndTrack("wealth-management-pro.rebalance", async () => {
         await axios.post(`${API_BASE_URL}/pro/rebalance_wealth`, {}, { withCredentials: true })
       })
       toast.success("Portfolio successfully rebalanced!")
@@ -848,7 +848,7 @@ function PayrollModule() {
 
   useEffect(() => {
     fetchExistingPayees()
-    track('pro-feature.bulk-payroll-processing.payroll_view');
+    track('bulk-payroll-processing.payees.view');
   }, [track])
 
   const fetchExistingPayees = async () => {
@@ -869,7 +869,7 @@ function PayrollModule() {
         setIsSearching(true)
         try {
           let results: any[] = []
-          await measureAndTrack("pro-feature.bulk-payroll-processing.search_by_name", async () => {
+          await measureAndTrack("bulk-payroll-processing.search", async () => {
             const res = await axios.post(`${API_BASE_URL}/pro/search_payees`, {
               query: searchQuery
             }, { withCredentials: true })
@@ -900,7 +900,7 @@ function PayrollModule() {
     setSelectedPayees(prev => [...prev, payee])
     setSearchQuery("")
     setSearchResults([])
-    track("pro-feature.bulk-payroll-processing.add_payee.success")
+    track("bulk-payroll-processing.add_payee.success")
   }
 
   const removePayee = (accNo: string) => {
@@ -927,7 +927,7 @@ function PayrollModule() {
     setProcessing(true)
     try {
       let res: any;
-      await measureAndTrack("pro-feature.bulk-payroll-processing.pay_all", async () => {
+      await measureAndTrack("bulk-payroll-processing.batch", async () => {
         res = await axios.post(`${API_BASE_URL}/pro/process_payroll`, {
           payees: selectedPayees.map(p => ({ accNo: p.accNo, name: p.name })),
           amountPerPayee: amt,

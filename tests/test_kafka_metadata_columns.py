@@ -23,6 +23,11 @@ Run from the repo root, in an environment with this project's actual dependencie
     python -m unittest tests.test_kafka_metadata_columns -v
 """
 import os
+import time as _time
+
+# Time-relative: a fixed past literal now fails FeatureEvent's timestamp bounds (P0-4).
+_NOW_TS = _time.time()
+
 import sys
 import unittest
 from unittest import mock
@@ -87,7 +92,7 @@ class InsertEventsColumnHandling(unittest.TestCase):
         fake = FakeClickHouseClient()
         event = {
             "event_id": "evt_1", "tenant_id": "nexabank", "event_name": "x.y.z",
-            "user_id": "u1", "channel": "web", "timestamp": 1718361234.56,
+            "user_id": "u1", "channel": "web", "timestamp": _NOW_TS,
             "metadata": {}, "kafka_partition": 2, "kafka_offset": 99,
             "kafka_topic": "feature-events", "ingest_path": "kafka",
         }
@@ -102,7 +107,7 @@ class InsertEventsColumnHandling(unittest.TestCase):
             column_names,
             ["event_id", "session_id", "tenant_id", "event_name", "user_id", "channel",
              "timestamp", "metadata", "kafka_partition", "kafka_offset", "kafka_topic",
-             "ingested_at", "ingest_path", "_inserted_at"],
+             "ingested_at", "ingest_path", "_inserted_at", "event_name_canonical"],
         )
         row = rows[0]
         # kafka_partition, kafka_offset, kafka_topic, ingest_path are found by index (not
@@ -120,7 +125,7 @@ class InsertEventsColumnHandling(unittest.TestCase):
         fake = FakeClickHouseClient()
         event = {
             "event_id": "evt_seed", "tenant_id": "safexbank", "event_name": "x.y.z",
-            "user_id": "u1", "channel": "web", "timestamp": 1718361234.56, "metadata": {},
+            "user_id": "u1", "channel": "web", "timestamp": _NOW_TS, "metadata": {},
         }
         with mock.patch.object(client, "_get_client", return_value=fake):
             client.insert_events([event])
@@ -146,7 +151,7 @@ class InsertDirectToClickHouseIngestPath(unittest.TestCase):
 
     BASE_EVENT = {
         "event_id": "evt_1", "tenant_id": "nexabank", "event_name": "x.y.z",
-        "user_id": "u1", "channel": "web", "timestamp": 1718361234.56, "metadata": {},
+        "user_id": "u1", "channel": "web", "timestamp": _NOW_TS, "metadata": {},
     }
 
     def _insert_and_capture(self, ingest_path: str):

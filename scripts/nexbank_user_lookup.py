@@ -41,15 +41,28 @@ except ImportError:
 # Database connection configuration (Supabase / NexBank)
 # ─────────────────────────────────────────────────────────────
 # You can override these via environment variables if you prefer.
-DB_HOST = os.environ.get("NEXBANK_DB_HOST", "aws-1-ap-south-1.pooler.supabase.com")
+# No credential defaults. A live Supabase host, user and PASSWORD were hardcoded here, so anyone
+# with the repo had production database access. Removing them does NOT undo the exposure -- they
+# remain in git history and MUST be rotated in Supabase.
+DB_HOST = os.environ.get("NEXBANK_DB_HOST", "")
 DB_PORT = int(os.environ.get("NEXBANK_DB_PORT", "5432"))
 DB_NAME = os.environ.get("NEXBANK_DB_NAME", "postgres")
-DB_USER = os.environ.get("NEXBANK_DB_USER", "postgres.lwzosehnvxwcvcadevep")
-DB_PASS = os.environ.get("NEXBANK_DB_PASS", "abhishekkumawat@gmail.com")
+DB_USER = os.environ.get("NEXBANK_DB_USER", "")
+DB_PASS = os.environ.get("NEXBANK_DB_PASS", "")
 
 
 def get_connection():
-    """Create and return a database connection."""
+    """Create and return a database connection.
+
+    Fails loudly rather than falling back to a baked-in credential: a silent default is how the
+    previous one survived unnoticed.
+    """
+    missing = [n for n, v in (("NEXBANK_DB_HOST", DB_HOST), ("NEXBANK_DB_USER", DB_USER),
+                              ("NEXBANK_DB_PASS", DB_PASS)) if not v]
+    if missing:
+        raise SystemExit(
+            "Missing database credentials: %s. Export them (or put them in .env) before running "
+            "this script; it no longer carries defaults." % ", ".join(missing))
     return psycopg2.connect(
         host=DB_HOST,
         port=DB_PORT,

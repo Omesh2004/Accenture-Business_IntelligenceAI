@@ -115,6 +115,9 @@ class ClickHouseClient:
         now = datetime.now(timezone.utc).replace(tzinfo=None)
 
         # Prepare column data
+        # P0-6: canonicalised ONCE here, so no reader has to do it afterwards.
+        from api.page_map import canonicalize_event_name
+
         data = [
             [
                 e.get('event_id', ''),
@@ -133,6 +136,7 @@ class ClickHouseClient:
                 now,        # ingested_at
                 str(e.get('ingest_path', '') or ''),
                 now,        # _inserted_at
+                canonicalize_event_name(e['event_name']) or e['event_name'],
             ]
             for e in events
         ]
@@ -147,23 +151,31 @@ class ClickHouseClient:
             column_names=[
                 'event_id', 'session_id', 'tenant_id', 'event_name', 'user_id', 'channel',
                 'timestamp', 'metadata', 'kafka_partition', 'kafka_offset', 'kafka_topic',
-                'ingested_at', 'ingest_path', '_inserted_at',
+                'ingested_at', 'ingest_path', '_inserted_at', 'event_name_canonical',
             ],
             **insert_kwargs,
         )
         logger.debug(f"Inserted {len(events)} events into ClickHouse.")
 
     def query(self, sql: str, parameters: dict = None) -> List[Dict[str, Any]]:
-        """Execute a custom SQL query and return dicts. Creates a fresh client per call for thread safety."""
+        """Execute a query and return dicts. Fresh client per call for thread safety.
+
+        P3-7: the client is now CLOSED afterwards. "Fresh per call" and "never closed" are
+        separable, and only the first is required -- /metrics/kpi alone fires six queries, so an
+        unclosed client per query leaked file descriptors and ClickHouse sessions over hours of
+        dashboard polling.
+        """
         client = self._get_client()
-            
-        result = client.query(sql, parameters=parameters if parameters else {})
-        
-        # Zip column names with row values
-        columns = result.column_names
-        rows = result.result_rows
-        
-        return [dict(zip(columns, row)) for row in rows]
+        try:
+            result = client.query(sql, parameters=parameters if parameters else {})
+            columns = result.column_names
+            rows = result.result_rows
+            return [dict(zip(columns, row)) for row in rows]
+        finally:
+            try:
+                client.close()
+            except Exception:
+                pass
 
 # Singleton instance
 ch_client = ClickHouseClient()

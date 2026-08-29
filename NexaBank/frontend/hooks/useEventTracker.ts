@@ -4,6 +4,9 @@ import { API_BASE_URL } from '@/lib/api';
 import { useFeatureToggles } from '@/components/context/FeatureToggleContext';
 
 export interface EventMetadata {
+  /** P0-9: snake_case to match what forwardToIngestionAPI reads. */
+  response_time_ms?: number;
+  /** @deprecated camelCase never matched the forwarder; kept so old call sites still compile. */
   responseTime?: number;
   error?: string | unknown;
   amount?: number;
@@ -41,7 +44,7 @@ const recentEmits = new Map<string, number>();
  * (timing measurements chiefly) -- excluded from the suppression key so a few milliseconds of
  * jitter doesn't defeat the whole point of this map: the two invocations are still one real
  * user action. */
-const VOLATILE_METADATA_KEYS = new Set(['responseTime']);
+const VOLATILE_METADATA_KEYS = new Set(['responseTime', 'response_time_ms']);
 
 function suppressionKey(eventType: string, metadata?: EventMetadata): string {
   const stableMetadata = Object.fromEntries(
@@ -105,13 +108,13 @@ export const useEventTracker = () => {
     try {
       const result = await action();
       const end = performance.now();
-      await track(`${eventType}.success`, { ...baseMetadata, responseTime: Math.round(end - start) });
+      await track(`${eventType}.success`, { ...baseMetadata, response_time_ms: Math.round(end - start) });
       return result;
     } catch (error: unknown) {
       const end = performance.now();
       await track(`${eventType}.error`, { 
         ...baseMetadata, 
-        responseTime: Math.round(end - start), 
+        response_time_ms: Math.round(end - start), 
         error: error instanceof Error ? error.message : String(error)
       });
       throw error;

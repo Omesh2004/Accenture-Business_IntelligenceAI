@@ -1,5 +1,6 @@
 import asyncio
 import json
+import uuid
 import logging
 from typing import Dict, Set
 from fastapi import WebSocket
@@ -32,8 +33,10 @@ class ConnectionManager:
         if not connections:
             return
 
+        # I3: iterate a SNAPSHOT. Holding a live reference and awaiting inside the loop
+        # means a concurrent connect() raises "Set changed size during iteration".
         dead_sockets = set()
-        for connection in connections:
+        for connection in list(connections):
             try:
                 await connection.send_json(message)
             except Exception:
@@ -53,10 +56,13 @@ async def consume_kafka_events():
     consumer = None
     for _ in range(5):
         try:
+            # I5: a SHARED group id makes two API replicas split the partitions, so a
+            # browser on replica A never sees events landing on B's. This is a fanout consumer,
+            # not a work queue -- every process needs its own group.
             consumer = AIOKafkaConsumer(
                 topic,
                 bootstrap_servers=kafka_url,
-                group_id="websocket-broadcaster-group",
+                group_id=f"websocket-broadcaster-{uuid.uuid4().hex[:8]}",
                 auto_offset_reset="latest"
             )
             await consumer.start()
@@ -80,9 +86,17 @@ async def consume_kafka_events():
 
                 # Connections are keyed by tenant_id, so fan-out is O(1).
                 if tenant_id:
+                    # API-10: broadcast a SUMMARY, not the raw payload. The socket is
+                    # unauthenticated at the middleware layer, and the raw event carries
+                    # user_id and full metadata.
                     await manager.broadcast_to_tenant(tenant_id, {
                         "type": "REALTIME_EVENT",
-                        "payload": event
+                        "payload": {
+                            "event_name": event.get("event_name"),
+                            "channel": event.get("channel"),
+                            "timestamp": event.get("timestamp"),
+                            "tenant_id": tenant_id,
+                        },
                     })
             except json.JSONDecodeError:
                 continue

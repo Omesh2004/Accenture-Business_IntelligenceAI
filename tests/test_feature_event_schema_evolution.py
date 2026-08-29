@@ -13,6 +13,11 @@ ingestion-api / analytics-api / processor-worker container, which all share requ
     python -m unittest tests.test_feature_event_schema_evolution -v
 """
 import os
+import time as _time
+
+# Time-relative: a fixed past literal now fails FeatureEvent's timestamp bounds (P0-4).
+_NOW_TS = _time.time()
+
 import sys
 import unittest
 
@@ -27,7 +32,7 @@ BASE = dict(
     event_name="login.auth.success",
     tenant_id="nexabank",
     user_id="u1",
-    timestamp=1718361234.56,
+    timestamp=_NOW_TS,
     channel="web",
 )
 

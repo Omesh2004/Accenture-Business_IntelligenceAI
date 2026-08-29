@@ -44,7 +44,8 @@ a static threshold.
 scheduled batch:   Forecast (04)  ->  forecasts table
                                           |
 per investigation: Foundation (00) -> Trust Gate (01) -> Detect (02, reads the band)
-                        -> Localize (03) -> Causal (05) -> Decide (06) -> Narrate (07)
+                        -> Localize (03) -> Decompose (02a, contract opt-in)
+                        -> Causal (05) -> Decide (06) -> Narrate (07)
                                           |
 always:            Observe (08) records every stage run
 ```
@@ -62,13 +63,14 @@ Stages 01-08 are unbuildable until these land. Full detail, DDL, and verificatio
 | Item | What | Why it blocks Phase 1 |
 |---|---|---|
 | **FOUNDATION-1** | Capture the existing Postgres `Event.id` UUID as `event_id` end to end | Without it the `dedup_integrity` invariant cannot run and scenario 1 cannot be detected. The previously documented "hash of source id + sequence + timestamp" design does not work — there is no source sequence, so it collides. |
-| **FOUNDATION-2** | Emit `session_id` from NexaBank, and pick the geo/device profile **once per session** | Session grain is what makes ratio localization additive. The live path currently re-rolls `location`/`device_type` per event, so those fields are noise. |
-| **FOUNDATION-3** | Four `LEGACY_MAP` remaps in `eventTracker.ts` | `loan_approved` and `loan_applied` do not survive the taxonomy today; both KPIs read zero rows silently. |
+| **FOUNDATION-2** | Emit `session_id` from NexaBank, and pick the geo/device profile **once per session** | Session grain is what makes ratio localization additive. Landed; the profile is cached per `session_id`, and `metadata._simulated` (P0-8) declares which of those fields were invented. |
+| **FOUNDATION-3** | `LEGACY_MAP` remaps in `eventTracker.ts` | `loan_approved` and `loan_applied` did not survive the taxonomy; both KPIs read zero rows silently. Landed for all ten contracts. |
 | **FOUNDATION-4** | Replace `total_events UInt64` with `uniqExactState(event_id)` in the rollup | One fix for two bugs: the plain column silently decays on merge, and the uniq state makes counts idempotent under worker replay. |
 
 `scripts/seed_data.py` already emits `session_id` and assigns one geo/device profile per session,
-so the **seeded demo path is already localizable**. FOUNDATION-2 is required for live traffic and
-for `event_id`, which no producer emits on any path.
+so the **seeded demo path is localizable**, and decision D4 made it the demo dataset.
+`FeatureEvent.event_id` is now required with no default, so an omitted id returns 422 rather than
+becoming `''` — every producer that posts through `POST /events` supplies one.
 
 ---
 
@@ -128,6 +130,18 @@ Search the dimension cube and return the combinations that explain the move.
 - Rank candidate causes by explained contribution, affected volume, and confidence.
 - Return multiple causes when needed; contributions should sum to roughly 1 for the ranked set.
 - If available dimensions do not explain the move, say so — that is itself a finding.
+
+### 02a. Decompose — which factor, as distinct from which cell
+
+Optional, and separate from Localize on purpose. Localize says *where* the movement concentrated;
+Decompose says *what kind* of movement it was.
+
+- Runs only when the contract declares `decomposition.enabled` and the KPI reads a fact table.
+- LMDI-I over volume, mix and price, plus entry/exit, at the contract's `mix_dimensions`.
+- The residual must close to `residual_tolerance` or the identity does not hold — that is a
+  correctness alarm, logged, not normalised away.
+- Writes its factors as `root_causes` rows; surfaced by the `get_factors` tool and the analyst
+  persona's `factor` intent.
 
 ### 04. Forecast
 
@@ -217,8 +231,9 @@ Measure whether the engine is right and make the loop auditable.
 
 ## Demo Scenarios
 
-Five runs, scripted in `docs/SCENARIOS.md` against one seeded NexaBank dataset. That file is the
-executable detail; this is the index.
+Five runs, scripted in `docs/SCENARIOS.md`. Planted across two gate tenants, not one — a defect
+scenario quarantines the KPI a pass scenario needs. That file is the executable detail; this is the
+index.
 
 1. **Data defect suppressed (hero).** A duplicate-event storm creates a large, statistically real
    spike. Trust Gate fails it on `dedup_integrity`, quarantines the metric, and the narrator emits
@@ -245,13 +260,43 @@ this repo can actually compute.
 
 - **New:** `contracts/*.yaml` as semantic KPI contracts; `api/intelligence/` modules for the
   stages; Signal Store tables including `trust_findings` and `causal_effects`; evidence cards;
-  recommendations; outcomes; verifier and telemetry payloads. `PyYAML` as the one new runtime
-  dependency, for the contract loader.
+  recommendations; outcomes; verifier and telemetry payloads. Runtime dependencies are
+  `PyYAML` plus `numpy`/`scipy`, with `PSqueeze`, a time-series foundation model and
+  `statsmodels` as optional feature-detected tiers — see `CLAUDE.md` rule 2, which superseded the
+  earlier "one new dependency" framing on 2026-08-27.
 - **Modified:** NexaBank event tracker (FOUNDATION-1/2/3), `scripts/seed_data.py`, event envelope,
-  ClickHouse schema and rollup (FOUNDATION-4), the 12 `total_events` read sites, `/ai_report`
-  internals, `api/insights.py`, dashboard AI panel.
+  ClickHouse schema and rollup (FOUNDATION-4 — `total_events` is gone, replaced by
+  `uniqExactMerge(event_count)` and `sumMerge(raw_rows)`), `/ai_report` internals,
+  `api/insights.py`, dashboard AI panel.
 - **Unchanged:** ingestion transport, Kafka topic, worker shape, WebSocket transport, existing
   hot dashboard endpoints unless a response-shape change is explicitly planned.
+
+**Prerequisite, added 2026-08-28 and now closed.** None of the above started until the substrate
+under it was fixed. The audit found eight blocks that would have made the nine stages emit
+confident, wrong answers — fabricated dimensions, a lossy taxonomy, four definitions of a day, a
+Trust Gate with nothing to gate on, and no way to apply the Signal Store DDL. Gates P0 and P1 have
+since passed. The audit is `docs/INTELLIGENCE_LAYER_PREREQUISITES.md`, the remediation plan is
+`docs/PROPOSAL.md`, and the sequenced work with per-task status is `docs/TASK.md`.
+
+---
+
+## Deferred to Phase 2
+
+Referenced by `CLAUDE.md` rule 1. If Phase 1 appears to need one of these, stop and ask.
+
+| Item | Where it would go |
+|---|---|
+| Full CausalImpact / synthetic control / causal graphs | stage 05, replacing the rules-first causal stage |
+| Contextual bandits, uplift modeling, learning from `outcomes` | stage 06; Phase 1 records outcomes and trains nothing |
+| **Narrow autonomy** — a pre-approved action set executing without a signature | stage 08 rollout ladder; Phase 1 stops at Assist |
+| Open-ended metric *discovery* beyond Tier 0 contract synthesis | `docs/VALIDATION_LAYER.md` §2 |
+| The KPI-registry validation and feedback layer | `docs/VALIDATION_LAYER.md`, design only, unscheduled |
+| Per-series trained forecasters (LSTM/GRU) | excluded by design, not by effort — breaks the zero-training-data claim |
+| Secret rotation, JWT verification hardening beyond P2-1 | `docs/TASK.md` Gate P2 and "Deliberately not scheduled" |
+| Any new datastore or orchestrator (Redis, S3, GraphQL, OTel, Datadog) | out of scope for this stack entirely |
+
+Deferred **methods** — as distinct from deferred scope — are the Status column in
+`docs/RESEARCH.md`. Those are swaps behind an existing interface, not new scope.
 
 ---
 

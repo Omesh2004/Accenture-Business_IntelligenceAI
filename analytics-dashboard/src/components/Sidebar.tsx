@@ -24,6 +24,7 @@ import {
   FileText,
   Key,
   TrendingUp,
+  Brain,
 } from 'lucide-react';
 import { useAppDispatch, useAppSelector } from '@/lib/store';
 import { toggleSidebar } from '@/lib/dashboardSlice';
@@ -43,6 +44,7 @@ const iconMap: Record<string, React.ElementType> = {
   'file-text': FileText,
   key: Key,
   'trending-up': TrendingUp,
+  brain: Brain,
 };
 
 interface SidebarProps { }
@@ -70,6 +72,7 @@ function Sidebar(_props: SidebarProps) {
       { id: 'tenants', label: 'Tenants', icon: 'users', href: buildAppScopedPath(activeAppId, '/tenants') },
       { id: 'config', label: 'Configuration', icon: 'settings', href: buildAppScopedPath(activeAppId, '/settings') },
       { id: 'governance', label: 'Governance', icon: 'shield', href: buildAppScopedPath(activeAppId, '/governance') },
+      { id: 'intelligence', label: 'Intelligence', icon: 'brain', href: buildAppScopedPath(activeAppId, '/intelligence') },
       { id: 'transparency', label: 'Trust & Transparency', icon: 'eye', href: buildAppScopedPath(activeAppId, '/transparency') },
       { id: 'ai-report', label: 'AI Report', icon: 'file-text', href: buildAppScopedPath(activeAppId, '/ai-report') }
     ];

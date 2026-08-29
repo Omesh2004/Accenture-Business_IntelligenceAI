@@ -8,6 +8,10 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: process.cwd(),
   },
+  // Next 15 dev refuses cross-origin requests from an un-listed host. Inside compose the app is
+  // reached as `analytics-dashboard:3001`, not localhost, so without this the dev server serves a
+  // 200 with an empty body and every browser-driven test sees a blank page.
+  allowedDevOrigins: ['analytics-dashboard', 'localhost', '127.0.0.1'],
   rewrites: async () => {
     return {
       beforeFiles: [],
@@ -43,6 +47,7 @@ const nextConfig: NextConfig = {
         { source: '/api/journey/:path*', destination: `http://${analyticsApiHost}:8001/journey/:path*` },
         { source: '/api/segmentation/:path*', destination: `http://${analyticsApiHost}:8001/segmentation/:path*` },
         { source: '/api/predictive/:path*', destination: `http://${analyticsApiHost}:8001/predictive/:path*` },
+        { source: '/api/intelligence/:path*', destination: `http://${analyticsApiHost}:8001/intelligence/:path*` },
       ],
     };
   },

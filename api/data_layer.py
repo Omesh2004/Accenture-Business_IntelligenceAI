@@ -25,7 +25,7 @@ def fetch_tenant_summaries() -> None:
     """Fetches key insights (Funnel, adoption, performance) for all active tenants."""
     try:
         # Get active tenants in the last 7 days
-        sql_tenants = "SELECT DISTINCT tenant_id FROM feature_intelligence.events_raw WHERE timestamp >= today() - 7"
+        sql_tenants = "SELECT DISTINCT tenant_id FROM feature_intelligence.events_raw WHERE timestamp >= toDate(now('UTC')) - 7"
         tenants_res = ch_client.query(sql_tenants)
         tenants = [row['tenant_id'] for row in tenants_res] if tenants_res else []
         
@@ -39,7 +39,7 @@ def fetch_tenant_summaries() -> None:
             sql_adoption = """
                 SELECT event_name, uniqExactMerge(event_count) as count
                 FROM feature_intelligence.daily_feature_usage
-                WHERE tenant_id = %(tenant_id)s AND date >= today() - 7
+                WHERE tenant_id = %(tenant_id)s AND date >= toDate(now('UTC')) - 7
                 GROUP BY event_name
                 HAVING count > 0 AND count < 15
             """
@@ -48,10 +48,10 @@ def fetch_tenant_summaries() -> None:
             # 2. Trending Data
             sql_trending = """
                 SELECT event_name, 
-                       uniqExactMergeIf(event_count, date = today()) as today_count,
-                       uniqExactMergeIf(event_count, date = today() - 1) as yesterday_count
+                       uniqExactMergeIf(event_count, date = toDate(now('UTC'))) as today_count,
+                       uniqExactMergeIf(event_count, date = toDate(now('UTC')) - 1) as yesterday_count
                 FROM feature_intelligence.daily_feature_usage
-                WHERE tenant_id = %(tenant_id)s AND date >= today() - 1
+                WHERE tenant_id = %(tenant_id)s AND date >= toDate(now('UTC')) - 1
                 GROUP BY event_name
                 HAVING yesterday_count > 0 AND today_count > yesterday_count * 1.5
             """
@@ -73,7 +73,7 @@ def fetch_tenant_summaries() -> None:
                         any(if(JSONHas(metadata, 'response_time_ms'), JSONExtractFloat(metadata, 'response_time_ms'), 15)) as rt,
                         any(event_name) as event_name
                     FROM feature_intelligence.events_raw
-                    WHERE tenant_id = %(tenant_id)s AND timestamp >= today() - 7
+                    WHERE tenant_id = %(tenant_id)s AND timestamp >= toDate(now('UTC')) - 7
                     GROUP BY {DEDUP_EVENT_KEY}
                 )
             """

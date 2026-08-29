@@ -125,7 +125,7 @@ def generate_insights(tenant_id: str) -> List[Dict[str, str]]:
         sql_low_adoption = """
             SELECT event_name, uniqExactMerge(event_count) as count
             FROM feature_intelligence.daily_feature_usage
-            WHERE tenant_id = %(tenant_id)s AND date >= today() - 7
+            WHERE tenant_id = %(tenant_id)s AND date >= toDate(now('UTC')) - 7
             GROUP BY event_name
             HAVING count > 0 AND count < 15
         """
@@ -136,10 +136,10 @@ def generate_insights(tenant_id: str) -> List[Dict[str, str]]:
 
         sql_trending = """
             SELECT event_name, 
-                   uniqExactMergeIf(event_count, date = today()) as today_count,
-                   uniqExactMergeIf(event_count, date = today() - 1) as yesterday_count
+                   uniqExactMergeIf(event_count, date = toDate(now('UTC'))) as today_count,
+                   uniqExactMergeIf(event_count, date = toDate(now('UTC')) - 1) as yesterday_count
             FROM feature_intelligence.daily_feature_usage
-            WHERE tenant_id = %(tenant_id)s AND date >= today() - 1
+            WHERE tenant_id = %(tenant_id)s AND date >= toDate(now('UTC')) - 1
             GROUP BY event_name
             HAVING yesterday_count > 0 AND today_count > yesterday_count * 1.5
         """

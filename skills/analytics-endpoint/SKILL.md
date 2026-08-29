@@ -31,13 +31,26 @@ pipeline code, prefer a new module under `api/intelligence/` and keep `api/main.
 ## Traps (these have bitten before)
 
 - **The duplicate `/insights` route.** `@app.get("/insights")` is declared twice: one handler
-  (`api/main.py:566`) is cache/DB-backed LLM insights, the other (`api/main.py:3425`) is pure
+  (`api/main.py:625`) is cache/DB-backed LLM insights, the other (`api/main.py:3563`) is pure
   rule-based SQL. FastAPI serves the FIRST to HTTP callers, but the Python name `get_insights`
-  resolves to the SECOND, which `/admin/app/{id}/summary` calls directly. Do not add a third, and
-  do not delete either without tracing both call paths. For Phase 1, resolve this (one
-  implementation) before extending.
-- **f-string SQL.** SQL is string-built. Any value interpolated as a literal (e.g. funnel step
-  names in `/funnels`) must be escaped with the local `sql_quote`; prefer `%(name)s` params.
+  resolves to the SECOND, which `/admin/app/{id}/summary` calls directly at `api/main.py:2082`.
+  Do not add a third, and do not delete either without tracing both call paths. For Phase 1,
+  resolve this while writing the new `/ai_report` reader, not before.
+- **f-string SQL — and there is live SQL injection.** SQL is string-built. Any value interpolated
+  as a literal (e.g. funnel step names in `/funnels`) must be escaped with the local `sql_quote`;
+  prefer `%(name)s` params. **`/tracking/toggles` GET and POST (`api/main.py:2489` and `:2644`)
+  interpolate a caller-supplied tenant CSV with no escaping at all** — a ten-minute fix that has
+  not been made (`docs/TASK.md` P1-7). Copy the parameterised idiom, never these two.
+- **Time.** Do not use `today()` — it is ClickHouse **server-local** and no timezone is pinned on
+  the container. Use `toDate(now('UTC'))`, bound the window at **both** ends, and make the current
+  and previous windows the same length; the existing
+  `>= today() - 7` vs `>= today() - 14 AND < today() - 7` pattern biases every `pct_change` in the
+  file upward. See `CLAUDE.md`, Never do.
+- **Exact aggregates only if the number must be reproducible.** `uniq()` is HyperLogLog and
+  `quantile()`/`median()` are **reservoir sampling with an RNG**. Use `uniqExact`,
+  `quantileExact`, `medianExact`, and `min()`/`argMin()` rather than `any()`. Existing code does
+  not follow this — `/metrics/kpi` and `api/data_layer.py` both use `any()` inside aggregate
+  subqueries, and `daily_feature_usage.unique_users` is a `uniq` state.
 - **The dashboard batch.** `useDashboard.ts` fires ~17 parallel calls every 15s per open tab, each
   opening a fresh ClickHouse connection. If you add an endpoint to that hook, you add to that load;
   keep new endpoints cheap or out of the hot batch.
@@ -46,13 +59,23 @@ pipeline code, prefer a new module under `api/intelligence/` and keep `api/main.
 - **`/funnels` is user-grain.** It computes `windowFunnel(...) GROUP BY user_id`, so its counts are
   distinct **users**, which are not additive across dimensions. That output is for display; it is
   not a localizable fundamental. See `docs/KPI_CONTRACT.md`.
-- **`total_events` is two different things.** In `daily_feature_usage` it is a stored column
-  (being replaced by `uniqExactState(event_id)` — FOUNDATION-4); elsewhere in `api/main.py` it is
-  a local `count()` alias over `events_raw`. Do not migrate the wrong ones. The rollup readers are
+- **`total_events` is two different things.** In `daily_feature_usage` it **was** a stored column;
+  FOUNDATION-4 has landed and it is now `event_count AggregateFunction(uniqExact, String)`, read
+  with `uniqExactMerge`. Elsewhere in `api/main.py`, `total_events` is still a local `count()`
+  alias over `events_raw` — do not confuse the two. The rollup readers are
   `api/data_layer.py:30,41,42`, `api/insights.py:126,139,140`, and
   `api/main.py:554,1911,1919,2780,2833,2834`.
+- **The rollup cannot answer alias or session questions.** `daily_feature_usage` is keyed on the
+  **raw** `event_name`, so aliases of one canonical feature are separate rows whose `uniq` states
+  cannot be merged — which is why `/features/usage` does `max(a, b)` (under-counts) while
+  `/predictive/adoption` does `+=` (over-counts), and the same fact yields different numbers on
+  different pages. It also carries no session state, so no session-grain metric can come from it.
+- **RBAC is not enforcing what it looks like.** `require_tenant_access` only acts in `ON_PREM`
+  mode, so it is a **no-op in the CLOUD default the stack runs**, and `RBACMiddleware` trusts
+  browser-set headers. Do not treat either as an access-control guarantee when adding an endpoint
+  that returns user-level data.
 
-## When you change a response shape (coupling point 4)
+## When you change a response shape (`CLAUDE.md` rule 6)
 
 Update all four, in this order, or the dashboard breaks:
 1. the handler in `api/main.py`,
@@ -73,5 +96,13 @@ Specialists must not gain their own SQL path into `events_raw` — they read thr
 or the KPI-contract loader, so that every number has one definition. If a specialist needs an
 aggregation no endpoint provides, add a metric function rather than an ad-hoc query.
 
-Robust statistics (median, MAD, quantiles) belong in ClickHouse rather than Python: it avoids a
-new dependency, keeps the data where it is, and tags cleanly as `engine_type='sql'`.
+Robust statistics (median, MAD, quantiles) can live in ClickHouse — it keeps the data where it is
+and tags cleanly as `engine_type='sql'`. **But use the `Exact` variants.** ClickHouse's
+`quantile()` and `median()` are reservoir sampling with an RNG; their own docs say the result is
+non-deterministic, and Detect is exactly where someone reaches for `quantile()` to compute a
+median/MAD by reflex. `quantileExact`/`medianExact` are the only acceptable forms.
+
+The "it avoids a new dependency" argument no longer applies: `numpy` and `scipy` are approved and
+declared (`CLAUDE.md` rule 2, superseding the earlier deterministic-only rule), so pick whichever
+is clearer for the stage. What does not change is that every method writes the same row shape,
+carries an `engine_type`, and degrades to a dependency-free fallback.

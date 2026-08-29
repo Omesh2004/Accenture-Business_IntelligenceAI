@@ -1,8 +1,11 @@
 # SCENARIOS.md
 
-The five demo runs Phase 1 must produce, scripted against one seeded NexaBank dataset. This is
-the ground truth the plantable-anomaly simulator injects and the evaluation gates check against.
-Everything rides one story so a single seeded run produces all five.
+The five demo runs Phase 1 must produce, scripted with `scripts/seed_data.py --scenario all`.
+This is the ground truth the plantable-anomaly simulator injects and the evaluation gates check
+against. Everything rides one story, but it is planted across **two** tenants
+(`SCENARIO_TENANT_INDEX`): scenarios 1 and 4 quarantine `kyc_completion_rate`, which is the KPI
+scenario 2 needs to pass, so the defect cases get their own tenant. `fixtures/planted_truth.json`
+records which tenant carries which scenario and the gates read that list rather than a literal.
 
 The story: NexaBank's loan-KYC funnel. KYC completion gates loan approvals, which gate revenue
 (`kyc_completion_rate -> loan_approval_volume -> pro_revenue`, see `docs/KPI_CONTRACT.md`).
@@ -18,6 +21,14 @@ both.
 Writes the planted truth to `fixtures/planted_truth.json` (planted segment, magnitude, expected
 rank-1 cause). This is what the Evaluation Gates below are scored against; a hit-rate@1 number
 cannot be computed without a recorded answer.
+
+> **Both blockers on this path are closed.** `fixtures/planted_truth.json` is generated and
+> committed (P1-9), and the scenarios now spread across daily buckets — each entry carries
+> `anomaly_days: 7`, above `detection.min_persistence_windows: 2` and with enough history for
+> `forecast.min_history_days` (P1-8, decision **D4**).
+>
+> `fixtures/` is mounted read-write into the `tests` service, not baked. Baked, the seed wrote the
+> truth file into a container that was then discarded and every gate scored the run before.
 
 **2. The admin simulation console — operator-driven, with NO recorded ground truth.**
 `POST /events/simulate` accepts a `behavior` block (see
@@ -67,14 +78,27 @@ here, and `revenue == sum(price * qty)` is vacuously true. A duplicate-event sto
 narrative shape (a large movement that is entirely an artefact) and is provable by an invariant
 this repo can actually compute.
 
-**Plant:** over the anomaly window, re-emit a subset of `loan.kyc_completed.success` events with
-**identical `event_id`s**, simulating a worker replay after a failed offset commit. Raw counts
-spike ~40%; distinct event ids do not move. Leave sessions, starts, and applies flat.
+**Plant:** over the anomaly window, re-emit a subset of `loan.kyc_completed.success` events
+byte-identically — same `event_id`, same timestamp — simulating a worker replay after a failed
+offset commit. `raw_rows` spikes; distinct event ids do not move. Leave sessions, starts, and
+applies flat.
+
+> **The invariant does not read `events_raw` (decision D1).** `events_raw` is
+> `ReplacingMergeTree(_inserted_at)` ordered by `(tenant_id, event_name, timestamp, event_id)`, so
+> a **real** worker replay produces rows identical on all four columns and a background merge
+> collapses them — `count() == uniqExact(event_id)` becomes true again, on merge timing no reader
+> controls.
+>
+> `dedup_integrity` therefore compares `sumMerge(raw_rows)` against `uniqExactMerge(event_count)`
+> in `daily_feature_usage`. A materialized view fires on the *inserted block* and never sees
+> post-merge state, so a replay raises `raw_rows` while distinct ids stay flat, whatever the merges
+> do afterwards. The fixture emits true byte-identical duplicates (`docs/TASK.md` P1-5), so it
+> tests the mechanism rather than a timestamp accident.
 
 **Expected pipeline behavior:**
 - Trust Gate: **FAIL** on the `dedup_integrity` hard invariant
-  (`count() != uniqExact(event_id)`), fingerprint `duplicate_event_storm`. Writes a
-  `trust_findings` row with `blocks_narrative = 1`.
+  (`sumMerge(raw_rows) > uniqExactMerge(event_count)`), fingerprint `duplicate_event_storm`.
+  Writes a `trust_findings` row with `blocks_narrative = 1`.
 - Detect: the movement is statistically real — large, persistent, well outside the band. That is
   exactly why detection alone is insufficient; the gate has already routed it to the defect path,
   so no business investigation opens.
@@ -176,9 +200,8 @@ flagged urgent and isolated.
   confidence, lineage) and the LLM-vs-non-LLM breakdown read from `model_runs`.
 - Every scenario writes a `trust_findings` row, including the passes — stage 08 audits the
   suppression rate, so a silent pass is as much a missing record as a silent failure.
-- One seeded run produces all five; re-running with the same seed reproduces the same planted
-  ground truth (deterministic).
-- No scenario narrates a KPI whose contract `readiness.status` is `blocked`. All three contracts
-  (`kyc_completion_rate`, `loan_approval_volume`, `pro_revenue`) are now `ready` on both seeded
-  and live paths -- see each contract's `readiness.blockers` for the resolved Foundation items.
-  This rule still applies to any future KPI landed with `readiness.status: blocked`.
+- One seeded run produces all five, across the two gate tenants; re-running with the same seed
+  reproduces the same planted ground truth (deterministic).
+- No scenario narrates a KPI whose contract `readiness.status` is `blocked`. All ten contracts are
+  `ready` -- see each contract's `readiness.blockers` for the resolved Foundation items. This rule
+  still applies to any future KPI landed with `readiness.status: blocked`.

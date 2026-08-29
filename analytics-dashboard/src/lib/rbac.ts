@@ -61,6 +61,9 @@ export function canAccessRoute(role: UserRole, pathname: string): boolean {
     if (normalizedPathname === '/') return true;
     if (normalizedPathname === '/admin') return true;
     if (normalizedPathname.startsWith('/apps/')) return true;
+    // Persona-gated and entitlement-filtered server-side: a cfo sees a narrative, not raw rows.
+    // The API allows this role here too; blocking it in the UI only hid the page.
+    if (normalizedPathname.startsWith('/intelligence')) return true;
     // Block all detailed analytics routes
     return false;
   }
@@ -79,6 +82,7 @@ export function canAccessRoute(role: UserRole, pathname: string): boolean {
     if (normalizedPathname.startsWith('/license-usage')) return true;
     if (normalizedPathname.startsWith('/user-journey')) return true;
     if (normalizedPathname.startsWith('/predictive')) return true;
+    if (normalizedPathname.startsWith('/intelligence')) return true;
     // Block super admin routes — app admin shouldn't see cross-tenant data
     if (normalizedPathname === '/admin') return false;
     if (normalizedPathname.startsWith('/apps/')) return false;

@@ -180,7 +180,7 @@ router.post(
             term: app.term,
             startDate,
             endDate,
-            status: true,
+            status: "ACTIVE",
             dueAmount: app.principalAmount, // Simplified
             schedule: []
           }

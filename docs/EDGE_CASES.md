@@ -22,10 +22,24 @@ half-arrived window reads as a phantom drop.
 makes replays converge instead of doubling. Before those land, a worker restart genuinely doubles
 counts and there is no way to tell after the fact.
 
-**Dual write paths — verified present.** `ingestion/main.py:167-184` sends to Kafka with a 5s
+**Backdating rewrites history.** `trackEvent(..., timestampOverride)` inserts into past partitions
+and the MV updates `daily_feature_usage` for those days. An investigation over a frozen *event-time*
+window would otherwise produce different rows tomorrow than today.
+`investigations.watermark_ingested_at` pins `max(ingested_at)` alongside the window so a re-run
+reproduces what was visible at the time. Detect does **not** yet suppress on a provisional window,
+so a half-arrived window can still read as a phantom drop.
+
+**A replay is erased before you can detect it in `events_raw`.** `events_raw` is
+`ReplacingMergeTree(_inserted_at)` with `event_id` in the sorting key, so a genuine worker replay
+is collapsed on merge and `count() == uniqExact(event_id)` becomes true again. Never build a
+duplicate-storm check against that table. `daily_feature_usage.raw_rows` counts rows as INSERTED
+and survives the merge — that is what `dedup_integrity` reads (decision **D1**).
+
+**Dual write paths — verified present.** `ingestion/main.py:476-507` sends to Kafka with a 5s
 timeout and **falls back to a direct ClickHouse insert**. Rows on that path never enter Kafka, so
-broker replay cannot reconstruct them, and the worker's batching never sees them. Tag those rows
-at write time. Never assume the Kafka topic is a complete log of `events_raw`.
+broker replay cannot reconstruct them, and the worker's batching never sees them. They are tagged:
+`ingest_path` is `fallback_cloud` or `fallback_onprem`, `''` meaning "not reported by whatever wrote
+this row". Never assume the Kafka topic is a complete log of `events_raw`.
 
 **Schema evolution in `metadata`.** `metadata` is a JSON String. Adding a key is free and silent;
 so is removing one. `JSONExtractString(metadata, 'missing_key')` returns `''` — **not** null. An
@@ -76,8 +90,9 @@ fails for the wrong reason.
 
 **Provisional windows.** See Foundation. Suppress unless the magnitude is extreme.
 
-**Multiple testing.** Monitoring the three chain KPIs across several segments means dozens of
-simultaneous tests. Without Benjamini-Hochberg, volume alone manufactures alarms.
+**Multiple testing.** Monitoring ten declared KPIs plus every Tier 0 discovered series, across
+several segments each, means hundreds of simultaneous tests. Without Benjamini-Hochberg, volume
+alone manufactures alarms.
 
 **Alert fatigue is the real production failure.** Weight precision over recall. A detector that
 fires on everything is indistinguishable from no detector.
@@ -106,7 +121,21 @@ Fabricating certainty to fill the slot is worse than an empty slot.
 
 **Cause outside the recorded dimensions.** "Not explained by available dimensions" is a finding and
 must be narratable as one. Given that the live path's `location`/`device_type` are noise, this will
-be the *correct* answer for any live-traffic investigation until FOUNDATION-2 lands.
+be the *correct* answer for any live-traffic investigation.
+
+> **FOUNDATION-2 did not fix this; the `_simulated` marker did.** FOUNDATION-2 made the live
+> dimensions session-*invariant*, which is what makes contributions add up. The values are still
+> produced by `selectGeoProfile()` and `selectDevice()` — a weighted dice roll per session — so
+> they remain statistically independent of user, outcome and everything else.
+>
+> Session-invariant randomness **passes an invariance test cleanly**, so that test cannot catch it.
+> The gate that does is `metadata._simulated` (P0-8), which names the invented keys per event.
+> `contracts.sliceable_dimensions` drops any key in that set, and drops a contract-declared
+> `live_fabricated` key on any dataset but `seeded`.
+>
+> A ranked cause over a dice roll is the worst output this system can produce, because it is
+> indistinguishable from a correct one. Do not weaken either gate to make a live-path
+> demo localize.
 
 ---
 

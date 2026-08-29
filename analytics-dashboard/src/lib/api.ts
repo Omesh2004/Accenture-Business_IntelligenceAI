@@ -27,8 +27,32 @@ import {
   UserJourneyResponse,
   JourneyUser,
   JourneyEvent,
+  AgentAnswer,
+  PersonaChoices,
+  IntelligenceInsight,
+  IntelligenceRecommendation,
+  RuntimeTelemetry,
+  SourceHealth,
 } from '@/types';
 import { TENANT_TO_APP, resolveAppIdFromPathname, resolvePrimaryAppIdFromAdminApps } from './feature-map';
+
+/**
+ * One place that decides how a failed fetch is reported.
+ *
+ * A 403 is the server working correctly -- this role is not permitted here -- and logging it at
+ * `error` put red entries in the console for a policy decision. A transport failure is a real
+ * fault and stays an error. Both still resolve to an empty result so one panel cannot take the
+ * dashboard down.
+ */
+function logFetchFailure(what: string, error: unknown): void {
+  const status = (error as { response?: { status?: number } })?.response?.status;
+  if (status === 403 || status === 401) {
+    console.info(`${what}: not permitted for this role (${status})`);
+    return;
+  }
+  const detail = error instanceof Error ? error.message : String(error);
+  console.error(`Failed to fetch ${what}: ${detail}`);
+}
 
 /** Base API configuration */
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001';
@@ -808,7 +832,7 @@ export const dashboardAPI = {
       const response = await apiClient.get<LocationData[]>(`/locations?tenants=${tenants.join(',')}&range=${range}`);
       return response.data;
     } catch (error) {
-      console.error('Failed to fetch Locations', error);
+      logFetchFailure('Locations', error);
       return [];
     }
   },
@@ -819,7 +843,7 @@ export const dashboardAPI = {
       const response = await apiClient.get<AuditLog[]>(`/audit_logs?tenants=${tenants.join(',')}&range=${range}`);
       return response.data;
     } catch (error) {
-      console.error('Failed to fetch AuditLogs:', error instanceof Error ? error.message : String(error));
+      logFetchFailure('AuditLogs', error);
       return [];
     }
   },
@@ -1037,6 +1061,114 @@ export const dashboardAPI = {
     } catch (error) {
       console.error('Failed to fetch tenant comparison', error);
       return { tenants: [] };
+    }
+  },
+
+  /* ─────────────── Intelligence Layer ─────────────── */
+
+  /** Latest persona narrative with its evidence card. Persona is resolved server-side. */
+  async getIntelligenceInsight(
+    tenants: string[], kpiId?: string, persona?: string,
+  ): Promise<IntelligenceInsight | null> {
+    try {
+      const kpi = kpiId ? `&kpi_id=${encodeURIComponent(kpiId)}` : '';
+      // The server still resolves the persona; sending one can only narrow, never widen.
+      const view = persona ? `&persona=${encodeURIComponent(persona)}` : '';
+      const response = await apiClient.get<{ insight: IntelligenceInsight | null }>(
+        `/intelligence/insight?tenants=${encodeURIComponent(tenants.join(','))}${kpi}${view}`);
+      return response.data.insight ?? null;
+    } catch (error) {
+      console.error('Failed to fetch intelligence insight', error);
+      return null;
+    }
+  },
+
+  async getIntelligenceInsights(tenants: string[], limit = 20): Promise<IntelligenceInsight[]> {
+    try {
+      const response = await apiClient.get<{ insights: IntelligenceInsight[] }>(
+        `/intelligence/insights?tenants=${encodeURIComponent(tenants.join(','))}&limit=${limit}`);
+      return response.data.insights || [];
+    } catch (error) {
+      console.error('Failed to fetch intelligence insights', error);
+      return [];
+    }
+  },
+
+  /** Per-source freshness: grain, cadence and SLA for every connected source. */
+  async getIntelligenceSources(tenants: string[]): Promise<SourceHealth[]> {
+    try {
+      const response = await apiClient.get<{ sources: SourceHealth[] }>(
+        `/intelligence/sources?tenants=${encodeURIComponent(tenants.join(','))}`);
+      return response.data.sources || [];
+    } catch (error) {
+      console.error('Failed to fetch intelligence sources', error);
+      return [];
+    }
+  },
+
+  async getIntelligenceTelemetry(tenants: string[]): Promise<RuntimeTelemetry | null> {
+    try {
+      const response = await apiClient.get<{ telemetry: RuntimeTelemetry }>(
+        `/intelligence/telemetry?tenants=${encodeURIComponent(tenants.join(','))}`);
+      return response.data.telemetry ?? null;
+    } catch (error) {
+      console.error('Failed to fetch intelligence telemetry', error);
+      return null;
+    }
+  },
+
+  async getIntelligenceRecommendations(tenants: string[], limit = 20): Promise<IntelligenceRecommendation[]> {
+    try {
+      const response = await apiClient.get<{ recommendations: IntelligenceRecommendation[] }>(
+        `/intelligence/recommendations?tenants=${encodeURIComponent(tenants.join(','))}&limit=${limit}`);
+      return response.data.recommendations || [];
+    } catch (error) {
+      console.error('Failed to fetch recommendations', error);
+      return [];
+    }
+  },
+
+  /** Ask the agent a question. Persona is resolved server-side; tenant scoping is a query param
+   *  because RBACMiddleware reads tenant from the query string, not the body. */
+  async askIntelligence(
+    tenants: string[], question: string, persona?: string,
+  ): Promise<AgentAnswer | null> {
+    try {
+      const response = await apiClient.post<AgentAnswer>(
+        `/intelligence/ask?tenants=${encodeURIComponent(tenants.join(','))}`,
+        persona ? { question, persona } : { question });
+      return response.data;
+    } catch (error) {
+      console.error('Failed to ask the intelligence agent', error);
+      return null;
+    }
+  },
+
+  /**
+   * Persona views this role may switch between. Server-authored; the client never widens it.
+   *
+   * Rethrows rather than returning an empty list: react-query caches a returned value as a
+   * SUCCESS, so one transient failure hid the persona switcher for the whole `staleTime`. An
+   * error is retried; an empty success is not.
+   */
+  async getIntelligencePersonas(tenants: string[]): Promise<PersonaChoices> {
+    // An app_admin is scoped from the query string; without it the request is refused.
+    const response = await apiClient.get<PersonaChoices>(
+      `/intelligence/personas?tenants=${encodeURIComponent(tenants.join(','))}`);
+    return response.data;
+  },
+
+  /** Human feedback on an insight. Phase 1 executes nothing automatically. */
+  async recordIntelligenceOutcome(payload: {
+    investigation_id: string; insight_id: string; tenant_id: string;
+    signal: string; value: number; actor: string;
+  }): Promise<{ status: string }> {
+    try {
+      const response = await apiClient.post<{ status: string }>('/intelligence/outcome', payload);
+      return response.data;
+    } catch (error) {
+      console.error('Failed to record outcome', error);
+      return { status: 'error' };
     }
   },
 };

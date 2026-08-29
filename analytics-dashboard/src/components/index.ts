@@ -17,6 +17,9 @@ export { default as RealTimeUsers } from './RealTimeUsers';
 export { default as TopPages } from './TopPages';
 export { default as DeviceBreakdownChart } from './DeviceBreakdownChart';
 export { default as TopLocations } from './TopLocations';
+export { default as IntelligenceEvidence } from './IntelligenceEvidence';
+export { default as SourceHealthPanel } from './SourceHealthPanel';
+export { default as IntelligenceAsk } from './IntelligenceAsk';
 export {
   KPICardSkeleton,
   ChartSkeleton,

@@ -9,8 +9,12 @@ from typing import Dict, List
 
 import requests
 
-INGEST_URL = "http://localhost:8000/events"
-ANALYTICS_URL = "http://localhost:8001/metrics/realtime_users"
+# Defaults suit a host shell; inside a container `localhost` is the container itself, so the
+# script silently posted 0 of 7556 events and the golden scenarios never landed. Env overrides
+# let the same script run from either side of the network boundary.
+INGEST_URL = os.environ.get("INGEST_URL", "http://localhost:8000/events")
+ANALYTICS_URL = os.environ.get(
+    "ANALYTICS_URL", "http://localhost:8001/metrics/realtime_users")
 
 ACQ_CHANNELS = ["direct", "organic", "referral", "social", "email", "paid_search"]
 ACQ_WEIGHTS = [0.30, 0.22, 0.16, 0.14, 0.10, 0.08]
@@ -344,119 +348,195 @@ class Simulator:
 
         return sent, attempted
 
-    def seed_scenarios(self, tenant: str, scenario: str, truth_path: str) -> tuple[int, int]:
-        """Emit deterministic Phase 1 source-data fixtures without running the intelligence layer."""
+    # Scenarios 1, 2 and 4 all move loan.kyc_*. Sharing a tenant makes the duplicate storm
+    # quarantine the KPI that scenario 2 needs to pass, so the defect cases get their own.
+    #
+    # Indices into the caller's --tenants list, NOT tenant names: hardcoding names sent the
+    # planted movements to the demo tenants while the baseline went where the caller asked, and
+    # every scenario gate then scored a tenant the movement was never written to.
+    SCENARIO_TENANT_INDEX = {
+        "duplicate_event_storm": 1,
+        "ambiguous_duplicate_campaign": 1,
+        "real_kyc_drop_mobile_india": 0,
+        "sparse_new_feature": 0,
+        "entitlement_and_role_violation": 0,
+    }
+
+    def scenario_tenant(self, scenario: str, fallback: str) -> str:
+        index = self.SCENARIO_TENANT_INDEX.get(scenario)
+        if index is None or not self.tenant_ids:
+            return fallback
+        return self.tenant_ids[index % len(self.tenant_ids)]
+
+    def seed_scenarios(self, tenant: str, scenario: str, truth_path: str,
+                       baseline_days: int = 21, anomaly_days: int = 7,
+                       sessions_per_day: int = 120) -> tuple[int, int]:
+        """Deterministic Phase 1 fixtures, spread across DAILY buckets.
+
+        The contracts declare grain.time daily, min_history_days 14 and
+        min_persistence_windows 2, so a fixture confined to one day can never fire Detect.
+        Layout: baseline_days at a stable rate, then anomaly_days carrying the planted move.
+        """
         random.seed(1337)
-        now = datetime.now(timezone.utc).replace(microsecond=0)
+        today = datetime.now(timezone.utc).replace(hour=12, minute=0, second=0, microsecond=0)
+        total_days = baseline_days + anomaly_days
         sent = 0
         attempted = 0
         truth: List[dict] = []
 
-        def emit(event_name: str, offset_minutes: int, metadata: dict, user_id: str, event_id: str | None = None) -> None:
+        def day_ts(days_ago: int, seq: int = 0) -> datetime:
+            # Deterministic spread inside the day; never crosses a UTC midnight boundary.
+            return today - timedelta(days=days_ago) + timedelta(minutes=(seq * 7) % 600)
+
+        active = {"name": scenario}
+
+        def emit(event_name: str, ts: datetime, metadata: dict, user_id: str,
+                 event_id=None) -> None:
             nonlocal sent, attempted
             attempted += 1
-            if self._emit(tenant, user_id, event_name, now - timedelta(minutes=offset_minutes), metadata, event_id):
+            target = self.scenario_tenant(active["name"], tenant)
+            if self._emit(target, user_id, event_name, ts, metadata, event_id):
                 sent += 1
 
-        def fixed_meta(session_id: str, device: str = "mobile", location: str = "India", channel: str = "mobile") -> dict:
+        def fixed_meta(session_id: str, device: str = "mobile", location: str = "India",
+                       channel: str = "mobile") -> dict:
             city = "Mumbai" if location == "India" else "New York"
             continent = "Asia" if location == "India" else "North America"
-            return self._metadata(session_id, channel, device, city, location, continent)
+            meta = self._metadata(session_id, channel, device, city, location, continent)
+            # Planted dimensions are the signal under test, so they are NOT marked. Only the
+            # fields that stay uninformative even in a fixture are.
+            meta["_simulated"] = ["ip", "response_time_ms"]
+            return meta
 
         def should_emit(name: str) -> bool:
+            active["name"] = name
             return scenario == "all" or scenario == name
 
+        # -- 1. duplicate event storm ------------------------------------------------
+        # Duplicates share event_id AND timestamp, so ReplacingMergeTree collapses them in
+        # events_raw. Only the MV raw_rows survives -- that is exactly what D1 detects.
         if should_emit("duplicate_event_storm"):
-            duplicate_ids = []
-            for i in range(20):
-                meta = fixed_meta(f"scenario_dup_{i:03d}")
-                user_id = f"{tenant}_scenario_dup_{i:03d}"
-                emit("loan.kyc_started.success", 240 - i, meta, user_id)
-                event_id = f"evt_duplicate_storm_{i:03d}"
-                duplicate_ids.append(event_id)
-                emit("loan.kyc_completed.success", 230 - i, meta, user_id, event_id)
-                emit("loan.kyc_completed.success", 229 - i, meta, user_id, event_id)
+            for d in range(total_days, 0, -1):
+                storm = d <= anomaly_days
+                for i in range(sessions_per_day):
+                    sid = "dup_%02d_%03d" % (d, i)
+                    meta = fixed_meta(sid)
+                    uid = "%s_dup_%02d_%03d" % (tenant, d, i)
+                    emit("loan.kyc_started.success", day_ts(d, i), meta, uid)
+                    if i % 4 != 0:
+                        eid = "evt_dup_%02d_%03d" % (d, i)
+                        ts = day_ts(d, i) + timedelta(seconds=30)
+                        emit("loan.kyc_completed.success", ts, meta, uid, eid)
+                        if storm and i % 2 == 0:
+                            emit("loan.kyc_completed.success", ts, meta, uid, eid)
             truth.append({
                 "scenario": "duplicate_event_storm",
-                "tenant_id": tenant,
-                "kpi_id": "kyc_completion_rate",
-                "expected_fingerprint": "duplicate_event_storm",
-                "duplicate_event_ids": duplicate_ids,
+                "tenant_id": self.scenario_tenant("duplicate_event_storm", tenant),
+                "kpi_id": "kyc_completion_rate", "expected_fingerprint": "duplicate_event_storm",
+                "expected_verdict": "fail", "anomaly_days": anomaly_days,
             })
 
+        # -- 2. real movement, concentrated in mobile/India ---------------------------
         if should_emit("real_kyc_drop_mobile_india"):
-            for i in range(60):
-                meta = fixed_meta(f"scenario_kyc_drop_{i:03d}")
-                user_id = f"{tenant}_scenario_kyc_{i:03d}"
-                emit("loan.kyc_started.success", 180 - i, meta, user_id)
-                if i % 5 != 0:
-                    emit("loan.kyc_completed.success", 178 - i, meta, user_id)
-                if i % 6 != 0:
-                    emit("loan.applied.success", 176 - i, meta, user_id)
+            for d in range(total_days, 0, -1):
+                dropped = d <= anomaly_days
+                for i in range(sessions_per_day):
+                    planted = i % 2 == 0
+                    loc = "India" if planted else "USA"
+                    dev = "mobile" if planted else "desktop"
+                    sid = "kyc_%02d_%03d" % (d, i)
+                    meta = fixed_meta(sid, device=dev, location=loc,
+                                      channel="mobile" if planted else "web")
+                    uid = "%s_kyc_%02d_%03d" % (tenant, d, i)
+                    emit("loan.kyc_started.success", day_ts(d, i), meta, uid)
+                    rate = 0.45 if (dropped and planted) else 0.85
+                    if ((i * 7919) % 100) / 100.0 < rate:
+                        emit("loan.kyc_completed.success",
+                             day_ts(d, i) + timedelta(seconds=45), meta, uid)
+                        if ((i * 6151) % 100) / 100.0 < 0.8:
+                            emit("loan.applied.success",
+                                 day_ts(d, i) + timedelta(seconds=90), meta, uid)
+                            approve = 0.40 if (dropped and planted) else 0.75
+                            if ((i * 5237) % 100) / 100.0 < approve:
+                                emit("loan.approved.success",
+                                     day_ts(d, i) + timedelta(seconds=150), meta, uid)
             truth.append({
                 "scenario": "real_kyc_drop_mobile_india",
-                "tenant_id": tenant,
+                "tenant_id": self.scenario_tenant("real_kyc_drop_mobile_india", tenant),
                 "kpi_id": "kyc_completion_rate",
                 "planted_segment": {"device_type": "mobile", "location": "India"},
-                "expected_direction": "down",
-                "expected_magnitude_pct": 18,
+                "expected_direction": "down", "expected_rank1_dimension": "location",
+                "expected_verdict": "pass", "anomaly_days": anomaly_days,
             })
 
+        # -- 3. sparse / cold start ---------------------------------------------------
         if should_emit("sparse_new_feature"):
-            for i in range(6):
-                meta = fixed_meta(f"scenario_sparse_{i:03d}", device="desktop", location="USA", channel="web")
-                emit("pro.new_feature.view", 120 - i * 10, meta, f"{tenant}_scenario_sparse_{i:03d}")
+            for d in range(4, 0, -1):
+                for i in range(6):
+                    meta = fixed_meta("sparse_%d_%d" % (d, i), device="desktop",
+                                      location="USA", channel="web")
+                    emit("pro.new_feature.view", day_ts(d, i), meta,
+                         "%s_sparse_%d_%d" % (tenant, d, i))
             truth.append({
-                "scenario": "sparse_new_feature",
-                "tenant_id": tenant,
+                "scenario": "sparse_new_feature", "tenant_id": tenant,
                 "event_name": "pro.new_feature.view",
                 "expected_caveat": "insufficient_history",
             })
 
+        # -- 4. ambiguous: a campaign and a partial duplicate at once ------------------
         if should_emit("ambiguous_duplicate_campaign"):
-            for i in range(16):
-                meta = fixed_meta(f"scenario_ambiguous_{i:03d}")
-                meta["campaign"] = "kyc_reactivation"
-                user_id = f"{tenant}_scenario_ambiguous_{i:03d}"
-                emit("loan.kyc_started.success", 90 - i, meta, user_id)
-                completion_id = f"evt_ambiguous_completion_{i:03d}"
-                emit("loan.kyc_completed.success", 89 - i, meta, user_id, completion_id)
-                if i % 4 == 0:
-                    emit("loan.kyc_completed.success", 88 - i, meta, user_id, completion_id)
+            for d in range(total_days, 0, -1):
+                for i in range(20):
+                    sid = "amb_%02d_%03d" % (d, i)
+                    meta = fixed_meta(sid)
+                    meta["campaign"] = "kyc_reactivation"
+                    uid = "%s_amb_%02d_%03d" % (tenant, d, i)
+                    emit("loan.kyc_started.success", day_ts(d, i), meta, uid)
+                    eid = "evt_amb_%02d_%03d" % (d, i)
+                    ts = day_ts(d, i) + timedelta(seconds=30)
+                    emit("loan.kyc_completed.success", ts, meta, uid, eid)
+                    if d <= anomaly_days and i % 5 == 0:
+                        emit("loan.kyc_completed.success", ts, meta, uid, eid)
             truth.append({
                 "scenario": "ambiguous_duplicate_campaign",
-                "tenant_id": tenant,
-                "kpi_id": "kyc_completion_rate",
-                "campaign": "kyc_reactivation",
-                "expected_cheapest_check": "confirm whether the spike survives event_id de-duplication",
+                "tenant_id": self.scenario_tenant("ambiguous_duplicate_campaign", tenant),
+                "kpi_id": "kyc_completion_rate", "campaign": "kyc_reactivation",
+                "expected_cheapest_check":
+                    "confirm whether the spike survives event_id de-duplication",
             })
 
+        # -- 5. entitlement + role violation -------------------------------------------
         if should_emit("entitlement_and_role_violation"):
-            for i in range(18):
-                meta = fixed_meta(f"scenario_entitlement_{i:03d}", device="desktop", location="USA", channel="web")
-                meta["tier"] = "enterprise"
-                emit("crypto_trading.trade_execution.success", 60 - i, meta, f"{tenant}_scenario_pro_{i:03d}")
-                if i % 3 == 0:
-                    emit("wealth_management_pro.rebalance.success", 58 - i, meta, f"{tenant}_scenario_pro_{i:03d}")
-                if i % 4 == 0:
-                    emit("bulk_payroll_processing.batch.success", 57 - i, meta, f"{tenant}_scenario_pro_{i:03d}")
-                if i % 5 == 0:
-                    emit("ai_insights.book.success", 55 - i, meta, f"{tenant}_scenario_pro_{i:03d}")
-                violation_meta = dict(meta)
-                violation_meta["role"] = "user"
-                violation_meta["attempted_action"] = "admin_feature_toggle"
-                emit("auth.role.violation", 56 - i, violation_meta, f"{tenant}_scenario_violation_{i:03d}")
+            for d in range(total_days, 0, -1):
+                for i in range(18):
+                    meta = fixed_meta("ent_%02d_%03d" % (d, i), device="desktop",
+                                      location="USA", channel="web")
+                    meta["tier"] = "enterprise"
+                    uid = "%s_pro_%02d_%03d" % (tenant, d, i)
+                    emit("crypto_trading.trade_execution.success", day_ts(d, i), meta, uid)
+                    if i % 3 == 0:
+                        emit("wealth_management_pro.rebalance.success",
+                             day_ts(d, i + 1), meta, uid)
+                    if i % 4 == 0:
+                        emit("bulk_payroll_processing.batch.success",
+                             day_ts(d, i + 2), meta, uid)
+                    if i % 5 == 0:
+                        emit("ai_insights.book.success", day_ts(d, i + 3), meta, uid)
+                    if d <= anomaly_days and i % 6 == 0:
+                        vmeta = dict(meta)
+                        vmeta["role"] = "user"
+                        vmeta["attempted_action"] = "admin_feature_toggle"
+                        emit("auth.role.violation", day_ts(d, i + 4), vmeta,
+                             "%s_viol_%02d_%03d" % (tenant, d, i))
             truth.append({
-                "scenario": "entitlement_and_role_violation",
-                "tenant_id": tenant,
-                "hidden_kpi": "pro_revenue",
-                "violation_event": "auth.role.violation",
-                "expected_severity": "urgent",
+                "scenario": "entitlement_and_role_violation", "tenant_id": tenant,
+                "hidden_kpi": "pro_revenue", "violation_event": "auth.role.violation",
+                "restricted_from": "ops_manager", "expected_severity": "urgent",
             })
 
         os.makedirs(os.path.dirname(os.path.abspath(truth_path)), exist_ok=True)
         with open(truth_path, "w", encoding="utf-8") as fh:
-            json.dump(truth, fh, indent=2)
+            json.dump(truth, fh, indent=2, sort_keys=True)
 
         return sent, attempted
 
@@ -497,6 +577,9 @@ def main() -> None:
     parser.add_argument("--realtime-tenant", default="nexabank")
     parser.add_argument("--realtime-users", type=int, default=30)
     parser.add_argument("--hold-seconds", type=int, default=12)
+    # Must outweigh the historical generator in the same tenant, or the planted
+    # movement is averaged away and Detect correctly refuses to call it.
+    parser.add_argument("--scenario-sessions-per-day", type=int, default=120)
     parser.add_argument("--history-end-buffer-minutes", type=int, default=15)
     parser.add_argument("--force-close-recent", action="store_true", help="Emit logout events for all users active in the last 5 minutes")
     parser.add_argument(
@@ -536,7 +619,9 @@ def main() -> None:
 
     if args.scenario != "none":
         print(f"[Scenario] Emitting {args.scenario} source-data fixture...")
-        s_sent, s_attempted = simulator.seed_scenarios(args.realtime_tenant, args.scenario, args.truth_path)
+        s_sent, s_attempted = simulator.seed_scenarios(
+            args.realtime_tenant, args.scenario, args.truth_path,
+            sessions_per_day=args.scenario_sessions_per_day)
         print(f"Scenario events sent: {s_sent}/{s_attempted}; truth written to {args.truth_path}")
 
     print("[2/3] Running realtime activity burst...")
