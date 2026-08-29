@@ -27,7 +27,7 @@ import { toast } from "sonner"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { UserData } from "@/components/context/UserContext"
 import { useEventTracker } from "@/hooks/useEventTracker"
-import { BehaviorControls, type BehaviorPayload } from "@/components/admin/BehaviorControls"
+import { BehaviorControls, type BehaviorPayload, type SimCatalog } from "@/components/admin/BehaviorControls"
 
 interface ProcessingSummary {
    users?: { requested?: number; created?: number; skipped?: number };
@@ -83,8 +83,9 @@ export default function AdminSimulatePage() {
    const [result, setResult] = useState<SimulationResult | null>(null)
    const [bankList, setBankList] = useState<BankOption[]>([])
    const [activeStep, setActiveStep] = useState(0)
-   const [scenarioId, setScenarioId] = useState("baseline")
+   const [templateId, setTemplateId] = useState("baseline")
    const [behavior, setBehavior] = useState<BehaviorPayload | null>(null)
+   const [catalog, setCatalog] = useState<SimCatalog | null>(null)
 
   const { isAuth } = UserData()
 
@@ -110,7 +111,18 @@ export default function AdminSimulatePage() {
         console.error("Failed to fetch bank list:", err);
       }
     };
-    if (isAuth) fetchBanks();
+    const fetchCatalog = async () => {
+      try {
+        const res = await axios.get(`${API_BASE_URL}/events/simulate/catalog`, { withCredentials: true });
+        setCatalog(res.data || null);
+      } catch (err) {
+        console.error("Failed to fetch simulate catalog:", err);
+      }
+    };
+    if (isAuth) {
+      fetchBanks();
+      fetchCatalog();
+    }
   }, [isAuth, track]);
 
    useEffect(() => {
@@ -272,8 +284,9 @@ export default function AdminSimulatePage() {
                                  <BehaviorControls
                                     value={behavior}
                                     onChange={setBehavior}
-                                    scenarioId={scenarioId}
-                                    onScenarioChange={setScenarioId}
+                                    templateId={templateId}
+                                    onTemplateChange={setTemplateId}
+                                    catalog={catalog}
                                     disabled={loading}
                                  />
                               </div>
@@ -363,6 +376,11 @@ export default function AdminSimulatePage() {
                           <h3 className="text-base font-black text-zinc-900 flex items-center gap-2">
                              <ShieldAlert className="h-4 w-4 text-amber-600" />
                              Behaviour applied
+                             {result.behaviorApplied?.relaxJourney === true && (
+                                <span className="ml-2 inline-flex items-center rounded-full bg-red-100 px-2.5 py-0.5 text-[10px] font-black uppercase tracking-wide text-red-700">
+                                   Realism safeguard off
+                                </span>
+                             )}
                           </h3>
                           <ul className="mt-3 space-y-1.5">
                              {result.behaviorSummary.map((line: string, i: number) => (
