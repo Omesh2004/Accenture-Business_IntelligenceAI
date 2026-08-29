@@ -8,30 +8,9 @@ const INGESTION_API_URL = process.env.INGESTION_API_URL || "http://localhost:800
 
 /**
  * Hashes a userId using SHA-256 for analytics privacy.
- *
- * C4 fix (docs/FinInsights_Bug_Audit.md): this used to be plain unsalted SHA-256 over a bounded
- * ID space (Prisma's customer IDs), which is reversible by brute force -- an attacker who can
- * enumerate the ID space (small integers, or a known ID format) can just hash every candidate
- * and match against ClickHouse's `user_id` column. Salting with a server-side secret makes that
- * enumeration attack require the secret, not just the ID space. `tenantId` is folded in too so
- * the same customer hashes differently per tenant -- a leak of the salt for one tenant's data
- * does not also compromise the others'.
- *
- * USER_ID_HASH_SALT must be a real secret set in the deployment environment, not committed here
- * (see CLAUDE.md's "Never commit secrets"). Falling back to "" if unset keeps this from crashing
- * a deployment that hasn't set it yet, but that fallback provides no protection -- hence the
- * startup warning below rather than a silent empty-salt default.
  */
-const USER_ID_HASH_SALT = process.env.USER_ID_HASH_SALT || "";
-if (!USER_ID_HASH_SALT) {
-  console.warn(
-    "[SECURITY] USER_ID_HASH_SALT is not set -- hashUserId() is running unsalted. " +
-    "Set USER_ID_HASH_SALT in the environment before relying on hashed user_id for privacy."
-  );
-}
-
-export function hashUserId(userId: string, tenantId: string = ""): string {
-  return crypto.createHash("sha256").update(`${USER_ID_HASH_SALT}:${tenantId}:${userId}`).digest("hex");
+export function hashUserId(userId: string): string {
+  return crypto.createHash("sha256").update(userId).digest("hex");
 }
 
 /**
@@ -71,14 +50,6 @@ interface SessionProfile {
   realCountry?: string;
   realCity?: string;
   realContinent?: string;
-  /** True when deviceType was rolled from selectDevice() rather than supplied by the caller.
-   *  A1/A2 fix (docs/FinInsights_Bug_Audit.md): the fabrication itself is intentional demo
-   *  behaviour (see "REALISTIC GLOBAL USER SIMULATION" above) and is not being removed -- what
-   *  was missing is a way for a reader (a KPI card, or eventually a contract loader) to tell
-   *  fabricated dimensions apart from measured ones. This flag, and realCountry/realCity/
-   *  realContinent above being unset, are what forwardToIngestionAPI reads to build
-   *  `metadata._simulated`. */
-  deviceIsSimulated: boolean;
 }
 
 interface RequestTelemetryContext {
@@ -199,21 +170,7 @@ function getSessionProfile(sessionId: string, metadata: Record<string, unknown> 
   // Localize produces are meaningless. Real geo arriving after the first event is therefore
   // deliberately discarded -- `location` on this path is simulated by design anyway.
   const existing = sessionProfiles.get(sessionId);
-  if (existing) {
-    // C5 fix (docs/FinInsights_Bug_Audit.md): eviction below used to be pure FIFO by insertion
-    // order, so a long-lived session that is genuinely still active gets evicted the moment
-    // enough OTHER sessions are created after it -- regardless of whether it was just used.
-    // Confirmed live: a real admin session spanning several hours picked up two different
-    // (geo, device) profiles because a bulk `/admin/simulate` run in between inserted enough
-    // one-shot session ids to push it out of the map, and its next event re-rolled a brand new
-    // profile -- reintroducing exactly the intra-session flip FOUNDATION-2 fixed. Deleting and
-    // re-setting on every cache hit moves this entry to the end of the Map's iteration order (JS
-    // Maps iterate in insertion order, and re-inserting after a delete counts as new insertion),
-    // so eviction below now targets the truly least-recently-used entry, not just the oldest one.
-    sessionProfiles.delete(sessionId);
-    sessionProfiles.set(sessionId, existing);
-    return existing;
-  }
+  if (existing) return existing;
 
   const geo = selectGeoProfile();
   const deviceType = String(safeMetadata.device_type || safeMetadata.device || selectDevice(geo));
@@ -225,7 +182,6 @@ function getSessionProfile(sessionId: string, metadata: Record<string, unknown> 
     realCountry: safeMetadata.country ? String(safeMetadata.country) : undefined,
     realCity: safeMetadata.city ? String(safeMetadata.city) : undefined,
     realContinent: safeMetadata.continent ? String(safeMetadata.continent) : undefined,
-    deviceIsSimulated: !(safeMetadata.device_type || safeMetadata.device),
   };
 
   if (sessionProfiles.size >= MAX_SESSION_PROFILES) {
@@ -481,18 +437,6 @@ async function forwardToIngestionAPI(
   const simTime = simulateResponseTime();
   const channel = normalizeChannel((metadata.channel as string) || sessionProfile.channel);
 
-  // A1/A2/A3/A4 fix (docs/FinInsights_Bug_Audit.md): mark which dimensions on THIS event are
-  // fabricated rather than measured, instead of silently shipping invented numbers as if they
-  // were real. Localize would otherwise decompose a KPI move across `location`/`device_type` and
-  // return confident, meaningless contribution shares -- a contract loader can only refuse to
-  // localize on a simulated dimension (Stage 00, not yet built) if it knows which ones are.
-  // Per event, not per session: a caller can supply a real device_type/response_time_ms on any
-  // individual event even inside a session whose profile was originally simulated.
-  const simulatedFields: string[] = [];
-  if (!metadata.device_type && sessionProfile.deviceIsSimulated) simulatedFields.push("device_type");
-  if (!sessionProfile.realCountry) simulatedFields.push("location", "continent", "city");
-  if (!metadata.response_time_ms) simulatedFields.push("response_time_ms");
-
   try {
     const analyticsTenantId = resolveAnalyticsTenantId(tenantId);
     await axios.post(INGESTION_API_URL, {
@@ -520,8 +464,6 @@ async function forwardToIngestionAPI(
         city: sessionProfile.realCity || geo.city,
         // Performance metrics
         response_time_ms: metadata.response_time_ms || simTime,
-        // Which of the above are fabricated on this event, not measured -- see comment above.
-        _simulated: simulatedFields,
         // Page-level path for Top Pages aggregation
         path: metadata.path || derivePathFromEvent(mappedEventName),
         tier: tier || metadata.tier
@@ -545,20 +487,8 @@ export async function trackEvent(
   tier?: 'free' | 'pro' | 'enterprise'
 ): Promise<void> {
   try {
+    const hashedUserId = customerId ? hashUserId(customerId) : "anonymous";
     const sessionId = getSessionId(metadata);
-    // C1 fix (docs/FinInsights_Bug_Audit.md): every logged-out visitor used to carry the literal
-    // string "anonymous" as user_id. /funnels and retention GROUP BY user_id, so across
-    // thousands of distinct people that was one row -- windowFunnel returned the maximum level
-    // for it, so any funnel with a pre-login first stage reported near-100% conversion as a
-    // definitional artefact, not a measurement. Retention was distorted the same way: an
-    // "anonymous" cohort trivially "returns" every week because SOME anonymous visitor is always
-    // active, even though it is a different person each time. Keying the anonymous id off the
-    // session id (already minted, already session-invariant) stops distinct anonymous visitors
-    // from being merged into one -- it does not give genuine cross-session anonymous retention
-    // (a session, by design, does not span return visits; that needs a durable per-browser id,
-    // which does not exist in this codebase and is a bigger addition than this fix), but it is
-    // strictly more honest than a shared bucket that fabricates a return signal.
-    const hashedUserId = customerId ? hashUserId(customerId, tenantId) : `anon_${sessionId}`;
     const metadataWithSession: Record<string, unknown> = { ...metadata, session_id: sessionId };
     const row = await prisma.event.create({
       data: {

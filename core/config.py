@@ -12,12 +12,7 @@ class Settings(BaseSettings):
     
     # On-Prem: identifies the single tenant this instance serves
     TENANT_ID: str = "default-app"
-
-    # On-Prem: secret salt for anonymizing user_id before it ever reaches ClickHouse (C3,
-    # docs/FinInsights_Bug_Audit.md). A real secret, set in the deployment environment -- not
-    # committed here, per CLAUDE.md's "Never commit secrets".
-    ON_PREM_USER_ID_SALT: str = ""
-
+    
     # On-Prem: whether aggregate sync to central cloud is enabled
     SYNC_ENABLED: bool = False
     CENTRAL_API_URL: str = "http://cloud-api-placeholder"

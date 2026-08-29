@@ -1,4 +1,3 @@
-import time
 from typing import Optional, Dict, Any, List
 from enum import Enum
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
@@ -93,24 +92,6 @@ class FeatureEvent(BaseModel):
         # Coerces rather than rejects -- see core/event_names.py. An unrecognised name is
         # wrapped as core.<name>.action, so the failure mode here is a silent rename.
         return normalize_ingest_event_name(v)
-
-    @field_validator('timestamp')
-    @classmethod
-    def validate_timestamp(cls, v: float) -> float:
-        # D4 (docs/FinInsights_Bug_Audit.md): timestamp is client-supplied with no bound --
-        # a skewed clock, or a producer sending milliseconds instead of seconds, lands events
-        # in the year 55000, where they are counted in every "last N days" window forever and
-        # permanently pollute /metrics/realtime_users. Rejects rather than coerces: there is no
-        # safe guess at the "correct" timestamp, and this must 422 -> dead-letter (ingest_validation)
-        # exactly like an invalid event_name or blank event_id, not silently clamp to `now()`.
-        now = time.time()
-        if v < now - 90 * 86400 or v > now + 5 * 60:
-            raise ValueError(
-                f"timestamp {v} is outside the accepted window "
-                f"[now-90d, now+5m] = [{now - 90 * 86400}, {now + 5 * 60}]. "
-                "Check for a clock skew or a milliseconds-vs-seconds unit mismatch."
-            )
-        return v
 
     # extra="ignore" is pydantic v2's default already (confirmed in Phase 1 audit) -- stated
     # explicitly here so the behavior this model relies on (never reject on an unrecognised

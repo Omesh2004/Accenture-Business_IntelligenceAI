@@ -212,7 +212,7 @@ export const getCryptoPrices = async (req: Request, res: Response): Promise<void
   try {
     // Check cache
     if (cryptoPriceCache && (Date.now() - cryptoPriceCache.timestamp) < CRYPTO_CACHE_TTL) {
-      await trackEvent("crypto_trading.price_feeds.view", customerId || null, tenantId, {
+      await trackEvent("crypto_trading.price_feeds.view", customerId || "anonymous", tenantId, {
         feature: "crypto-trading", source: "cache", status: "success",
         response_time_ms: Date.now() - startTime,
       }, undefined, 'enterprise').catch(() => { });
@@ -250,7 +250,7 @@ export const getCryptoPrices = async (req: Request, res: Response): Promise<void
     cryptoPriceCache = { data: formatted, timestamp: Date.now() };
 
     const responseTime = Date.now() - startTime;
-    await trackEvent("crypto_trading.price_feeds.view", customerId || null, tenantId, {
+    await trackEvent("crypto_trading.price_feeds.view", customerId || "anonymous", tenantId, {
       feature: "crypto-trading", source: "live", status: "success",
       response_time_ms: responseTime,
       assets_count: 5,
@@ -261,7 +261,7 @@ export const getCryptoPrices = async (req: Request, res: Response): Promise<void
     const responseTime = Date.now() - startTime;
     console.error("CoinGecko fetch error:", err);
 
-    await trackEvent("crypto_trading.price_feeds.failure", customerId || null, tenantId, {
+    await trackEvent("crypto_trading.price_feeds.failure", customerId || "anonymous", tenantId, {
       feature: "crypto-trading", source: "live", status: "error",
       error: String(err), response_time_ms: responseTime,
     }, undefined, 'enterprise').catch(() => { });

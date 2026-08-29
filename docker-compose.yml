@@ -63,12 +63,6 @@ services:
       CLICKHOUSE_DB: feature_intelligence
       CLICKHOUSE_USER: default
       CLICKHOUSE_PASSWORD: clickhouse
-      # D1/G7 fix: pin the server's own notion of "today" to UTC instead of inheriting
-      # whatever the base image's /etc/localtime happens to be. today()/now() with no
-      # explicit timezone argument resolve against this — leaving it unset is how a KPI
-      # card, a trend chart, and daily_feature_usage's rollup ended up bucketing events
-      # into different days (docs/FinInsights_Bug_Audit.md D1).
-      TZ: UTC
 
   # ═══════════════════════════════════════════════════════════
   # NUCLEUS PYTHON BACKEND SERVICES

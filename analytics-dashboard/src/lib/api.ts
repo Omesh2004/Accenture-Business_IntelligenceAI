@@ -1030,10 +1030,7 @@ export const dashboardAPI = {
 
   /* ─────────────── Tenant Comparison ─────────────── */
 
-  // A6 fix (docs/FinInsights_Bug_Audit.md): backend field renamed conversion_rate ->
-  // engaged_user_rate -- it measures "users with >3 events", not a conversion. Confirmed via
-  // grep this field has no other consumer in this app besides this type signature.
-  async getTenantComparison(tenants: string[], range: string): Promise<{ tenants: Array<{ id: string; name: string; total_events: number; unique_users: number; active_features: number; growth_rate: number; engaged_user_rate: number; trend: Array<{ date: string; events: number }> }> }> {
+  async getTenantComparison(tenants: string[], range: string): Promise<{ tenants: Array<{ id: string; name: string; total_events: number; unique_users: number; active_features: number; growth_rate: number; conversion_rate: number; trend: Array<{ date: string; events: number }> }> }> {
     try {
       const response = await apiClient.get(`/tenants/compare?tenants=${tenants.join(',')}&range=${range}`);
       return response.data;

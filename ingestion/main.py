@@ -2,7 +2,6 @@ import sys
 import os
 import json
 import asyncio
-import hashlib
 import logging
 import time
 from datetime import datetime, timezone
@@ -23,12 +22,6 @@ from api.page_map import canonicalize_event_name
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-if settings.is_on_prem and not settings.ON_PREM_USER_ID_SALT:
-    logger.warning(
-        "[SECURITY] ON_PREM_USER_ID_SALT is not set -- on-prem user_id anonymization is running "
-        "unsalted. Set ON_PREM_USER_ID_SALT in the environment before relying on it for privacy."
-    )
 
 producer: AIOKafkaProducer = None
 
@@ -448,16 +441,8 @@ async def ingest_event(event: FeatureEvent):
     if settings.is_on_prem:
         if event.tenant_id != settings.TENANT_ID:
             raise HTTPException(status_code=403, detail="Forbidden: Invalid tenant ID for this on-prem instance.")
-        # C3 fix (docs/FinInsights_Bug_Audit.md): this used to be Python's builtin hash(), which
-        # is randomized per-process via PYTHONHASHSEED -- the same user got a different anon id
-        # after every container restart, destroying cross-restart identity, and `% 1000000`
-        # guaranteed collisions above a few thousand users. blake2b is stable across restarts
-        # (it is a real hash function, not a randomized one) and a full digest has no realistic
-        # collision risk at this scale. Salted with a deployment secret (single tenant per
-        # on-prem instance, so one salt suffices) so the anon id isn't trivially reversible by
-        # brute-forcing the user_id space the way an unsalted hash would be.
-        event.user_id = f"anon_{hashlib.blake2b(f'{settings.ON_PREM_USER_ID_SALT}:{event.user_id}'.encode(), digest_size=16).hexdigest()}"
-
+        event.user_id = f"anon_{hash(event.user_id) % 1000000}"
+        
         # Serialize and write directly to ClickHouse
         event_dict = event.model_dump()
         try:
