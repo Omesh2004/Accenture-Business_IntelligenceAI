@@ -1,33 +1,35 @@
 /**
  * Behaviour knobs for POST /events/simulate.
  *
- * The simulate page lets an operator change how simulated users BEHAVE -- how often KYC
- * completes, how many loans get approved, which devices and countries the traffic comes
- * from, how often pro features convert or error. The generator then produces users who
- * genuinely behave that way.
+ * The simulate page lets an operator change how simulated traffic behaves in three ways:
+ *   1. ROUTE / EVENT TARGETS  -- dial one route or event up/down for traffic and,
+ *      independently, for failure (helper/journeyModel.ts).
+ *   2. POPULATION MIX         -- bias the device / country / channel mix of the sessions
+ *      generated in the window, without changing any rate.
+ *   3. A WINDOW + optional SEGMENT that scope 1 and 2 (see below).
+ *
+ * The old bespoke rate groups (kyc / loans / pro Partial overrides) were removed: the same
+ * movements are now expressed through targets, which the operator can also edit by hand.
+ * BASELINE_BEHAVIOR still holds the generator's baseline rates -- those are the numbers the
+ * traffic / failure multipliers scale.
  *
  * WHAT THIS DELIBERATELY DOES NOT DO
  * ----------------------------------
  * It records no ground truth. Nothing is written that says "a KYC drop was planted here".
- * The only trace a knob change leaves is the shape of the events in events_raw. That is the
+ * The only trace a change leaves is the shape of the events in events_raw. That is the
  * point: the intelligence layer has to infer the movement and its cause from telemetry
- * alone, exactly as it would for a real incident. A truth table sitting next to the data
- * would let a pipeline look up the answer instead of finding it.
- *
- * The API response echoes the resolved behaviour back to the caller so the operator can see
- * what they asked for. That echo is never persisted.
+ * alone. The API response echoes the resolved override back to the caller for display; that
+ * echo is never persisted.
  *
  * TWO IDEAS THAT MAKE A MOVEMENT DETECTABLE
  * -----------------------------------------
  * 1. A WINDOW. An override applies only to the last `windowDays` of simulated history; the
  *    rest generates at baseline. Without earlier days at the baseline rate there is nothing
- *    to move against, and a detector scoring residuals against a forecast band would see a
- *    flat series at the new level rather than a drop.
+ *    to move against.
  *
  * 2. A SEGMENT. An override can be scoped to e.g. {device_type: "mobile", location: "India"}.
- *    Only matching sessions get the changed rates, so the movement is concentrated in a cell
- *    that localization can actually recover. An unscoped override moves everything uniformly,
- *    which is detectable but has no root cause to find.
+ *    Only matching sessions get the change, so the movement concentrates in a cell that
+ *    localization can actually recover. This scopes targets AND mix.
  *
  * GRAIN NOTE
  * ----------
@@ -36,7 +38,16 @@
  * a dimension be invariant WITHIN a session -- a user appearing on mobile one day and
  * desktop the next is both realistic and contract-legal. Re-rolling per event would not be:
  * that is the FOUNDATION-2 bug this repo just fixed.
+ *
+ * `relaxJourney` turns off the journey-consistency safeguard so a targeted event can spike
+ * without its prerequisites (an anomaly / exploit shape). See helper/journeyModel.ts.
  */
+
+import {
+  ParsedTarget,
+  parseTargets,
+  describeTargets,
+} from "./journeyModel";
 
 export interface KycBehavior {
   /** Chance an eligible user starts KYC on a given day. */
@@ -87,17 +98,21 @@ export interface BehaviorSegment {
 export interface BehaviorOverride {
   /** Trailing days of simulated history the override applies to. */
   windowDays: number;
-  /** Restrict the override to sessions matching all provided keys. */
+  /** Restrict the override (targets AND mix) to sessions matching all provided keys. */
   segment?: BehaviorSegment;
-  kyc?: Partial<KycBehavior>;
-  loans?: Partial<LoanBehavior>;
+  /** Bias the device / country / channel mix of sessions generated in the window. */
   mix?: Partial<MixBehavior>;
-  pro?: Partial<ProBehavior>;
+  /** Per-route / per-event traffic & failure multipliers. Validated against the real
+   *  vocabulary in journeyModel.ts; invalid identifiers are dropped, not coerced. */
+  targets?: ParsedTarget[];
+  /** When true, the journey-consistency safeguard is off for targeted routes/events:
+   *  they may fire without their prerequisites and do not pull their funnel with them. */
+  relaxJourney?: boolean;
 }
 
 /**
- * Reproduces the generator's behaviour before knobs existed. A run with no override must
- * produce the same distribution it always did, so an operator can establish a baseline.
+ * The generator's baseline rates. These are the numbers the traffic / failure multipliers
+ * scale; a run with no override generates exactly this distribution.
  */
 export const BASELINE_BEHAVIOR: SimulationBehavior = {
   kyc: { startRate: 0.25, progressMultiplier: 0.3, successRate: 0.85 },
@@ -105,8 +120,6 @@ export const BASELINE_BEHAVIOR: SimulationBehavior = {
   mix: { deviceWeights: {}, countryWeights: {}, channelWeights: {} },
   pro: { conversionMultiplier: 1, errorRate: 0.03, roleViolationRate: 0 },
 };
-
-const clamp01 = (n: number): number => Math.max(0, Math.min(1, n));
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
@@ -144,27 +157,6 @@ export function parseBehaviorOverride(raw: unknown): BehaviorOverride | null {
   }
   if (Object.keys(segment).length) override.segment = segment;
 
-  if (body.kyc && typeof body.kyc === "object") {
-    const kyc: Partial<KycBehavior> = {};
-    if (isFiniteNumber(Number(body.kyc.startRate))) kyc.startRate = clamp01(Number(body.kyc.startRate));
-    if (isFiniteNumber(Number(body.kyc.progressMultiplier))) {
-      kyc.progressMultiplier = Math.max(0, Math.min(Number(body.kyc.progressMultiplier), 5));
-    }
-    if (isFiniteNumber(Number(body.kyc.successRate))) kyc.successRate = clamp01(Number(body.kyc.successRate));
-    if (Object.keys(kyc).length) override.kyc = kyc;
-  }
-
-  if (body.loans && typeof body.loans === "object") {
-    const loans: Partial<LoanBehavior> = {};
-    if (isFiniteNumber(Number(body.loans.applicationMultiplier))) {
-      loans.applicationMultiplier = Math.max(0, Math.min(Number(body.loans.applicationMultiplier), 5));
-    }
-    if (isFiniteNumber(Number(body.loans.approvalRate))) {
-      loans.approvalRate = clamp01(Number(body.loans.approvalRate));
-    }
-    if (Object.keys(loans).length) override.loans = loans;
-  }
-
   if (body.mix && typeof body.mix === "object") {
     const mix: Partial<MixBehavior> = {};
     const device = cleanWeights(body.mix.deviceWeights);
@@ -176,19 +168,13 @@ export function parseBehaviorOverride(raw: unknown): BehaviorOverride | null {
     if (Object.keys(mix).length) override.mix = mix;
   }
 
-  if (body.pro && typeof body.pro === "object") {
-    const pro: Partial<ProBehavior> = {};
-    if (isFiniteNumber(Number(body.pro.conversionMultiplier))) {
-      pro.conversionMultiplier = Math.max(0, Math.min(Number(body.pro.conversionMultiplier), 20));
-    }
-    if (isFiniteNumber(Number(body.pro.errorRate))) pro.errorRate = clamp01(Number(body.pro.errorRate));
-    if (isFiniteNumber(Number(body.pro.roleViolationRate))) {
-      pro.roleViolationRate = clamp01(Number(body.pro.roleViolationRate));
-    }
-    if (Object.keys(pro).length) override.pro = pro;
-  }
+  const targets = parseTargets(body.targets);
+  if (targets.length) override.targets = targets;
 
-  const touched = override.kyc || override.loans || override.mix || override.pro;
+  const relaxJourney = body.relaxJourney === true || body.relaxJourney === "true";
+  if (relaxJourney) override.relaxJourney = true;
+
+  const touched = override.mix || override.targets || override.relaxJourney;
   return touched ? override : null;
 }
 
@@ -230,11 +216,13 @@ export function resolveBehavior(
 ): SimulationBehavior {
   if (!overrideApplies(override, ctx)) return BASELINE_BEHAVIOR;
   const o = override as BehaviorOverride;
+  // Only `mix` is a rate-shaping override now; kyc/loans/pro stay at baseline and are
+  // moved via targets instead.
   return {
-    kyc: { ...BASELINE_BEHAVIOR.kyc, ...(o.kyc || {}) },
-    loans: { ...BASELINE_BEHAVIOR.loans, ...(o.loans || {}) },
+    kyc: BASELINE_BEHAVIOR.kyc,
+    loans: BASELINE_BEHAVIOR.loans,
     mix: { ...BASELINE_BEHAVIOR.mix, ...(o.mix || {}) },
-    pro: { ...BASELINE_BEHAVIOR.pro, ...(o.pro || {}) },
+    pro: BASELINE_BEHAVIOR.pro,
   };
 }
 
@@ -265,36 +253,14 @@ export function describeOverride(override: BehaviorOverride | null): string[] {
     : "all traffic";
   lines.push(`Applied to ${scope} over the last ${override.windowDays} day(s); earlier days ran at baseline.`);
 
-  const b = BASELINE_BEHAVIOR;
-  if (override.kyc?.startRate !== undefined) {
-    lines.push(`KYC start rate ${b.kyc.startRate} -> ${override.kyc.startRate}`);
-  }
-  if (override.kyc?.progressMultiplier !== undefined) {
-    lines.push(`KYC completion multiplier ${b.kyc.progressMultiplier} -> ${override.kyc.progressMultiplier}`);
-  }
-  if (override.kyc?.successRate !== undefined) {
-    lines.push(`KYC success share ${b.kyc.successRate} -> ${override.kyc.successRate}`);
-  }
-  if (override.loans?.applicationMultiplier !== undefined) {
-    lines.push(`Loan application multiplier ${b.loans.applicationMultiplier} -> ${override.loans.applicationMultiplier}`);
-  }
-  if (override.loans?.approvalRate !== undefined) {
-    lines.push(`Loan approval rate ${b.loans.approvalRate} -> ${override.loans.approvalRate}`);
-  }
   for (const key of ["deviceWeights", "countryWeights", "channelWeights"] as const) {
     const weights = override.mix?.[key];
     if (weights && Object.keys(weights).length) {
       lines.push(`${key} biased to ${JSON.stringify(weights)}`);
     }
   }
-  if (override.pro?.conversionMultiplier !== undefined) {
-    lines.push(`Pro conversion multiplier ${b.pro.conversionMultiplier} -> ${override.pro.conversionMultiplier}`);
-  }
-  if (override.pro?.errorRate !== undefined) {
-    lines.push(`Pro error rate ${b.pro.errorRate} -> ${override.pro.errorRate}`);
-  }
-  if (override.pro?.roleViolationRate !== undefined) {
-    lines.push(`Role-violation rate ${b.pro.roleViolationRate} -> ${override.pro.roleViolationRate}`);
+  for (const line of describeTargets(override.targets ?? [], override.relaxJourney === true)) {
+    lines.push(line);
   }
   return lines;
 }

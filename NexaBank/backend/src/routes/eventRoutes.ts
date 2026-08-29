@@ -5,10 +5,17 @@ import { trackEvent } from "../middleware/eventTracker";
 import {
   BehaviorOverride,
   describeOverride,
+  overrideApplies,
   parseBehaviorOverride,
   pickWeighted,
   resolveBehavior,
 } from "../helper/simulationBehavior";
+import {
+  buildCatalog,
+  canonicalOf,
+  createJourneyRuntime,
+  JourneyRuntime,
+} from "../helper/journeyModel";
 import { UAParser } from "ua-parser-js";
 import axios from "axios";
 
@@ -510,10 +517,27 @@ function locationMeta(loc: WorldCity, persona: UserPersona) {
   };
 }
 
+// ─── GET /events/simulate/catalog ─────────────────────────────
+// Admin only: the real route/event vocabulary an operator may target from the
+// simulation console. Sourced from helper/journeyModel.ts so the picker cannot
+// offer an identifier the generator can't actually produce.
+router.get(
+  "/events/simulate/catalog",
+  isLoggedIn,
+  isAdmin,
+  (_req: Request, res: Response): void => {
+    res.status(200).json(buildCatalog());
+  }
+);
+
 // ─── POST /events/simulate ────────────────────────────────────
-// Admin only: stochastic user journey simulation
+// Admin only: stochastic user journey simulation.
+// Auth: mounted without router-level isLoggedIn (see app.ts), so the guard is
+// declared here explicitly. Before this it was a client-only AdminGuard.
 router.post(
   "/events/simulate",
+  isLoggedIn,
+  isAdmin,
   async (req: Request, res: Response): Promise<void> => {
     const tenantAliasMap: Record<string, string> = {
       nexabank: "bank_a",
@@ -532,6 +556,13 @@ router.post(
     const behaviorOverride: BehaviorOverride | null = parseBehaviorOverride(
       (req.body as { behavior?: unknown })?.behavior
     );
+    // Journey model: enforces realistic prerequisites by default, applies the per-
+    // route/event traffic & failure knobs, and (unless relaxJourney) keeps a raised
+    // target's upstream funnel proportionate. Stateless w.r.t. persistence.
+    const journey: JourneyRuntime = createJourneyRuntime({
+      targets: behaviorOverride?.targets ?? [],
+      relaxJourney: behaviorOverride?.relaxJourney === true,
+    });
     const count = Number.isFinite(rawCount)
       ? Math.max(1, Math.min(Math.floor(rawCount), 100))
       : 50;
@@ -613,6 +644,61 @@ router.post(
         usersCreated++;
         createdUserIds.push(customer.id);
 
+        // ── Journey-aware emit helpers (scoped to this simulated customer) ──
+        // Every generator event goes through simEmit so the journey model sees it,
+        // can back-fill a missing prerequisite, and can apply the traffic knob.
+        const DIM_KEYS = [
+          "session_id", "device_type", "device", "location", "country",
+          "continent", "city", "channel", "user_type", "browser", "tier",
+        ];
+        const dimMeta = (meta: Record<string, any>): Record<string, any> => {
+          const out: Record<string, any> = {};
+          for (const k of DIM_KEYS) if (meta[k] !== undefined) out[k] = meta[k];
+          return out;
+        };
+        const simEmit = async (
+          raw: string,
+          prob: number,
+          meta: Record<string, any>,
+          ts: number,
+          opts: {
+            inScope?: boolean;
+            applyTraffic?: boolean;
+            tier?: "free" | "pro" | "enterprise";
+            seed?: string[];
+          } = {}
+        ): Promise<boolean> => {
+          const inScope = opts.inScope ?? true;
+          const applyTraffic = opts.applyTraffic ?? true;
+          const canonical = canonicalOf(raw);
+          journey.beginSession(String(meta.session_id ?? ""), opts.seed);
+
+          const p = inScope && applyTraffic
+            ? journey.effectiveProbability(canonical, prob, inScope)
+            : prob;
+          if (Math.random() >= Math.max(0, Math.min(1, p))) return false;
+
+          for (const bf of journey.planBackfill(canonical)) {
+            await trackEvent(bf, customer.id, tenantId, dimMeta(meta), ts - 1);
+            eventsCreated++;
+          }
+          await trackEvent(raw, customer.id, tenantId, meta, ts, opts.tier);
+          eventsCreated++;
+          journey.record(canonical);
+          return true;
+        };
+        // Roll a failure outcome, honouring the per-target failure knob.
+        const simFail = (
+          failureCanonical: string,
+          baseFailProb: number,
+          inScope: boolean
+        ): boolean =>
+          Math.random() < journey.failureProbability(failureCanonical, baseFailProb, inScope);
+        // Traffic-knob-adjusted gate for a block of events (not a single emit); the
+        // emits inside pass { applyTraffic: false } so the knob is applied once.
+        const simGate = (canonical: string, baseProb: number, inScope: boolean): boolean =>
+          Math.random() < journey.effectiveProbability(canonical, baseProb, inScope);
+
         // ─── 5. Create savings account ──────────────────────
         const accNo = `NEXA${String(seed).slice(-8)}`;
         let account;
@@ -630,13 +716,18 @@ router.post(
           continue;
         }
 
-        // Track registration with worldwide location
-        await trackEvent("free.auth.register.success", customer.id, tenantId, { channel: persona.preferredChannel, ...lMeta }, baseTs);
-        await trackEvent("free.auth.login.success", customer.id, tenantId, { channel: persona.preferredChannel, ...lMeta }, baseTs + 60);
-        eventsCreated += 2;
+        // Track registration with worldwide location. Targets apply to this session only
+        // when the join day is inside the window AND the initial device/location match
+        // the override's segment (if any).
+        const regInScope = overrideApplies(behaviorOverride, {
+          daysAgo: joinDaysAgo,
+          deviceType: String(lMeta.device_type || ""),
+          location: String(lMeta.location || ""),
+        });
+        await simEmit("free.auth.register.success", 1, { channel: persona.preferredChannel, ...lMeta }, baseTs, { inScope: regInScope });
+        await simEmit("free.auth.login.success", 1, { channel: persona.preferredChannel, ...lMeta }, baseTs + 60, { inScope: regInScope });
         if ((customer.settingConfig as Record<string, unknown>)?.analyticsOptIn === true) {
-          await trackEvent("core.analytics.opt_in", customer.id, tenantId, { source: "simulation", ...lMeta }, baseTs + 90);
-          eventsCreated++;
+          await simEmit("core.analytics.opt_in", 1, { source: "simulation", ...lMeta }, baseTs + 90, { inScope: regInScope });
         }
 
         // ─── 6. Initial salary deposit ──────────────────────
@@ -719,9 +810,19 @@ router.post(
           if (forcedDevice) lMeta = { ...lMeta, device_type: forcedDevice };
           if (forcedCountry) lMeta = { ...lMeta, country: forcedCountry, location: forcedCountry };
 
-          // Resolve again AFTER the mix shift so a segment-scoped rate override matches the
+          // Resolve again AFTER the mix shift so a segment-scoped override matches the
           // device/location this session actually ended up with.
           const behavior = resolveBehavior(behaviorOverride, {
+            daysAgo,
+            deviceType: String(lMeta.device_type || ""),
+            location: String(lMeta.location || ""),
+          });
+
+          // Route/event traffic & failure knobs apply only inside the trailing window AND
+          // (if the override has a segment) to sessions that match it -- earlier days and
+          // other cells stay at baseline so a movement has something to be measured
+          // against. The journey gate itself always applies.
+          const inScope = overrideApplies(behaviorOverride, {
             daysAgo,
             deviceType: String(lMeta.device_type || ""),
             location: String(lMeta.location || ""),
@@ -731,8 +832,7 @@ router.post(
           const channel = forcedChannel
             ? forcedChannel
             : (Math.random() < 0.6 ? persona.preferredChannel : pick(CHANNELS));
-          await trackEvent("free.auth.login.success", customer.id, tenantId, { channel, ...lMeta, day }, dayTs);
-          eventsCreated++;
+          await simEmit("free.auth.login.success", 1, { channel, ...lMeta, day }, dayTs, { inScope });
 
           // Update lastLogin
           await prisma.customer.update({
@@ -746,67 +846,48 @@ router.post(
           // ════════════════════════════════════════════════════
 
           // Flow 1: Dashboard → View Accounts → View Transactions
-          if (Math.random() < 0.7) {
-            await trackEvent("free.dashboard.view", customer.id, tenantId, { channel, ...lMeta }, dayTs + 200);
-            eventsCreated++;
-          }
-          if (Math.random() < 0.4) {
-            await trackEvent("free.accounts.view", customer.id, tenantId, { ...lMeta }, dayTs + 400);
-            eventsCreated++;
-          }
-          if (Math.random() < 0.3) {
-            await trackEvent("free.transactions.view", customer.id, tenantId, { ...lMeta }, dayTs + 800);
-            eventsCreated++;
-          }
+          await simEmit("free.dashboard.view", 0.7, { channel, ...lMeta }, dayTs + 200, { inScope });
+          await simEmit("free.accounts.view", 0.4, { ...lMeta }, dayTs + 400, { inScope });
+          await simEmit("free.transactions.view", 0.3, { ...lMeta }, dayTs + 800, { inScope });
 
           // Flow 2: Payee Management → Transfer
-          if (Math.random() < 0.15) {
-            await trackEvent("free.payees.view", customer.id, tenantId, { ...lMeta }, dayTs + 1000);
-            eventsCreated++;
-            if (Math.random() < 0.3) {
-              await trackEvent("free.payees.add_success", customer.id, tenantId, { ...lMeta }, dayTs + 1100);
-              eventsCreated++;
-            }
-            if (Math.random() < 0.2) {
-               // Skipping free.payees.search
-            }
-            if (Math.random() < 0.25) {
-              await trackEvent("free.payment.success", customer.id, tenantId, { ...lMeta }, dayTs + 1150);
-              eventsCreated++;
-            }
+          if (await simEmit("free.payees.view", 0.15, { ...lMeta }, dayTs + 1000, { inScope })) {
+            await simEmit("free.payees.add_success", 0.3, { ...lMeta }, dayTs + 1100, { inScope });
+            // (free.payees.search is intentionally not simulated)
+            await simEmit("free.payment.success", 0.25, { ...lMeta }, dayTs + 1150, { inScope });
           }
 
-          if (kycState === "NOT_STARTED" && day > 2 && Math.random() < behavior.kyc.startRate) {
-            kycState = "PENDING";
-            await prisma.customer.update({ where: { id: customer.id }, data: { kycStatus: "PENDING" } });
-            await trackEvent("free.loan.kyc_started", customer.id, tenantId, { ...lMeta }, dayTs + 200);
-            eventsCreated++;
+          if (kycState === "NOT_STARTED" && day > 2) {
+            if (await simEmit("free.loan.kyc_started", behavior.kyc.startRate, { ...lMeta }, dayTs + 200, { inScope })) {
+              kycState = "PENDING";
+              await prisma.customer.update({ where: { id: customer.id }, data: { kycStatus: "PENDING" } });
+            }
           }
-          if (kycState === "PENDING" && Math.random() < persona.kycCompletionRate * behavior.kyc.progressMultiplier) {
-            if (Math.random() < behavior.kyc.successRate) {
+          if (kycState === "PENDING" &&
+              simGate("loan.kyc_completed.success", persona.kycCompletionRate * behavior.kyc.progressMultiplier, inScope)) {
+            if (!simFail("loan.kyc.failure", 1 - behavior.kyc.successRate, inScope)) {
               kycState = "VERIFIED";
               await prisma.customer.update({
                 where: { id: customer.id },
                 data: { kycStatus: "VERIFIED", kycCompletedAt: new Date((dayTs + 500) * 1000) }
               });
-              await trackEvent("free.loan.kyc_completed", customer.id, tenantId, { ...lMeta }, dayTs + 500);
+              await simEmit("free.loan.kyc_completed", 1, { ...lMeta }, dayTs + 500, { inScope, applyTraffic: false });
               compliantUsers++;
             } else {
               kycState = "REJECTED";
               await prisma.customer.update({ where: { id: customer.id }, data: { kycStatus: "REJECTED" } });
-              await trackEvent("free.loan.kyc_failed", customer.id, tenantId, { reason: pick(["Document Mismatch", "Expired ID", "Blurry Photo", "Name Mismatch"]), ...lMeta }, dayTs + 500);
+              await simEmit("free.loan.kyc_failed", 1, { reason: pick(["Document Mismatch", "Expired ID", "Blurry Photo", "Name Mismatch"]), ...lMeta }, dayTs + 500, { inScope, applyTraffic: false });
             }
-            eventsCreated++;
           }
 
           // ── Spending Events ───────────────────────────────
-          if (Math.random() < persona.spendingRate && currentBalance > 1000) {
+          if (simGate("payment.success.action", persona.spendingRate, inScope) && currentBalance > 1000) {
             const spendAmount = Math.floor(gaussianRandom(persona.averageSpend, persona.averageSpend * 0.4));
             const clampedAmount = Math.min(spendAmount, currentBalance * 0.3); // Don't spend more than 30% of balance
             if (clampedAmount >= 100) {
               const category = pick(SPEND_CATEGORIES);
               const txChannel = weightedPick(CHANNELS, CHANNEL_WEIGHTS);
-              const success = Math.random() > persona.failureRate;
+              const success = !simFail("payment.failed.action", persona.failureRate, inScope);
 
               await prisma.transaction.create({
                 data: {
@@ -824,11 +905,10 @@ router.post(
               if (success) {
                 currentBalance -= clampedAmount;
                 await prisma.account.update({ where: { accNo }, data: { balance: currentBalance } });
-                await trackEvent("free.payment.success", customer.id, tenantId, { amount: clampedAmount, category, channel: txChannel, ...lMeta }, dayTs + 1205);
+                await simEmit("free.payment.success", 1, { amount: clampedAmount, category, channel: txChannel, ...lMeta }, dayTs + 1205, { inScope, applyTraffic: false });
               } else {
-                await trackEvent("free.payment.failed", customer.id, tenantId, { amount: clampedAmount, reason: "Transaction Error", ...lMeta }, dayTs + 1205);
+                await simEmit("free.payment.failed", 1, { amount: clampedAmount, reason: "Transaction Error", ...lMeta }, dayTs + 1205, { inScope, applyTraffic: false });
               }
-              eventsCreated++;
             }
 
             // ── Second transaction (some users do multiple per day)
@@ -849,8 +929,7 @@ router.post(
                 currentBalance -= clamped2;
                 await prisma.account.update({ where: { accNo }, data: { balance: currentBalance } });
                 transactionsCreated++;
-                await trackEvent("free.payment.success", customer.id, tenantId, { amount: clamped2, category: cat2, channel: pick(CHANNELS), ...lMeta }, dayTs + 5005);
-                eventsCreated++;
+                await simEmit("free.payment.success", 1, { amount: clamped2, category: cat2, channel: pick(CHANNELS), ...lMeta }, dayTs + 5005, { inScope, applyTraffic: false });
               }
             }
           }
@@ -859,73 +938,45 @@ router.post(
           const userPlan = persona.isEnterprise ? "enterprise" : "free";
 
           if (userPlan === "enterprise") {
-            await trackEvent("pro.features.view", customer.id, tenantId, { ...lMeta, tier: "enterprise" }, dayTs + 1300);
-            eventsCreated++;
+            const ent = { inScope, tier: "enterprise" as const };
+            await simEmit("pro.features.view", 1, { ...lMeta, tier: "enterprise" }, dayTs + 1300, ent);
 
             // Simulate a realistic enterprise user session that touches multiple pro modules.
             const proTimelineBase = dayTs + 1340;
 
             // Crypto suite
-            if (Math.random() < 0.22) {
-              // pro_revenue lists crypto-trading.page.view as a corroboration event; without a
-              // module entry event it read zero on both paths.
-              await trackEvent("crypto_trading.page.view", customer.id, tenantId, { ...lMeta, tier: "enterprise" }, proTimelineBase + 5);
-              eventsCreated++;
-              await trackEvent("crypto_trading.price_feeds.view", customer.id, tenantId, { source: pick(["live", "cache"]), ...lMeta, tier: "enterprise" }, proTimelineBase + 10);
-              eventsCreated++;
+            if (await simEmit("crypto_trading.page.view", 0.22, { ...lMeta, tier: "enterprise" }, proTimelineBase + 5, ent)) {
+              await simEmit("crypto_trading.price_feeds.view", 1, { source: pick(["live", "cache"]), ...lMeta, tier: "enterprise" }, proTimelineBase + 10, { ...ent, applyTraffic: false });
             }
-            if (Math.random() < 0.14) {
-              await trackEvent("crypto_trading.portfolio.view", customer.id, tenantId, { ...lMeta, tier: "enterprise" }, proTimelineBase + 20);
-              eventsCreated++;
-            }
-            if (Math.random() < 0.11) {
-              await trackEvent("crypto_trading.trade_execution.success", customer.id, tenantId, { amount: Math.floor(500 + Math.random() * 4500), symbol: pick(["BTC", "ETH", "SOL", "XRP"]), ...lMeta, tier: "enterprise" }, proTimelineBase + 30);
-              eventsCreated++;
-              if (Math.random() < 0.09) {
-                await trackEvent("crypto_trading.trade_execution.failure", customer.id, tenantId, { reason: pick(["Insufficient Funds", "Price Slippage", "Exchange Timeout"]), ...lMeta, tier: "enterprise" }, proTimelineBase + 35);
-                eventsCreated++;
+            await simEmit("crypto_trading.portfolio.view", 0.14, { ...lMeta, tier: "enterprise" }, proTimelineBase + 20, ent);
+            if (await simEmit("crypto_trading.trade_execution.success", 0.11, { amount: Math.floor(500 + Math.random() * 4500), symbol: pick(["BTC", "ETH", "SOL", "XRP"]), ...lMeta, tier: "enterprise" }, proTimelineBase + 30, ent)) {
+              if (simFail("crypto-trading.trade_execution.failure", 0.09, inScope)) {
+                await simEmit("crypto_trading.trade_execution.failure", 1, { reason: pick(["Insufficient Funds", "Price Slippage", "Exchange Timeout"]), ...lMeta, tier: "enterprise" }, proTimelineBase + 35, { ...ent, applyTraffic: false });
               }
             }
 
             // Wealth suite
-            if (Math.random() < 0.16) {
-              await trackEvent("wealth_management_pro.insights.view", customer.id, tenantId, { ...lMeta, tier: "enterprise" }, proTimelineBase + 45);
-              eventsCreated++;
-            }
-            if (Math.random() < 0.08) {
-              await trackEvent("wealth_management_pro.rebalance.success", customer.id, tenantId, { ...lMeta, tier: "enterprise" }, proTimelineBase + 55);
-              eventsCreated++;
-              if (Math.random() < 0.06) {
-                await trackEvent("wealth_management_pro.rebalance.failure", customer.id, tenantId, { reason: pick(["Allocation Constraint", "Market Halt"]), ...lMeta, tier: "enterprise" }, proTimelineBase + 58);
-                eventsCreated++;
+            await simEmit("wealth_management_pro.insights.view", 0.16, { ...lMeta, tier: "enterprise" }, proTimelineBase + 45, ent);
+            if (await simEmit("wealth_management_pro.rebalance.success", 0.08, { ...lMeta, tier: "enterprise" }, proTimelineBase + 55, ent)) {
+              if (simFail("wealth-management-pro.rebalance.failure", 0.06, inScope)) {
+                await simEmit("wealth_management_pro.rebalance.failure", 1, { reason: pick(["Allocation Constraint", "Market Halt"]), ...lMeta, tier: "enterprise" }, proTimelineBase + 58, { ...ent, applyTraffic: false });
               }
             }
 
             // Payroll suite
-            if (Math.random() < 0.13) {
-              await trackEvent("bulk_payroll_processing.payees.view", customer.id, tenantId, { ...lMeta, tier: "enterprise" }, proTimelineBase + 70);
-              eventsCreated++;
+            await simEmit("bulk_payroll_processing.payees.view", 0.13, { ...lMeta, tier: "enterprise" }, proTimelineBase + 70, ent);
+            if (simGate("bulk-payroll-processing.search.success", 0.1, inScope)) {
+              const payrollSearchFailed = simFail("bulk-payroll-processing.search.failure", 0.12, inScope);
+              await simEmit(payrollSearchFailed ? "bulk_payroll_processing.search.failure" : "bulk_payroll_processing.search.success", 1, { queryLength: Math.floor(3 + Math.random() * 7), ...lMeta, tier: "enterprise" }, proTimelineBase + 78, { ...ent, applyTraffic: false });
             }
-            if (Math.random() < 0.1) {
-              const payrollSearchSuccess = Math.random() > 0.12;
-              await trackEvent(payrollSearchSuccess ? "bulk_payroll_processing.search.success" : "bulk_payroll_processing.search.failure", customer.id, tenantId, { queryLength: Math.floor(3 + Math.random() * 7), ...lMeta, tier: "enterprise" }, proTimelineBase + 78);
-              eventsCreated++;
-            }
-            if (Math.random() < 0.07) {
-              const payrollBatchSuccess = Math.random() > 0.1;
-              await trackEvent(payrollBatchSuccess ? "bulk_payroll_processing.batch.success" : "bulk_payroll_processing.batch.failure", customer.id, tenantId, { employees: Math.floor(10 + Math.random() * 190), ...lMeta, tier: "enterprise" }, proTimelineBase + 86);
-              eventsCreated++;
+            if (simGate("bulk-payroll-processing.batch.success", 0.07, inScope)) {
+              const payrollBatchFailed = simFail("bulk-payroll-processing.batch.failure", 0.1, inScope);
+              await simEmit(payrollBatchFailed ? "bulk_payroll_processing.batch.failure" : "bulk_payroll_processing.batch.success", 1, { employees: Math.floor(10 + Math.random() * 190), ...lMeta, tier: "enterprise" }, proTimelineBase + 86, { ...ent, applyTraffic: false });
             }
 
             // AI insights suite
-            if (Math.random() < 0.15) {
-              await trackEvent("ai_insights.stats.view", customer.id, tenantId, { ...lMeta, tier: "enterprise" }, proTimelineBase + 96);
-              eventsCreated++;
-            }
-            if (Math.random() < 0.09) {
-              await trackEvent("ai_insights.book.success", customer.id, tenantId, { title: pick(["The Intelligent Investor", "The Psychology of Money", "Rich Dad Poor Dad", "A Random Walk Down Wall Street"]), ...lMeta, tier: "enterprise" }, proTimelineBase + 104);
-              eventsCreated++;
-            }
+            await simEmit("ai_insights.stats.view", 0.15, { ...lMeta, tier: "enterprise" }, proTimelineBase + 96, ent);
+            await simEmit("ai_insights.book.success", 0.09, { title: pick(["The Intelligent Investor", "The Psychology of Money", "Rich Dad Poor Dad", "A Random Walk Down Wall Street"]), ...lMeta, tier: "enterprise" }, proTimelineBase + 104, ent);
           }
 
           // ── Cash/Card Withdrawal (digital channels only for cleaner distribution) ────────────────
@@ -952,17 +1003,15 @@ router.post(
           // ── Unauthorized access attempts ──────────────────
           // Same event IsLoggedIn.ts emits when a non-admin hits an admin route, so a
           // simulated burst is indistinguishable from real violations downstream.
-          if (Math.random() < behavior.pro.roleViolationRate) {
-            await trackEvent("auth.role.violation", customer.id, tenantId, {
-              role: "user",
-              attempted_action: pick(["GET /api/admin/applications", "POST /api/approve", "PUT /api/events/toggles"]),
-              ...lMeta,
-            }, dayTs + 2600);
-            eventsCreated++;
-          }
+          await simEmit("auth.role.violation", behavior.pro.roleViolationRate, {
+            role: "user",
+            attempted_action: pick(["GET /api/admin/applications", "POST /api/approve", "PUT /api/events/toggles"]),
+            ...lMeta,
+          }, dayTs + 2600, { inScope });
 
           // ── Loan Application ──────────────────────────────
-          if (!hasAppliedLoan && kycState === "VERIFIED" && day > 5 && Math.random() < persona.loanInterest * behavior.loans.applicationMultiplier) {
+          if (!hasAppliedLoan && kycState === "VERIFIED" && day > 5 &&
+              simGate("loan.applied.success", persona.loanInterest * behavior.loans.applicationMultiplier, inScope)) {
             const loanType = pick(LOAN_TYPES);
             const loanAmounts: Record<string, [number, number]> = {
               HOME: [500000, 5000000],
@@ -978,8 +1027,7 @@ router.post(
             const kycComplete = Math.random() < persona.kycCompletionRate;
 
             // Track full loan journey flow
-            await trackEvent("lending.loans.viewed", customer.id, tenantId, { ...lMeta }, dayTs + 2800);
-            eventsCreated++;
+            await simEmit("lending.loans.viewed", 1, { ...lMeta }, dayTs + 2800, { inScope, applyTraffic: false });
 
             await prisma.loanApplication.create({
               data: {
@@ -996,39 +1044,38 @@ router.post(
             hasAppliedLoan = true;
             applicationsCreated++;
 
-            await trackEvent("lending.loan.applied", customer.id, tenantId, { loanType, amount: principalAmount, term, ...lMeta }, dayTs + 3000);
+            await simEmit("lending.loan.applied", 1, { loanType, amount: principalAmount, term, ...lMeta }, dayTs + 3000, { inScope, applyTraffic: false });
             if (kycComplete) {
-              await trackEvent("lending.loan.kyc_completed", customer.id, tenantId, { context: "loan", ...lMeta }, dayTs + 3500);
+              await simEmit("lending.loan.kyc_completed", 1, { context: "loan", ...lMeta }, dayTs + 3500, { inScope, applyTraffic: false });
             } else {
-              await trackEvent("lending.loan.kyc_abandoned", customer.id, tenantId, { step: 1, context: "loan", ...lMeta }, dayTs + 3500);
+              await simEmit("lending.loan.kyc_abandoned", 1, { step: 1, context: "loan", ...lMeta }, dayTs + 3500, { inScope, applyTraffic: false });
             }
-            eventsCreated += 2;
 
             // Approval. This route previously created applications but never approved one,
             // so loan_approval_volume's numerator (loan.approved.success) had no source on
             // the simulate path at all -- it came only from an admin clicking Approve in the
             // UI. "loan_approved" is the LEGACY_MAP key that resolves to loan.approved.success.
-            if (kycComplete && Math.random() < behavior.loans.approvalRate) {
+            if (kycComplete && simGate("loan.approved.success", behavior.loans.approvalRate, inScope)) {
               await prisma.loanApplication.updateMany({
                 where: { customerId: customer.id, status: "PENDING" },
                 data: { status: "APPROVED" },
               });
-              await trackEvent("loan_approved", customer.id, tenantId, { loanType, amount: principalAmount, term, ...lMeta }, dayTs + 4200);
-              eventsCreated++;
+              await simEmit("loan_approved", 1, { loanType, amount: principalAmount, term, ...lMeta }, dayTs + 4200, { inScope, applyTraffic: false });
             }
           }
 
           // ── Pro Feature Exploration & Conversion ──────────
-          if (!isPro && Math.random() < 0.12) {
+          if (!isPro && simGate("features.view.action", 0.12, inScope)) {
             const featureId = pick(PRO_FEATURES);
-            await trackEvent("pro.features.view", customer.id, tenantId, { featureId, ...lMeta }, dayTs + 4000);
-            eventsCreated++;
+            await simEmit("pro.features.view", 1, { featureId, ...lMeta }, dayTs + 4000, { inScope, applyTraffic: false });
 
             // Whale users (high balance) are 5x more likely to convert
             const isWhale = currentBalance > 100000;
             const conversionChance = persona.proConversionChance * (isWhale ? 5 : 1) * behavior.pro.conversionMultiplier;
+            const canAfford = currentBalance > 5000;
+            const converts = canAfford && !simFail("features.unlock.failed", Math.max(0, 1 - conversionChance), inScope);
 
-            if (currentBalance > 5000 && Math.random() < conversionChance) {
+            if (converts) {
               const expiry = new Date((dayTs + 86400 * 30) * 1000);
               try {
                 await prisma.userLicense.create({
@@ -1045,104 +1092,109 @@ router.post(
                 });
                 currentBalance -= 2000;
                 await prisma.account.update({ where: { accNo }, data: { balance: currentBalance } });
-                await trackEvent("pro.features.unlock_success", customer.id, tenantId, { featureId, ...lMeta }, dayTs + 4505);
+                await simEmit("pro.features.unlock_success", 1, { featureId, ...lMeta }, dayTs + 4505, { inScope, applyTraffic: false });
                 isPro = true;
                 unlockedFeature = featureId;
                 transactionsCreated++;
-                eventsCreated++;
               } catch (e) {
                 // License already exists — skip
               }
             } else {
-              await trackEvent("pro.features.unlock_failed", customer.id, tenantId, {
+              await simEmit("pro.features.unlock_failed", 1, {
                 featureId,
-                reason: currentBalance <= 5000 ? "insufficient_funds" : "not_ready_to_upgrade",
+                reason: canAfford ? "not_ready_to_upgrade" : "insufficient_funds",
                 ...lMeta,
-              }, dayTs + 4505);
-              eventsCreated++;
+              }, dayTs + 4505, { inScope, applyTraffic: false });
             }
           }
 
           // ── Pro Feature Usage (already pro users) ─────────
           // Generate granular events per feature type for analytics tracking
-          if (isPro && Math.random() < 0.5) {
+          const proUsageCanon: Record<string, string> = {
+            ai_insight_download: "ai-insights.book.success",
+            "pro-feature?id=crypto-trading": "crypto-trading.trade_execution.success",
+            wealth_rebalance: "wealth-management-pro.insights.view",
+            "pro-feature?id=bulk-payroll-processing": "bulk-payroll-processing.batch.success",
+          };
+          const proFailCanon: Record<string, string> = {
+            ai_insight_download: "ai-insights.book.failure",
+            "pro-feature?id=crypto-trading": "crypto-trading.price_feeds.failure",
+            wealth_rebalance: "wealth-management-pro.insights.failure",
+            "pro-feature?id=bulk-payroll-processing": "bulk-payroll-processing.batch.failure",
+          };
+          if (isPro && simGate(proUsageCanon[unlockedFeature] ?? "crypto-trading.trade_execution.success", 0.5, inScope)) {
             // Log-normal response time: Box-Muller transform, median ~55ms, long tail to ~300ms
             const u1 = Math.random() || 1e-10;
             const u2 = Math.random();
             const z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
             const responseTime = Math.max(15, Math.min(300, Math.round(Math.exp(4.0 + z * 0.7))));
-            const isError = Math.random() < behavior.pro.errorRate;
+            const isError = simFail(proFailCanon[unlockedFeature] ?? "crypto-trading.trade_execution.failure", behavior.pro.errorRate, inScope);
 
+            const proUse = { inScope, applyTraffic: false, tier: "enterprise" as const };
             if (unlockedFeature === "ai_insight_download") {
               // Finance Library — book access events
               const bookTitles = ["The Intelligent Investor", "Rich Dad Poor Dad", "The Psychology of Money", "A Random Walk Down Wall Street", "Common Stocks and Uncommon Profits", "The Little Book of Common Sense Investing"];
               const bookTitle = pick(bookTitles);
-              await trackEvent((isError ? "ai_insights.book.failure" : "ai_insights.book.success"), customer.id, tenantId, {
+              await simEmit((isError ? "ai_insights.book.failure" : "ai_insights.book.success"), 1, {
                 feature: "ai-insights", title: bookTitle, status: isError ? "error" : "success",
                 response_time_ms: responseTime, error: isError ? "timeout" : undefined, ...lMeta
-              }, dayTs + 6000, 'enterprise');
-              await trackEvent("ai_insights.stats.view", customer.id, tenantId, {
+              }, dayTs + 6000, proUse);
+              await simEmit("ai_insights.stats.view", 1, {
                 feature: "ai-insights", books_tracked: Math.floor(1 + Math.random() * 5),
                 status: "success", response_time_ms: responseTime, ...lMeta
-              }, dayTs + 6100, 'enterprise');
-              eventsCreated += 2;
+              }, dayTs + 6100, proUse);
 
             } else if (unlockedFeature === "pro-feature?id=crypto-trading") {
               // Crypto Trading — price views + trades
               const assets = ["BTC", "ETH", "SOL", "XRP", "ADA"];
               const asset = pick(assets);
               const tradeType = pick(["BUY", "SELL"]);
-              await trackEvent("crypto_trading.page.view", customer.id, tenantId, { feature: "crypto-trading", ...lMeta }, dayTs + 5950, 'enterprise');
-              eventsCreated++;
-              await trackEvent((isError ? "crypto_trading.price_feeds.failure" : "crypto_trading.price_feeds.view"), customer.id, tenantId, {
+              await simEmit("crypto_trading.page.view", 1, { feature: "crypto-trading", ...lMeta }, dayTs + 5950, proUse);
+              await simEmit((isError ? "crypto_trading.price_feeds.failure" : "crypto_trading.price_feeds.view"), 1, {
                 feature: "crypto-trading", source: pick(["live", "cache"]),
                 status: isError ? "error" : "success", response_time_ms: responseTime,
                 assets_count: 5, ...lMeta
-              }, dayTs + 6000, 'enterprise');
+              }, dayTs + 6000, proUse);
               if (Math.random() < 0.4) {
                 const tradeAmount = parseFloat((0.001 + Math.random() * 0.5).toFixed(4));
-                await trackEvent((isError ? "crypto_trading.trade_execution.failure" : "crypto_trading.trade_execution.success"), customer.id, tenantId, {
+                await simEmit((isError ? "crypto_trading.trade_execution.failure" : "crypto_trading.trade_execution.success"), 1, {
                   feature: "crypto-trading", asset, amount: tradeAmount, type: tradeType,
                   status: isError ? "error" : "success", response_time_ms: responseTime,
                   error: isError ? "insufficient_funds" : undefined, ...lMeta
-                }, dayTs + 6200, 'enterprise');
-                eventsCreated++;
+                }, dayTs + 6200, proUse);
               }
-              await trackEvent("crypto_trading.portfolio.view", customer.id, tenantId, {
+              await simEmit("crypto_trading.portfolio.view", 1, {
                 feature: "crypto-trading", holdings_count: Math.floor(Math.random() * 4),
                 status: "success", response_time_ms: responseTime, ...lMeta
-              }, dayTs + 6300, 'enterprise');
-              eventsCreated += 2;
+              }, dayTs + 6300, proUse);
 
             } else if (unlockedFeature === "wealth_rebalance") {
               // Wealth Management — insights + rebalance
-              await trackEvent((isError ? "wealth_management_pro.insights.failure" : "wealth_management_pro.insights.view"), customer.id, tenantId, {
+              await simEmit((isError ? "wealth_management_pro.insights.failure" : "wealth_management_pro.insights.view"), 1, {
                 feature: "wealth-management-pro", status: isError ? "error" : "success",
                 response_time_ms: responseTime, accounts_count: Math.floor(1 + Math.random() * 3),
                 transactions_analyzed: Math.floor(10 + Math.random() * 200),
                 net_worth: Math.floor(50000 + Math.random() * 500000),
                 error: isError ? "db_timeout" : undefined, ...lMeta
-              }, dayTs + 6000, 'enterprise');
+              }, dayTs + 6000, proUse);
               if (Math.random() < 0.15) {
-                await trackEvent("wealth_management_pro.rebalance.success", customer.id, tenantId, {
+                await simEmit("wealth_management_pro.rebalance.success", 1, {
                   feature: "wealth-management-pro", status: "success",
                   response_time_ms: Math.floor(100 + Math.random() * 1000),
                   totalValue: Math.floor(100000 + Math.random() * 500000), ...lMeta
-                }, dayTs + 6500, 'enterprise');
-                eventsCreated++;
+                }, dayTs + 6500, proUse);
               }
-              eventsCreated++;
 
             } else if (unlockedFeature === "pro-feature?id=bulk-payroll-processing") {
               // Payroll Pro — payee views + batch processing
-              await trackEvent("bulk_payroll_processing.payees.view", customer.id, tenantId, {
+              await simEmit("bulk_payroll_processing.payees.view", 1, {
                 feature: "bulk-payroll-processing", payees_count: Math.floor(2 + Math.random() * 15),
                 status: "success", response_time_ms: responseTime, ...lMeta
-              }, dayTs + 6000, 'enterprise');
+              }, dayTs + 6000, proUse);
               if (Math.random() < 0.3) {
                 const payeeCount = Math.floor(2 + Math.random() * 10);
                 const amtPerPayee = Math.floor(1000 + Math.random() * 9000);
-                await trackEvent((isError ? "bulk_payroll_processing.batch.failure" : "bulk_payroll_processing.batch.success"), customer.id, tenantId, {
+                await simEmit((isError ? "bulk_payroll_processing.batch.failure" : "bulk_payroll_processing.batch.success"), 1, {
                   feature: "bulk-payroll-processing",
                   payees_count: payeeCount,
                   amount_per_payee: amtPerPayee,
@@ -1150,27 +1202,18 @@ router.post(
                   status: isError ? "error" : "success",
                   response_time_ms: Math.floor(200 + Math.random() * 2000),
                   error: isError ? "insufficient_funds" : undefined, ...lMeta
-                }, dayTs + 6500, 'enterprise');
-                eventsCreated++;
+                }, dayTs + 6500, proUse);
               }
-              eventsCreated++;
             }
 
             // Pro dashboard view each time
-            await trackEvent("pro.dashboard.view", customer.id, tenantId, { day, featureId: unlockedFeature, ...lMeta }, dayTs + 6800, 'enterprise');
-            eventsCreated++;
+            await simEmit("pro.dashboard.view", 1, { day, featureId: unlockedFeature, ...lMeta }, dayTs + 6800, { inScope, applyTraffic: false, tier: "enterprise" });
           }
 
           // ── Profile View (occasional) ─────────────────────
-          if (Math.random() < 0.08) {
-            await trackEvent("core.profile.viewed", customer.id, tenantId, { ...lMeta }, dayTs + 7000);
-            eventsCreated++;
-          }
+          await simEmit("core.profile.viewed", 0.08, { ...lMeta }, dayTs + 7000, { inScope });
           // Occasional transactions page visit
-          if (Math.random() < 0.12) {
-            await trackEvent("payments.history.viewed", customer.id, tenantId, { ...lMeta }, dayTs + 7200);
-            eventsCreated++;
-          }
+          await simEmit("payments.history.viewed", 0.12, { ...lMeta }, dayTs + 7200, { inScope });
         }
 
         // ─── 8. REAL-TIME PULSE (LIVE METRICS) ─────────────
@@ -1179,12 +1222,22 @@ router.post(
         if (Math.random() < 0.6) {
            lMeta = { ...lMeta, session_id: `sess_sim_${seed}_live` };
            const nowTs = Math.floor(Date.now() / 1000) - Math.floor(Math.random() * 240); // Within last 4 minutes
-           await trackEvent("free.dashboard.view", customer.id, tenantId, { channel: persona.preferredChannel, ...lMeta, live_pulse: true }, nowTs);
-           eventsCreated++;
-           
+           // A live ping is a continuation of an already-authenticated user; seed the
+           // session with an implicit login (and pro access for enterprise personas) so
+           // the journey gate does not back-fill a full onboarding for one ping.
+           const liveSeed = persona.isEnterprise
+             ? ["login.auth.success", "features.view.action"]
+             : ["login.auth.success"];
+           // The live ping is "now" (day 0), so it is in window; a segment still scopes it.
+           const liveInScope = overrideApplies(behaviorOverride, {
+             daysAgo: 0,
+             deviceType: String(lMeta.device_type || ""),
+             location: String(lMeta.location || ""),
+           });
+           await simEmit("free.dashboard.view", 1, { channel: persona.preferredChannel, ...lMeta, live_pulse: true }, nowTs, { inScope: liveInScope, seed: liveSeed });
+
            if (persona.isEnterprise && Math.random() < 0.3) {
-               await trackEvent("crypto_trading.trade_execution.success", customer.id, tenantId, { amount: Math.floor(100+Math.random()*900), symbol: "BTC", ...lMeta, live_pulse: true }, nowTs + 15);
-               eventsCreated++;
+               await simEmit("crypto_trading.trade_execution.success", 1, { amount: Math.floor(100 + Math.random() * 900), symbol: "BTC", ...lMeta, live_pulse: true }, nowTs + 15, { inScope: liveInScope, tier: "enterprise", seed: liveSeed });
            }
         }
 
