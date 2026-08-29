@@ -1,0 +1,8 @@
+# Test harness. P3-3, moved ahead of the build gates: Gate D and the determinism diff
+# (docs/INTELLIGENCE_LAYER_PROPOSAL.md 1.8) have nowhere to run without it.
+-r requirements.txt
+pytest==8.3.3
+
+# Used by scripts/seed_data.py, which plants the golden scenarios the gates score against.
+# Already imported there; it was simply never declared, so the script could not run in any image.
+requests>=2.31
