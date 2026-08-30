@@ -44,7 +44,7 @@ export default function LoginPage() {
   return (
     <div className="min-h-screen bg-white flex selection:bg-blue-100">
 
-      {/* Left Panel — Branding */}
+      {/* Left Panel, Branding */}
       <div className="hidden lg:flex flex-1 flex-col justify-between p-12 bg-gradient-to-br from-[#1a73e8] to-[#0d47a1] text-white relative overflow-hidden">
         {/* Background accent shapes */}
         <div className="absolute -top-24 -right-24 w-72 h-72 bg-white/5 rounded-full" />
@@ -87,7 +87,7 @@ export default function LoginPage() {
         <p className="text-white/40 text-xs">©2026 FinInsightsAnalytics. All rights reserved.</p>
       </div>
 
-      {/* Right Panel — Login Form */}
+      {/* Right Panel, Login Form */}
       <div className="flex-1 flex flex-col items-center justify-center p-8 md:p-16">
         {/* Mobile brand */}
         <div className="lg:hidden flex items-center gap-2 mb-10">

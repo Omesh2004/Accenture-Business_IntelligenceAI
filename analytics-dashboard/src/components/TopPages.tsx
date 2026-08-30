@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * Top Pages table component — Google Analytics style.
+ * Top Pages table component, Google Analytics style.
  * Shows the most visited pages ranked by total events.
  * Each page expands to show feature-level breakdown with inPagePct bars.
  * Clean blue/gray palette, no rank badges.

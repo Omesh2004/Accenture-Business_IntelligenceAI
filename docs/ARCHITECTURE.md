@@ -113,8 +113,21 @@ did not make it informative. `metadata._simulated` now names the invented keys a
 `contracts.sliceable_dimensions` refuses them on any dataset but `seeded`, so localizing on
 `location` or `device_type` from the live path is blocked rather than merely discouraged.
 
-Run `python scripts/verify_data_quality.py` on the host to re-assert this rather than trusting the
-table.
+Run `scripts/verify_data_quality.py` to re-assert this rather than trusting the table.
+
+**The simulate console drives `eventTracker.ts`; it is not a fifth producer.** NexaBank
+`/admin/simulate` → `POST /api/events/simulate` generates users who behave a described way and
+emits their events through the same forwarder as live traffic, so everything true of that path is
+true of console traffic. A journey model
+(`NexaBank/backend/src/helper/journeyModel.ts`) enforces event ordering and back-fills missing
+prerequisites, and `GET /api/events/simulate/catalog` serves the vocabulary its picker offers.
+
+It has two modes. **Slow** (default) is the path described above and the only one that exercises
+the pipeline. **Fast** (`mode: "fast"`) proxies to `POST /events/seed/fast` on the ingestion
+service, which writes `events_raw` and the retail fact tables directly — mock data only, ~24,600
+rows/sec against a remote-Postgres path that manages roughly one row per 350 ms. The bank still
+holds no ClickHouse client; the direct write stays in the service that already had that
+responsibility. See `docs/FOUNDATION_STATUS.md` § "Two modes, and why the slow one is slow".
 
 Note that a browser path posting straight to `POST /events` would skip `enforceTaxonomy`, so only
 two of the three dialects apply to it — currently moot, since neither browser path emits.
@@ -156,6 +169,21 @@ Every source reaches ClickHouse through a **watermarked extract API** on the Nex
 (`/api/extract/*`, guarded by `x-extract-token`), never a direct database connection: the
 credentials stay in one service and the contract between systems is explicit.
 
+**One geography across all four sources.** `region` is a **continent** and `country` is the
+country, both drawn from the same worldwide set the clickstream producers emit, so the dashboard's
+Geographic Distribution — which renders a country view and a continent view — and a retail KPI's
+localization name the same places in both. Until 2026-08-30 the reference
+data seeded four US regions with US cities while the clickstream emitted global countries, and the
+bank had two disjoint geographies: a chart said "India" and an insight said "Northeast".
+`tests/test_geo_vocabulary_alignment.py` holds them together.
+
+**Deletes do not propagate, and neither do edits to a denormalised attribute.** An extract has no
+tombstone — a row deleted at source simply stops appearing, and a `ReplacingMergeTree` keeps the
+last version it saw. `load_market_ops` reconciles against the full batch for that reason; the
+watermarked feeds cannot, because there absence is indistinguishable from "unchanged". It also
+fingerprints the branch set and resets the watermarks of every feed that copies a branch attribute,
+because a branch edit touches no transaction row and an incremental load would read nothing.
+
 The cadences differ by three orders of magnitude on purpose. A single global freshness rule
 cannot gate them — 15 minutes is healthy for the clickstream and impossible for a monthly macro
 feed — which is why Trust Gate scales the freshness floor by grain and checks each source
@@ -164,8 +192,8 @@ separately.
 ### Why source C exists
 
 `dim_macro_environment` holds `competitor_deposit_rate`, `central_bank_base_rate` and
-`regional_unemployment_rate` per region per month. It is the only place an **external** driver
-can come from. When deposits fall in one region and no internal segment explains it, the engine
+`regional_unemployment_rate` per region per month, where a region is a continent. It is the only
+place an **external** driver can come from. When deposits fall in one region and no internal segment explains it, the engine
 has somewhere to reach; without it, every "cause" would necessarily be internal, and the
 multi-factor requirement would be satisfied only in appearance.
 
@@ -220,6 +248,7 @@ thread pool; the client is not thread-safe).
 | `/metrics/kpi`, `/metrics/secondary_kpi` | KPI cards, period change, latency |
 | `/metrics/traffic`, `/metrics/feature_usage_series` | time series |
 | `/metrics/devices`, `/metrics/channels`, `/locations`, `/metrics/top_pages` | metadata breakdowns |
+| `/metrics/dimension_provenance` | per-dimension `simulated` share, read from `metadata._simulated`; what the charts' Simulated badge reads |
 | `/metrics/realtime_users`, `/metrics/pages_per_minute`, `/metrics/retention`, `/metrics/pro_users` | activity and retention |
 | `/features/usage`, `/features/activity`, `/features/heatmap` | feature aggregates |
 | `/funnels` | ordered counts via `windowFunnel` — **user-grain, display only** |

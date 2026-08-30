@@ -251,6 +251,10 @@ class RBACMiddleware(BaseHTTPMiddleware):
         "/metrics/pages_per_minute",
         "/metrics/top_pages",
         "/metrics/devices",
+        # Describes the provenance of /locations and /metrics/devices, so it carries the
+        # same scope. Blocked by default anyway; declared so a change to the default cannot
+        # silently widen it.
+        "/metrics/dimension_provenance",
         "/metrics/channels",
         "/metrics/retention",
         "/metrics/secondary_kpi",
@@ -1462,6 +1466,80 @@ def get_device_breakdown(tenants: str = Query(..., description="Comma-separated 
         return breakdown
     except Exception:
         return [{"name": "Unknown", "value": 100, "color": "#9CA3AF"}]
+
+# Dimensions a producer can fabricate. Code-controlled, never user input -- they are interpolated
+# into SQL below, so this tuple is the allowlist.
+PROVENANCE_DIMENSIONS = ("location", "city", "continent", "device_type", "channel",
+                         "response_time_ms")
+
+
+@app.get("/metrics/dimension_provenance")
+def get_dimension_provenance(
+    tenants: str = Query(..., description="Comma-separated list of tenants"),
+    range: str = Query("7d", description="Time range like 7d, 30d"),
+):
+    """Which metadata dimensions were fabricated by the producer, and for what share of events.
+
+    Reads `metadata._simulated`, the marker every producer sets for keys it invented rather than
+    measured. This is the read side of CLAUDE.md's "never fabricate a metric silently": a chart
+    built on a dimension that comes back `simulated` here has to say so, the same way the Avg
+    Response Time KPI card already does.
+
+    Additive on purpose. Wrapping /locations or /metrics/devices to carry the flag would change
+    two response shapes and every consumer of them (rule 6) for a signal that is per-tenant and
+    per-range, not per-row.
+    """
+    days = parse_range(range)
+    tenant_list = [t.strip() for t in tenants.split(",") if t.strip()]
+    if not tenant_list:
+        raise HTTPException(status_code=400, detail="tenants is required")
+    cond = "tenant_id = %(tenant_id)s" if len(tenant_list) == 1 else "tenant_id IN %(tenant_ids)s"
+    params = ({"tenant_id": tenant_list[0], "days": days} if len(tenant_list) == 1
+              else {"tenant_ids": tuple(tenant_list), "days": days})
+
+    # A key counts as simulated when the marker names it. Bounded at both ends, equal-length
+    # windows not needed here -- this is a share within one window, not a period comparison.
+    sep = "," + chr(10) + " " * 12
+    marked = sep.join(
+        f"uniqExactIf({DEDUP_EVENT_KEY}, has(JSONExtractArrayRaw(metadata, '_simulated'), "
+        f"'\"{dim}\"')) as sim_{dim}"
+        for dim in PROVENANCE_DIMENSIONS
+    )
+    sql = f"""
+        SELECT
+            uniqExact({DEDUP_EVENT_KEY}) as total,
+            {marked}
+        FROM feature_intelligence.events_raw
+        WHERE {cond}
+          AND timestamp >= toDate(now('UTC')) - %(days)s
+          AND timestamp < toDate(now('UTC'))
+    """
+    try:
+        rows = ch_client.query(sql, params)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+    row = rows[0] if rows else {}
+    total = int(row.get("total") or 0)
+    dimensions = {}
+    for dim in PROVENANCE_DIMENSIONS:
+        sim = int(row.get(f"sim_{dim}") or 0)
+        pct = round((sim / total) * 100, 1) if total else 0.0
+        dimensions[dim] = {
+            "simulated_events": sim,
+            "total_events": total,
+            "simulated_pct": pct,
+            # Any fabrication at all is disclosed. A dimension that is 30% invented cannot carry a
+            # contribution share honestly either, so there is no threshold below which it is fine.
+            "simulated": sim > 0,
+        }
+    return {
+        "tenant_id": ",".join(tenant_list),
+        "time_range": range,
+        "total_events": total,
+        "dimensions": dimensions,
+    }
+
 
 @app.get("/metrics/channels")
 def get_acquisition_channels(tenants: str = Query(..., description="Comma-separated list of tenants"), range: str = Query("7d", description="Time range like 7d, 30d")):
@@ -3350,6 +3428,61 @@ def ask_intelligence(
     if len(question) > 500:
         raise HTTPException(status_code=400, detail="question is too long")
     return agent.ask(tenant_id, question, resolve_persona(request, req.persona))
+
+
+@app.post("/intelligence/ask/stream")
+def ask_intelligence_stream(
+    request: Request,
+    req: AskRequest,
+    tenants: str = Query(..., description="Tenant id"),
+):
+    """The same answer as `/intelligence/ask`, streamed step by step as Server-Sent Events.
+
+    Event kinds: `rail` (the pipeline gates, before anything runs), `step` (one reasoning step,
+    with the numbers it read and the table they came from), `answer` (the identical payload the
+    batch endpoint returns) and `end`. A client that only wants the answer should keep using the
+    batch route; nothing here changes what the agent decides.
+    """
+    from fastapi.responses import StreamingResponse
+    from api.intelligence import agent
+    tenant_id = [t.strip() for t in tenants.split(",") if t.strip()][0]
+    question = (req.question or "").strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="question is required")
+    if len(question) > 500:
+        raise HTTPException(status_code=400, detail="question is too long")
+    return StreamingResponse(
+        agent.ask_stream(tenant_id, question, resolve_persona(request, req.persona)),
+        media_type="text/event-stream",
+        # Buffering a stream defeats it: nginx and some dev proxies hold SSE until the response
+        # closes, which would deliver every step at once and look identical to the batch route.
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no",
+                 "Connection": "keep-alive"},
+    )
+
+
+@app.get("/intelligence/series")
+def get_intelligence_series(
+    tenants: str = Query(..., description="Tenant id"),
+    kpi_id: str = Query(..., description="Governed metric to chart"),
+    days: int = Query(30, ge=7, le=120),
+):
+    """The real day-by-day path for one governed KPI, with its stored forecast band.
+
+    Read through the Metric Layer, so the chart and the narrative are computed by the same code.
+    A hand-written GROUP BY here would be the same query and the same cost, and would drift from
+    the narrative the first time either side changed.
+    """
+    from api.intelligence import series as series_reader
+    tenant_id = [t.strip() for t in tenants.split(",") if t.strip()][0]
+    return series_reader.kpi_series(tenant_id, kpi_id, days)
+
+
+@app.get("/intelligence/rail")
+def get_intelligence_rail():
+    """The pipeline gates a question travels, so a UI can render the rail before asking."""
+    from api.intelligence import gates
+    return {"gates": gates.catalogue()}
 
 
 @app.post("/intelligence/outcome")

@@ -10,6 +10,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 from aiokafka import AIOKafkaProducer
 
 # Add project root to path so we can import 'core'
@@ -510,6 +511,55 @@ async def ingest_event(event: FeatureEvent):
             raise HTTPException(status_code=500, detail="Failed to ingest event")
 
     return {"status": "Event queued successfully"}
+
+class FastSeedRequest(BaseModel):
+    """Operator-triggered mock data. Never a real customer record -- see api/fast_seed.py."""
+    tenant_id: str = "nexabank"
+    users: int = 100
+    days: int = 30
+    seed: int | None = None
+    purge_first: bool = False
+    # A planted movement is echoed back to the caller, never persisted -- see api/fast_seed.py.
+    behavior: dict | None = None
+    # Off by default: a run generates activity for customers the bank already has. Minting a
+    # population every time gave each run its own cohort and made openings spike on every run.
+    create_accounts: bool = False
+
+
+@app.post("/events/seed/fast", status_code=200)
+async def seed_fast(req: FastSeedRequest):
+    """Fast mode for the simulate console: write mock data straight to ClickHouse.
+
+    It lives HERE rather than in NexaBank because NexaBank has no ClickHouse client and must not
+    grow one (`docs/ARCHITECTURE.md`: every read goes through the analytics API, and the bank
+    never touches the warehouse). This service already owns writing `events_raw` on the fallback
+    path, so it is the one place where a direct write is already an established responsibility.
+
+    Bypassing validation, the taxonomy and Kafka is safe for exactly one reason: this is mock data
+    an admin asked for. `POST /events` remains the only door for anything real.
+    """
+    from api import fast_seed
+    try:
+        removed = fast_seed.purge(req.tenant_id) if req.purge_first else {}
+        written = await asyncio.to_thread(
+            fast_seed.generate, req.tenant_id, req.users, req.days, req.seed, req.behavior,
+            req.create_accounts)
+        return {"mode": "fast", "tenant_id": req.tenant_id, "written": written,
+                "purged": removed}
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    except Exception as exc:
+        logger.exception("fast seed failed")
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@app.post("/events/seed/fast/purge", status_code=200)
+async def seed_fast_purge(req: FastSeedRequest):
+    """Remove everything fast mode wrote for a tenant. Mock data has to be reversible."""
+    from api import fast_seed
+    removed = await asyncio.to_thread(fast_seed.purge, req.tenant_id)
+    return {"tenant_id": req.tenant_id, "purged": removed}
+
 
 @app.get("/health")
 async def health_check():

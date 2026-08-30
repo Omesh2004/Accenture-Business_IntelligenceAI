@@ -3,7 +3,7 @@
 /**
  * Evidence card, trust ledger and engine breakdown for one investigation.
  *
- * Every figure shown here is read back from the Signal Store, never recomputed in the browser —
+ * Every figure shown here is read back from the Signal Store, never recomputed in the browser -
  * that traceability is what lets the narrative be trusted.
  */
 
@@ -34,7 +34,7 @@ interface Props {
 function IntelligenceEvidence({ evidence, trust, engine, verifierPass }: Props) {
   return (
     <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-      {/* Evidence card — every number the narrative may state */}
+      {/* Evidence card, every number the narrative may state */}
       <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
         <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200">
           <h3 className="text-sm font-semibold text-slate-700">Evidence ledger</h3>
@@ -80,7 +80,7 @@ function IntelligenceEvidence({ evidence, trust, engine, verifierPass }: Props) 
       </div>
 
       <div className="space-y-4">
-        {/* LLM vs non-LLM — computed from model_runs, not asserted by the model */}
+        {/* LLM vs non-LLM, computed from model_runs, not asserted by the model */}
         <div className="rounded-2xl border border-slate-200 bg-white shadow-sm p-4">
           <h3 className="text-sm font-semibold text-slate-700 mb-3">Method attribution</h3>
           <div className="flex items-center gap-3 mb-3">
@@ -119,7 +119,7 @@ function IntelligenceEvidence({ evidence, trust, engine, verifierPass }: Props) 
           </div>
         </div>
 
-        {/* Trust ledger — passes are recorded too, so the suppression rate is auditable */}
+        {/* Trust ledger, passes are recorded too, so the suppression rate is auditable */}
         <div className="rounded-2xl border border-slate-200 bg-white shadow-sm">
           <div className="flex items-center justify-between px-4 py-3 border-b border-slate-200">
             <h3 className="text-sm font-semibold text-slate-700">Trust gate ledger</h3>

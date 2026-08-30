@@ -51,7 +51,7 @@ fundamentals:
     engine_type: sql
 
 dimensions:
-  allowed: [account_type, region, branch_code, lifecycle_status]
+  allowed: [account_type, region, country, branch_code, lifecycle_status]
   max_depth: 2
   min_segment_volume: 3
   availability:
@@ -130,7 +130,7 @@ lineage:
     not a reason to declare the spike organic.
 
 access_restriction:
-  visible_to: [cfo, ops_manager, analyst]
+  visible_to: [cfo, ops_manager, analyst, marketing_lead, risk_officer, data_steward]
   suppress_for_others: []
 
 observability:

@@ -68,7 +68,7 @@ def dimension_phrase(key: str, value: str) -> str:
 
 
 def cell_phrase(dimensions: dict) -> str:
-    """A whole localisation cell as one phrase: "payment transactions in the Northeast region"."""
+    """A whole localisation cell as one phrase: "payment transactions in the Europe region"."""
     if not dimensions:
         return "the tenant as a whole"
     what = [dimension_phrase(k, v) for k, v in sorted(dimensions.items()) if k not in _PLACE]
@@ -151,6 +151,11 @@ def scored_measure(kpi_id: str) -> tuple[str, str, bool]:
     except Exception:                                               # noqa: BLE001
         return "", "", False
     if contract is None:
+        return "", "", False
+    # A ratio with a usable denominator is scored on the rate itself, so there is no proxy to
+    # declare and no per-day noun: the figure is the KPI. Only a malformed ratio still falls
+    # back to its numerator, and that case is what the proxy wording exists for.
+    if contract.is_ratio and contract.denominator():
         return "", "", False
     measure = str((contract.scored_fundamental or {}).get("metric") or "").replace("_", " ")
     cadence = str((contract.raw.get("grain") or {}).get("time") or "")

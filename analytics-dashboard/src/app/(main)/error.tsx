@@ -4,7 +4,7 @@
  * Segment error boundary for the dashboard.
  *
  * Without one, a single thrown render error takes the whole app to a blank white page with no
- * message — which is what an unreachable Analytics API produced: every panel's query rejected,
+ * message, which is what an unreachable Analytics API produced: every panel's query rejected,
  * one propagated out of render, and the sidebar, navbar and page all disappeared together.
  * A dashboard that cannot reach its API should say so and stay navigable.
  */
@@ -34,7 +34,7 @@ export default function DashboardError({
             </h1>
             <p className="mt-2 text-sm leading-6 text-slate-600">
               The page failed while loading its data. This is usually the Analytics API being
-              unreachable rather than a problem with the data itself — nothing has been changed.
+              unreachable rather than a problem with the data itself, nothing has been changed.
             </p>
             <p className="mt-3 break-words rounded-xl border border-slate-200 bg-slate-50 p-3 font-mono text-[11px] text-slate-600">
               {error.message || 'Unknown error'}

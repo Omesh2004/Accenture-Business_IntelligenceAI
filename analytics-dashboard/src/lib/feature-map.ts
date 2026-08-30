@@ -38,7 +38,7 @@ export interface AppSuiteConfig {
 
 /**
  * Registry of all connected applications.
- * Add new apps here — no code changes needed elsewhere.
+ * Add new apps here, no code changes needed elsewhere.
  */
 export const APP_REGISTRY: Record<string, AppConfig> = {
   nexabank: {

@@ -15,15 +15,22 @@ import {
 } from 'react-simple-maps';
 import { Plus, Minus, Maximize2, ExternalLink, Globe, Map } from 'lucide-react';
 import ChartContainer from './ChartContainer';
-import { LocationData } from '@/types';
+import { LocationData, DimensionProvenance } from '@/types';
 
 interface TopLocationsProps {
   data: LocationData[];
+  /** Provenance of the geo dimensions, from GET /metrics/dimension_provenance. */
+  provenance?: Record<string, DimensionProvenance>;
 }
 
 const geoUrl = "https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json";
 
-function TopLocations({ data }: TopLocationsProps) {
+function TopLocations({ data, provenance }: TopLocationsProps) {
+  // location carries the country this map colours; city/continent drive the continent view.
+  const geoSimulated = ['location', 'city', 'continent'].some((k) => provenance?.[k]?.simulated);
+  const geoPct = Math.max(
+    ...['location', 'city', 'continent'].map((k) => provenance?.[k]?.simulated_pct ?? 0),
+  );
   const [position, setPosition] = useState({ coordinates: [0, 20], zoom: 1 });
   const [viewMode, setViewMode] = useState<'country' | 'continent'>('country');
 
@@ -75,7 +82,12 @@ function TopLocations({ data }: TopLocationsProps) {
   };
 
   return (
-    <ChartContainer title="Geographic Distribution" id="top-locations">
+    <ChartContainer
+      title="Geographic Distribution"
+      id="top-locations"
+      simulated={geoSimulated}
+      simulatedNote={`${geoPct}% of events carry a generated location. The producer synthesises geo per session, so these countries are not where anyone actually was.`}
+    >
       <div className="flex flex-col lg:flex-row gap-6 mt-4">
         
         {/* Left: Interactive Map */}

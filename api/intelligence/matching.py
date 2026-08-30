@@ -96,6 +96,36 @@ def score(question: str, terms: tuple[str, ...] | list[str]) -> int:
     return sum(1 for term in terms if matches_term(question_tokens, normalized, term))
 
 
+def names_distinctly(question: str, ids: list[str] | tuple[str, ...]) -> str:
+    """The one metric a partial name can only mean, or '' when it is ambiguous.
+
+    `names_any` requires EVERY word of an id, so "tell me about kyc activity" did not count as
+    naming a metric: the question has "kyc" and the id is `kyc_completion_rate`. The agent then
+    read the whole question as being about no metric at all and abstained. People say "kyc", not
+    "kyc completion rate".
+
+    The test is uniqueness, not completeness. A token counts only if it is DISTINCTIVE -- present
+    in exactly one of the candidate ids -- so "kyc" resolves while "loan" stays ambiguous between
+    `loan_approval_rate` and `loan_approval_volume` and is deliberately left unresolved rather than
+    guessed at.
+    """
+    words = tokens(question)
+    if not words:
+        return ""
+    parts: dict[str, set[str]] = {}
+    seen: dict[str, int] = {}
+    for kpi_id in ids:
+        bits = {p for p in re.split(r"[_.\-]", (kpi_id or "").lower()) if len(p) > 2}
+        parts[kpi_id] = bits
+        for bit in bits:
+            seen[bit] = seen.get(bit, 0) + 1
+
+    hits = {kpi_id for kpi_id, bits in parts.items()
+            if any(seen.get(bit) == 1 and any(token_matches(w, bit) for w in words)
+                   for bit in bits)}
+    return next(iter(hits)) if len(hits) == 1 else ""
+
+
 def names_any(question: str, phrases: list[str] | tuple[str, ...]) -> bool:
     """Does the question name any of these ids? Splits ids on the separators they use."""
     question_tokens = tokens(question)

@@ -140,7 +140,7 @@ lineage:
   events: [loan.kyc_completed.success, loan.applied.success]
 
 access_restriction:
-  visible_to: [cfo, ops_manager, analyst]
+  visible_to: [cfo, ops_manager, analyst, risk_officer, data_steward]
 
 observability:
   golden_scenarios: [real_movement, sparse_history, cross_source_lag]

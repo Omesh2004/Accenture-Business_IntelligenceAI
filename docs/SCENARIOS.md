@@ -37,6 +37,13 @@ cannot be computed without a recorded answer.
 mobile, pro conversions collapsing, an unauthorized-access burst — and the generator produces
 users who genuinely behave that way.
 
+Beyond the scenario dropdown there are **per-route and per-event knobs**: `behavior.targets` scales
+traffic and failure for identifiers drawn from `GET /events/simulate/catalog`, and a journey model
+enforces that a session cannot emit an event whose prerequisites it has not met — back-filling them
+when it must. `relaxJourney: true` switches that safeguard off, which is how an operator produces a
+deliberately inconsistent session. Full behaviour, and the two things about it that surprise, are
+in `docs/FOUNDATION_STATUS.md` § "The journey model".
+
 Nothing is recorded about what changed. No table, no fixture, no metadata flag. The movement
 exists **only** as the shape of the events, so the intelligence layer has to infer it the way it
 would for a real incident rather than look up the answer. The API response echoes the applied

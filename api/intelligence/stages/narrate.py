@@ -18,6 +18,10 @@ PERSONA_SECTIONS = {
     "cfo": {"cause", "forecast", "impact"},
     "ops_manager": {"cause", "action"},
     "analyst": {"cause", "forecast", "action", "impact"},
+    "marketing_lead": {"cause", "forecast", "action"},
+    "risk_officer": {"cause", "action", "forecast"},
+    # A steward certifies the figure rather than acting on it, so no action section.
+    "data_steward": {"cause"},
 }
 
 # What EVERY known persona may see. An unrecognised persona gets this, not the widest set:
@@ -72,9 +76,11 @@ def build_claim_set(ctx, trust, anomaly, causes, band, causal, decision,
         cs.facts["fingerprint"] = trust.fingerprint
 
     if anomaly:
-        cs.add("observed", anomaly["observed"], "count", "anomalies", "observed value")
-        cs.add("baseline", anomaly["baseline"], "count", "anomalies", "expected value")
-        cs.add("magnitude", anomaly["magnitude"], "count", "anomalies", "absolute change")
+        # A ratio KPI is scored on its own rate, so its figures are ratios, not counts.
+        unit = "ratio" if getattr(ctx, "rate_scored", False) else "count"
+        cs.add("observed", anomaly["observed"], unit, "anomalies", "observed value")
+        cs.add("baseline", anomaly["baseline"], unit, "anomalies", "expected value")
+        cs.add("magnitude", anomaly["magnitude"], unit, "anomalies", "absolute change")
         cs.add("materiality", anomaly["materiality"], "score", "anomalies", "materiality")
         base = abs(float(anomaly["baseline"])) or 1.0
         cs.add("pct_change", abs(float(anomaly["magnitude"])) / base * 100.0, "percent",

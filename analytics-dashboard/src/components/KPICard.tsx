@@ -70,7 +70,7 @@ function KPICard({ metric }: KPICardProps) {
 
       {/* Value + Trend */}
       <div className="flex justify-between items-end mt-1">
-        <span className="text-3xl font-medium text-gray-900 tracking-tight">
+        <span className="num text-3xl font-medium text-gray-900 tracking-tight">
           {metric.value}
         </span>
         <div

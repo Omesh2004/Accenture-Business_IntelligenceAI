@@ -3,8 +3,8 @@
 /**
  * Connected data sources: grain, cadence, SLA and how far behind each one is.
  *
- * The sources deliberately disagree on grain and cadence — an event stream, an hourly core-banking
- * batch and weekly reference data — so one global freshness number cannot gate them all.
+ * The sources deliberately disagree on grain and cadence, an event stream, an hourly core-banking
+ * batch and weekly reference data, so one global freshness number cannot gate them all.
  */
 
 import React, { memo } from 'react';

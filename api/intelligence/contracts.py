@@ -50,17 +50,29 @@ class Contract:
     def fundamentals(self) -> list[dict]:
         return self.raw.get("fundamentals") or []
 
+    def _ratio_parts(self) -> list[dict]:
+        """Fundamentals in declaration order: clickstream form, or fact form for a ratio.
+
+        Recognising only the `event` form (bug audit A5) left every fact-based ratio --
+        digital_adoption_rate, loan_approval_rate -- reporting is_ratio False, so Detect scored
+        their numerator count and a rate that fell was published as an urgent rise. Fact-based
+        NON-ratio contracts keep returning nothing, so their volume guard is unchanged.
+        """
+        events = [x for x in self.fundamentals if x.get("event") or x.get("events")]
+        if events or self.raw.get("unit") != "ratio":
+            return events
+        return [x for x in self.fundamentals if x.get("table")]
+
     @property
     def is_ratio(self) -> bool:
-        return len([f for f in self.fundamentals if f.get("event") or f.get("events")]) >= 2 \
-            and (self.raw.get("unit") == "ratio")
+        return len(self._ratio_parts()) >= 2 and (self.raw.get("unit") == "ratio")
 
     def numerator(self) -> dict | None:
-        f = [x for x in self.fundamentals if x.get("event") or x.get("events")]
+        f = self._ratio_parts()
         return f[0] if f else None
 
     def denominator(self) -> dict | None:
-        f = [x for x in self.fundamentals if x.get("event") or x.get("events")]
+        f = self._ratio_parts()
         return f[1] if len(f) > 1 else None
 
     @property

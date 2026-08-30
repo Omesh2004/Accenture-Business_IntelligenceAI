@@ -54,15 +54,15 @@ function JourneyFunnelInsights({ data }: JourneyFunnelInsightsProps) {
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div className="rounded-lg border border-gray-200 bg-gray-100 p-3">
             <p className="text-[11px] uppercase tracking-wide text-gray-500">Entry Users</p>
-            <p className="mt-1 text-xl font-semibold text-gray-900">{entry.toLocaleString()}</p>
+            <p className="num mt-1 text-xl font-semibold text-gray-900">{entry.toLocaleString()}</p>
           </div>
           <div className="rounded-lg border border-gray-200 bg-gray-100 p-3">
             <p className="text-[11px] uppercase tracking-wide text-gray-500">Final Step Users</p>
-            <p className="mt-1 text-xl font-semibold text-gray-900">{completion.toLocaleString()}</p>
+            <p className="num mt-1 text-xl font-semibold text-gray-900">{completion.toLocaleString()}</p>
           </div>
           <div className="rounded-lg border border-blue-200 bg-blue-50 p-3">
             <p className="text-[11px] uppercase tracking-wide text-blue-600">Overall Conversion</p>
-            <p className="mt-1 text-xl font-semibold text-blue-700">{formatPercent(overallConversion)}</p>
+            <p className="num mt-1 text-xl font-semibold text-blue-700">{formatPercent(overallConversion)}</p>
           </div>
         </div>
 

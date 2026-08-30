@@ -286,7 +286,11 @@ enum TransactionStatus {
 model Branch {
   code              String     @id @unique
   name              String
+  /// Continent. Matches the dashboard's Geographic Distribution continent view.
   region            String
+  /// Country, from the same worldwide vocabulary the clickstream emits, so a retail KPI and the
+  /// dashboard's country view name the same places.
+  country           String     @default("")
   city              String
   managerName       String
   staffingHeadcount Int        @default(0)

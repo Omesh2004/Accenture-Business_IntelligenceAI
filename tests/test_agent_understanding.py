@@ -36,11 +36,31 @@ def test_matching_is_deterministic():
 
 # ── the planner ────────────────────────────────────────────────────────────
 @pytest.mark.parametrize("greeting", ["hii", "hi", "Hi!", "helo", "hey there", "HELLO",
-                                      "good morning", "thanks", "thanx", "who are you"])
+                                      "good morning", "thanks", "thanx"])
 def test_a_greeting_however_it_is_typed_reaches_the_greet_capability(greeting):
     brain = planner.RulePlanner()
     ctx = planner.Context("nexabank", greeting, "analyst", ["loan_approval_volume"])
     assert "greet" in {c.tool for c in brain.plan(ctx, [], 0).calls}, greeting
+
+
+@pytest.mark.parametrize("question", ["who are you", "what are you", "introduce yourself",
+                                      "what is this", "tell me about yourself"])
+def test_asking_what_it_is_is_not_answered_with_a_greeting(question):
+    """"hii" and "who are you" both used to sit in the greeting's cue list, so both returned the
+    identical canned line. They are different questions: one is a salutation, the other asks what
+    the user is talking to, and "Good to see you" is the system declining to answer it."""
+    brain = planner.RulePlanner()
+    ctx = planner.Context("nexabank", question, "analyst", ["loan_approval_volume"])
+    chosen = {c.tool for c in brain.plan(ctx, [], 0).calls}
+    assert "describe_identity" in chosen, question
+    assert "greet" not in chosen, question
+
+
+def test_the_two_conversational_capabilities_do_not_share_cues():
+    """The regression that produced one answer for two questions was a shared cue list."""
+    greet = set(tools.REGISTRY["greet"].selectors)
+    identity = set(tools.REGISTRY["describe_identity"].selectors)
+    assert not (greet & identity), sorted(greet & identity)
 
 
 def test_a_capability_is_reachable_through_its_description():

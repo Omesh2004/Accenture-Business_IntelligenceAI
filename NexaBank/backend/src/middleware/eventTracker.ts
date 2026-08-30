@@ -466,6 +466,12 @@ function derivePathFromEvent(eventName: string): string {
   return '/dashboard';
 }
 
+/** Keys the CALLER declares it fabricated, via `metadata._simulated`. */
+function declaredSimulatedKeys(metadata: Record<string, unknown>): string[] {
+  const raw = (metadata as { _simulated?: unknown })._simulated;
+  return Array.isArray(raw) ? raw.filter((k): k is string => typeof k === "string") : [];
+}
+
 /**
  * Forwards an event to the Pathway ingestion API (Kafka → ClickHouse)
  * so the analytics dashboard can visualize NexaBank data.
@@ -496,6 +502,15 @@ async function forwardToIngestionAPI(
 
   const simulatedKeys = [...sessionProfile.simulatedKeys];
   if (measuredResponseTime === undefined) simulatedKeys.push("response_time_ms");
+  // A caller that fabricated a value declares it here, and we union it in. getSessionProfile can
+  // only mark what THIS module invented, and it reads "the caller supplied the key" as "a real
+  // signal supplied it" -- true for POST /events/location, false for the simulate console, which
+  // invents geo, device, channel and latency of its own. Without this union those keys reach
+  // events_raw indistinguishable from measured ones, Localize happily slices a dice roll
+  // (CLAUDE.md rule 13), and the Avg Response Time honesty badge can never fire.
+  for (const key of declaredSimulatedKeys(metadata)) {
+    if (!simulatedKeys.includes(key)) simulatedKeys.push(key);
+  }
 
   try {
     const analyticsTenantId = resolveAnalyticsTenantId(tenantId);
@@ -540,6 +555,101 @@ async function forwardToIngestionAPI(
     const status = (err as { response?: { status?: number } })?.response?.status;
     const code = (err as { code?: string })?.code;
     recordForwardOutcome(status ? String(status) : (code || "network_error"), false);
+  }
+}
+
+export interface BatchedEvent {
+  eventName: string;
+  customerId: string | null;
+  tenantId: string;
+  metadata?: Record<string, unknown>;
+  timestampOverride?: number;
+  tier?: "free" | "pro" | "enterprise";
+}
+
+/**
+ * The batched twin of `trackEvent`, for generators that emit many events at once.
+ *
+ * WHY THIS EXISTS. `trackEvent` does one `prisma.event.create` per event and awaits it. Postgres
+ * is remote (measured: ~350ms per round trip), so a simulate run spent most of its wall clock
+ * waiting on sequential inserts of rows it already had in hand. One `createMany` replaces N of
+ * them.
+ *
+ * It keeps every guarantee the single-event path has:
+ *  - `event_id` is minted here rather than by the database default, so it is still stable and
+ *    still what reaches events_raw (FOUNDATION-1). createMany cannot return generated ids, and
+ *    forwarding needs one -- minting up front is what makes the batch possible at all.
+ *  - anonymous traffic is still keyed on the session, never a shared "anonymous" (NB-4).
+ *  - forwarding stays fire-and-forget, so telemetry cannot block banking (CLAUDE.md rule 7).
+ *
+ * Ordering within the batch is preserved: rows carry their own timestamps, and the forwards are
+ * issued in array order.
+ */
+export async function trackEventsBatch(events: BatchedEvent[]): Promise<void> {
+  if (!events.length) return;
+  const prepared = events.map((e) => {
+    const metadata = e.metadata || {};
+    const sessionId = getSessionId(metadata);
+    const hashedUserId = e.customerId
+      ? hashUserId(e.customerId)
+      : `anon_${hashUserId(sessionId).slice(0, 32)}`;
+    return {
+      id: crypto.randomUUID(),
+      ev: e,
+      sessionId,
+      hashedUserId,
+      metadataWithSession: { ...metadata, session_id: sessionId } as Record<string, unknown>,
+    };
+  });
+
+  try {
+    await prisma.event.createMany({
+      data: prepared.map((p) => ({
+        id: p.id,
+        eventName: p.ev.eventName,
+        tenantId: p.ev.tenantId,
+        userId: p.hashedUserId,
+        customerId: p.ev.customerId || null,
+        metadata: { ...p.metadataWithSession, tier: p.ev.tier } as any,
+        timestamp: p.ev.timestampOverride
+          ? new Date(p.ev.timestampOverride * 1000)
+          : new Date(),
+      })),
+      skipDuplicates: true,
+    });
+  } catch (err) {
+    console.error("[EVENT_TRACKER] Failed to store event batch:", err);
+    return;
+  }
+
+  for (const p of prepared) {
+    forwardToIngestionAPI(p.ev.eventName, p.hashedUserId, p.ev.tenantId, p.metadataWithSession,
+                          p.ev.timestampOverride, p.ev.tier, p.id).catch(() => { });
+  }
+
+  // Same in-process broadcast the single-event path does. Dropping it would silently break the
+  // simulate route's REAL-TIME PULSE section, whose whole purpose is to make a simulated user
+  // appear on the live dashboard.
+  try {
+    const { broadcastEvent } = require("../server");
+    if (broadcastEvent) {
+      for (const p of prepared) {
+        broadcastEvent("event", {
+          eventName: p.ev.eventName,
+          tenantId: p.ev.tenantId,
+          userId: p.hashedUserId,
+          metadata: {
+            session_id: p.sessionId,
+            country: p.metadataWithSession.country,
+            city: p.metadataWithSession.city,
+            continent: p.metadataWithSession.continent,
+            device_type: p.metadataWithSession.device_type,
+          },
+        });
+      }
+    }
+  } catch {
+    // broadcastEvent not available yet during startup -- safe to ignore
   }
 }
 

@@ -1,7 +1,7 @@
 import express, { Request, Response } from "express";
 import { prisma } from "../prisma";
 import { isLoggedIn, isAdmin } from "../middleware/IsLoggedIn";
-import { trackEvent, forwarderStats } from "../middleware/eventTracker";
+import { trackEvent, trackEventsBatch, BatchedEvent, forwarderStats } from "../middleware/eventTracker";
 import {
   BehaviorOverride,
   describeOverride,
@@ -334,8 +334,15 @@ function pick<T>(arr: T[]): T {
 const NEW_CARD_PRODUCT = "Student Travel Credit Card";
 const NEW_PRODUCT_DAYS = 10;
 
-/** Trailing days over which the Northeast deposit outflow runs. */
+/** Trailing days over which the planted deposit outflow runs. */
 const DEPOSIT_FLIGHT_DAYS = 7;
+/**
+ * The region the outflow is planted in. Must match the region whose competitor deposit rate
+ * seedReferenceData.ts steps up, or the multi-source scenario loses its external driver and
+ * Causal correctly degrades to attribution -- a silent loss of the thing the scenario exists to
+ * demonstrate. Regions are CONTINENTS; see that file's header.
+ */
+const DEPOSIT_FLIGHT_REGION = "Europe";
 
 // ─── Source A/B enrichment ────────────────────────────────────────────────
 // Merchant category codes, so spend has a real classification rather than a free-text label.
@@ -596,6 +603,21 @@ function generatePersona(): UserPersona {
   };
 }
 
+/**
+ * Contract dimensions this generator invents rather than measures.
+ *
+ * Declared on every event as `metadata._simulated`, which eventTracker unions into the marker it
+ * forwards. Two things downstream depend on it: `contracts.sliceable_dimensions` drops these keys
+ * so Localize cannot rank cells over a dice roll (CLAUDE.md rule 13), and the dashboard labels any
+ * chart built on them. `browser` and `user_type` are absent because no contract localizes on them.
+ */
+const SIMULATED_DIMS = ["location", "city", "continent", "device_type", "channel"] as const;
+
+/** Reads a `_simulated` list off metadata, tolerating anything malformed. */
+function asDims(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((k): k is string => typeof k === "string") : [];
+}
+
 // Helper: Generate location metadata for analytics pipeline
 function locationMeta(loc: WorldCity, persona: UserPersona) {
   return {
@@ -606,6 +628,9 @@ function locationMeta(loc: WorldCity, persona: UserPersona) {
     location: loc.country, // backwards compat with analytics /locations endpoint
     device_type: persona.deviceType,
     browser: persona.browser,
+    // Drawn from WORLD_CITIES and the persona table, not measured from a client. A session whose
+    // mix an operator forced overrides this below -- that value carries intent, not noise.
+    _simulated: [...SIMULATED_DIMS],
   };
 }
 
@@ -651,7 +676,11 @@ router.post(
     // Journey model: enforces realistic prerequisites by default, applies the per-
     // route/event traffic & failure knobs, and (unless relaxJourney) keeps a raised
     // target's upstream funnel proportionate. Stateless w.r.t. persistence.
-    const journey: JourneyRuntime = createJourneyRuntime({
+    //
+    // Built PER USER, not per request. It carries mutable per-session state (which canonicals a
+    // session has emitted), so one shared instance across concurrently generated users would let
+    // them satisfy each other's prerequisites and suppress each other's back-fills.
+    const newJourney = (): JourneyRuntime => createJourneyRuntime({
       targets: behaviorOverride?.targets ?? [],
       relaxJourney: behaviorOverride?.relaxJourney === true,
     });
@@ -662,6 +691,49 @@ router.post(
       ? Math.max(1, Math.min(Math.floor(rawDays), 60))
       : 30;
 
+    // ─── FAST MODE ────────────────────────────────────────────────────────
+    // Slow mode writes every row to a remote Postgres first (~350ms per round trip) and only then
+    // reaches the warehouse; that is what proves the real pipeline works, and it is why a large
+    // run takes minutes. Fast mode skips both and writes the analytics tables directly, for
+    // testing the intelligence layer on volume. Measured: 2,000 users x 45 days in ~3s, against
+    // hours for the same shape through the pipeline.
+    //
+    // Proxied, not implemented here: NexaBank has no ClickHouse client and must not grow one
+    // (docs/ARCHITECTURE.md). The ingestion service already owns writing events_raw directly on
+    // its fallback path, so the direct write stays where that responsibility already lives.
+    const mode = String((req.body as { mode?: unknown })?.mode || "slow").toLowerCase();
+    if (mode === "fast") {
+      const base = (process.env.INGESTION_API_URL || "http://localhost:8000/events")
+        .replace(/\/events\/?$/, "");
+      try {
+        const analyticsTenant = toAnalyticsTenant(tenantId);
+        const started = Date.now();
+        const r = await axios.post(`${base}/events/seed/fast`, {
+          tenant_id: analyticsTenant,
+          users: Number.isFinite(rawCount) ? Math.max(1, Math.min(Math.floor(rawCount), 5000)) : 100,
+          days: Number.isFinite(rawDays) ? Math.max(1, Math.min(Math.floor(rawDays), 365)) : 30,
+          purge_first: Boolean((req.body as { purgeFirst?: unknown })?.purgeFirst),
+          behavior: (req.body as { behavior?: unknown })?.behavior ?? null,
+          create_accounts: Boolean((req.body as { createAccounts?: unknown })?.createAccounts),
+        }, { timeout: 300000 });
+        res.status(200).json({
+          message: "Fast seed complete (pipeline bypassed)",
+          mode: "fast",
+          resolvedTenant: analyticsTenant,
+          runMs: Date.now() - started,
+          ...r.data,
+        });
+      } catch (err: unknown) {
+        const status = (err as { response?: { status?: number } })?.response?.status;
+        const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+        res.status(status === 409 ? 409 : 502).json({
+          error: "Fast seed failed",
+          detail: detail || String(err),
+        });
+      }
+      return;
+    }
+
     const tenant = await prisma.tenant.findUnique({ where: { id: tenantId } });
     if (!tenant) {
       res.status(400).json({ error: "Invalid tenant" });
@@ -670,6 +742,9 @@ router.post(
 
     try {
       const bcrypt = await import("bcryptjs");
+      // Every simulated user gets the same demo password, so hash it ONCE. bcrypt at cost 10 is
+      // ~100ms of CPU by design; paying that per user bought nothing but latency.
+      const sharedHashedPw = await bcrypt.hash("Password@123", 10);
       const startedAt = Date.now();
 
       // Source C is reference data: it must already exist. Generating customers against an
@@ -696,11 +771,41 @@ router.post(
       let analyticsOptInUsers = 0;
       let skippedUsers = 0;
       const createdUserIds: string[] = [];
+      // What the payee pass below needs. It used to re-read every one of these from Postgres --
+      // five sequential remote round trips per pair, for rows this loop created seconds earlier.
+      const createdUsers: Array<{ id: string; name: string; accNo: string; ifsc: string;
+                                  balance: number }> = [];
 
       const simDays = Math.min(days, 60);
       const userCount = Math.min(count, 100);
 
-      for (let i = 0; i < userCount; i++) {
+      // A run generates activity for customers the bank ALREADY HAS. Minting a population is a
+      // separate, deliberate choice: doing it every run gave each run its own disjoint cohort, so
+      // account openings spiked on every run and a planted rate movement was diluted by the new
+      // arrivals instead of being measured against a stable base.
+      const createAccounts = Boolean((req.body as { createAccounts?: unknown })?.createAccounts);
+      // Fetched whole, in one query: re-reading each customer inside the loop would add a remote
+      // round trip per user, which is the cost this path is already dominated by.
+      const existing = createAccounts ? [] : await prisma.customer.findMany({
+        where: { tenantId, role: "USER", account: { some: {} } },
+        include: { account: { select: { accNo: true, ifsc: true }, take: 1,
+                              orderBy: { accNo: "asc" } } },
+        orderBy: { id: "asc" },
+        take: userCount,
+      });
+      if (!createAccounts && existing.length === 0) {
+        res.status(409).json({
+          error: "No existing customers to simulate",
+          detail: "Slow mode generates activity for the bank's own customers, and this tenant " +
+                  "has none with an account. Re-run with createAccounts: true to create a " +
+                  "population first.",
+        });
+        return;
+      }
+      const simUserCount = createAccounts ? userCount : Math.min(userCount, existing.length);
+
+      const runUser = async (i: number): Promise<void> => {
+        const journey: JourneyRuntime = newJourney();
         // ─── 1. Generate WORLDWIDE User Identity ────────────
         const location = pickWorldwideCity();
         const firstName = pick(FIRST_NAMES_POOL[location.continent] || FIRST_NAMES_POOL["Asia"]);
@@ -710,7 +815,7 @@ router.post(
         const email = `${firstName.toLowerCase()}.${seed}@nexabank.demo`;
         const phone = `9${Math.floor(100000000 + Math.random() * 900000000)}`;
         const pan = `${String.fromCharCode(65 + Math.floor(Math.random() * 26))}${String.fromCharCode(65 + Math.floor(Math.random() * 26))}${String.fromCharCode(65 + Math.floor(Math.random() * 26))}${String.fromCharCode(65 + Math.floor(Math.random() * 26))}${String.fromCharCode(65 + Math.floor(Math.random() * 26))}${Math.floor(1000 + Math.random() * 9000)}${String.fromCharCode(65 + Math.floor(Math.random() * 26))}`;
-        const hashedPw = await bcrypt.hash("Password@123", 10);
+        const hashedPw = sharedHashedPw;
 
         // ─── 2. Generate Persona (behavioral traits) ────────
         const persona = generatePersona();
@@ -732,6 +837,13 @@ router.post(
         // the level -- is what a deposit outflow tracks.
         const savingsRate = 3.5;
         let customer;
+        if (!createAccounts) {
+          // The identity, branch and account are the bank's own; nothing here is written back.
+          customer = existing[i];
+          if ((customer.settingConfig as Record<string, unknown>)?.analyticsOptIn === true) {
+            analyticsOptInUsers++;
+          }
+        } else {
         try {
           const hasAnalyticsOptIn = Math.random() < 0.78;
           customer = await prisma.customer.create({
@@ -761,9 +873,10 @@ router.post(
         } catch (e) {
           // Duplicate phone/email/pan — skip
           skippedUsers++;
-          continue;
+          return;
         }
         usersCreated++;
+        }
         createdUserIds.push(customer.id);
 
         // ── Journey-aware emit helpers (scoped to this simulated customer) ──
@@ -772,12 +885,17 @@ router.post(
         const DIM_KEYS = [
           "session_id", "device_type", "device", "location", "country",
           "continent", "city", "channel", "user_type", "browser", "tier",
+          // A back-filled prerequisite is as fabricated as the event that triggered it.
+          "_simulated",
         ];
         const dimMeta = (meta: Record<string, any>): Record<string, any> => {
           const out: Record<string, any> = {};
           for (const k of DIM_KEYS) if (meta[k] !== undefined) out[k] = meta[k];
           return out;
         };
+        // One user's events, flushed in a single insert at the end of their iteration.
+        const pendingEvents: BatchedEvent[] = [];
+
         const simEmit = async (
           raw: string,
           prob: number,
@@ -800,11 +918,23 @@ router.post(
             : prob;
           if (Math.random() >= Math.max(0, Math.min(1, p))) return false;
 
+          // response_time_ms here is a log-normal draw (Box-Muller, below), never a measurement.
+          // Declaring it is what lets /metrics/kpi report the Avg Response Time card as simulated;
+          // presence of the key alone reads as "measured" and defeated the badge before this.
+          const emitMeta = meta.response_time_ms === undefined
+            ? meta
+            : { ...meta, _simulated: [...asDims(meta._simulated), "response_time_ms"] };
+
+          // Buffered, not written. Each event was one ~350ms round trip to a remote Postgres,
+          // and a run emits dozens per user; `flushEvents` turns them into one createMany. The
+          // journey state below is still updated in emit order, so ordering is unchanged.
           for (const bf of journey.planBackfill(canonical)) {
-            await trackEvent(bf, customer.id, tenantId, dimMeta(meta), ts - 1);
+            pendingEvents.push({ eventName: bf, customerId: customer.id, tenantId,
+                                 metadata: dimMeta(emitMeta), timestampOverride: ts - 1 });
             eventsCreated++;
           }
-          await trackEvent(raw, customer.id, tenantId, meta, ts, opts.tier);
+          pendingEvents.push({ eventName: raw, customerId: customer.id, tenantId,
+                               metadata: emitMeta, timestampOverride: ts, tier: opts.tier });
           eventsCreated++;
           journey.record(canonical);
           return true;
@@ -821,24 +951,29 @@ router.post(
         const simGate = (canonical: string, baseProb: number, inScope: boolean): boolean =>
           Math.random() < journey.effectiveProbability(canonical, baseProb, inScope);
 
-        // ─── 5. Create savings account ──────────────────────
-        const accNo = `NEXA${String(seed).slice(-8)}`;
-        let account;
-        try {
-          account = await prisma.account.create({
-            data: {
-              accNo, customerId: customer.id,
-              ifsc: `${tenant.ifscPrefix}${tenant.branchCode}`,
-              accountType: "SAVINGS",
-              balance: 0,
-              branchCode: homeBranch.code,
-              interestRate: savingsRate,
-              lifecycleStatus: "ACTIVE",
-            },
-          });
-        } catch (e) {
-          skippedUsers++;
-          continue;
+        // ─── 5. Savings account: the customer's own, or a new one ──────────
+        const reusedAccount = createAccounts ? null : existing[i].account[0];
+        const accNo = reusedAccount ? reusedAccount.accNo : `NEXA${String(seed).slice(-8)}`;
+        let account: { ifsc: string };
+        if (reusedAccount) {
+          account = { ifsc: reusedAccount.ifsc };
+        } else {
+          try {
+            account = await prisma.account.create({
+              data: {
+                accNo, customerId: customer.id,
+                ifsc: `${tenant.ifscPrefix}${tenant.branchCode}`,
+                accountType: "SAVINGS",
+                balance: 0,
+                branchCode: homeBranch.code,
+                interestRate: savingsRate,
+                lifecycleStatus: "ACTIVE",
+              },
+            });
+          } catch (e) {
+            skippedUsers++;
+            return;
+          }
         }
 
         // Track registration with worldwide location. Targets apply to this session only
@@ -849,7 +984,11 @@ router.post(
           deviceType: String(lMeta.device_type || ""),
           location: String(lMeta.location || ""),
         });
-        await simEmit("free.auth.register.success", 1, { channel: persona.preferredChannel, ...lMeta }, baseTs, { inScope: regInScope });
+        // An existing customer does not register again -- emitting it would inflate acquisition
+        // with people the bank already had. They simply log in.
+        if (createAccounts) {
+          await simEmit("free.auth.register.success", 1, { channel: persona.preferredChannel, ...lMeta }, baseTs, { inScope: regInScope });
+        }
         await simEmit("free.auth.login.success", 1, { channel: persona.preferredChannel, ...lMeta }, baseTs + 60, { inScope: regInScope });
         if ((customer.settingConfig as Record<string, unknown>)?.analyticsOptIn === true) {
           await simEmit("core.analytics.opt_in", 1, { source: "simulation", ...lMeta }, baseTs + 90, { inScope: regInScope });
@@ -869,7 +1008,6 @@ router.post(
         });
         transactionsCreated++;
         let currentBalance = salary;
-        await prisma.account.update({ where: { accNo }, data: { balance: currentBalance } });
 
         // ─── Cards ────────────────────────────────────────
         // Every account gets a debit card. The credit product is the launch: it is issued only to
@@ -987,7 +1125,6 @@ router.post(
               }
             });
             currentBalance += monthlySalary;
-            await prisma.account.update({ where: { accNo }, data: { balance: currentBalance } });
             transactionsCreated++;
           }
 
@@ -1012,7 +1149,24 @@ router.post(
           const forcedDevice = pickWeighted(mixBehavior.mix.deviceWeights);
           const forcedCountry = pickWeighted(mixBehavior.mix.countryWeights);
           if (forcedDevice) lMeta = { ...lMeta, device_type: forcedDevice };
-          if (forcedCountry) lMeta = { ...lMeta, country: forcedCountry, location: forcedCountry };
+          if (forcedCountry) {
+            // A forced country has to bring its city and continent with it. Patching only
+            // `location` left the session claiming, say, an Egyptian city and Africa while
+            // reporting India -- and `continent` is a declared contract dimension, so that cell
+            // was not merely generated, it was wrong. Re-resolve from the same city table the
+            // unforced path draws from, so the three stay mutually consistent.
+            const inCountry = WORLDWIDE_CITIES.filter((c) => c.country === forcedCountry);
+            const forcedCity = inCountry.length ? pick(inCountry) : null;
+            lMeta = {
+              ...lMeta,
+              country: forcedCountry,
+              location: forcedCountry,
+              // A country with no city in the table can only be described honestly by saying
+              // nothing. An empty value reads as absent; a stale one reads as a measurement.
+              city: forcedCity ? forcedCity.city : "",
+              continent: forcedCity ? forcedCity.continent : "",
+            };
+          }
 
           // Resolve again AFTER the mix shift so a segment-scoped override matches the
           // device/location this session actually ended up with.
@@ -1033,6 +1187,19 @@ router.post(
           });
 
           const forcedChannel = pickWeighted(behavior.mix.channelWeights);
+
+          // A mix value the operator forced is PLANTED: it carries the intent the movement is
+          // meant to concentrate in, which is exactly what Localize has to be allowed to recover
+          // (docs/SCENARIOS.md scenario 2). Anything they did not force stays a weighted dice
+          // roll and stays declared. This is the distinction the marker could not previously make.
+          // Note city/continent are never operator-controlled, so they stay declared even when
+          // location is forced -- and a forced country leaves them describing the original city.
+          const planted = new Set<string>();
+          if (forcedDevice) planted.add("device_type");
+          if (forcedCountry) planted.add("location");
+          if (forcedChannel) planted.add("channel");
+          lMeta = { ...lMeta, _simulated: SIMULATED_DIMS.filter((k) => !planted.has(k)) };
+
           const channel = forcedChannel
             ? forcedChannel
             : (Math.random() < 0.6 ? persona.preferredChannel : pick(CHANNELS));
@@ -1112,7 +1279,6 @@ router.post(
 
               if (success) {
                 currentBalance -= clampedAmount;
-                await prisma.account.update({ where: { accNo }, data: { balance: currentBalance } });
                 await simEmit("free.payment.success", 1, { amount: clampedAmount, category, channel: txChannel, ...lMeta }, dayTs + 1205, { inScope, applyTraffic: false });
               } else {
                 await simEmit("free.payment.failed", 1, { amount: clampedAmount, reason: "Transaction Error", ...lMeta }, dayTs + 1205, { inScope, applyTraffic: false });
@@ -1120,12 +1286,12 @@ router.post(
             }
 
             // ── Deposit flight (the multi-factor scenario) ──────────────────────
-            // Northeast savings customers move money OUT in the recent window. The competitor
+            // European savings customers move money OUT in the recent window. The competitor
             // deposit rate in Source C stepped to 5.0% over the same months. Neither table says
             // the two are connected: the engine has to pair an internal segment with an external
             // factor, which is the whole point of a multi-source driver.
             const inRecentWindow = (Date.now() / 1000 - dayTs) <= DEPOSIT_FLIGHT_DAYS * 86400;
-            if (homeBranch.region === "Northeast" && inRecentWindow
+            if (homeBranch.region === DEPOSIT_FLIGHT_REGION && inRecentWindow
                 && currentBalance > 5000 && Math.random() < 0.34) {
               const outflow = Math.round(Math.min(currentBalance * 0.45,
                                                   8000 + Math.random() * 22000));
@@ -1141,7 +1307,6 @@ router.post(
                 }
               });
               currentBalance -= outflow;
-              await prisma.account.update({ where: { accNo }, data: { balance: currentBalance } });
               transactionsCreated++;
               await prisma.notification.create({
                 data: {
@@ -1177,7 +1342,6 @@ router.post(
                   }
                 });
                 currentBalance -= clamped2;
-                await prisma.account.update({ where: { accNo }, data: { balance: currentBalance } });
                 transactionsCreated++;
                 await simEmit("free.payment.success", 1, { amount: clamped2, category: cat2, channel: pick(CHANNELS), ...lMeta }, dayTs + 5005, { inScope, applyTraffic: false });
               }
@@ -1245,7 +1409,6 @@ router.post(
                 }
               });
               currentBalance -= withdrawalAmount;
-              await prisma.account.update({ where: { accNo }, data: { balance: currentBalance } });
               transactionsCreated++;
             }
           }
@@ -1343,7 +1506,6 @@ router.post(
                 },
               });
               transactionsCreated++;
-              await prisma.account.update({ where: { accNo }, data: { balance: currentBalance } });
               // Not in the journey model, so simEmit emits it unconditionally -- same effect as the
               // raw trackEvent it replaces, but it stays on the file's one emit path.
               await simEmit("lending.loan.disbursed", 1, { loanType, amount: principalAmount, term, ...lMeta }, dayTs + 4400, { inScope, applyTraffic: false });
@@ -1377,7 +1539,6 @@ router.post(
                   }
                 });
                 currentBalance -= 2000;
-                await prisma.account.update({ where: { accNo }, data: { balance: currentBalance } });
                 await simEmit("pro.features.unlock_success", 1, { featureId, ...lMeta }, dayTs + 4505, { inScope, applyTraffic: false });
                 isPro = true;
                 unlockedFeature = featureId;
@@ -1527,61 +1688,87 @@ router.post(
            }
         }
 
-        // Update final balance
+        // One balance write per user. The eight intermediate flushes this replaced all wrote a
+        // value the generator already held in memory, at ~350ms each against a remote Postgres.
         await prisma.account.update({ where: { accNo }, data: { balance: currentBalance } });
-      }
+        createdUsers.push({ id: customer.id, name: customer.name, accNo,
+                            ifsc: account.ifsc, balance: currentBalance });
+
+        await trackEventsBatch(pendingEvents);
+        pendingEvents.length = 0;
+      };
+
+      // Users are independent, and the cost of generating one is almost entirely waiting on a
+      // remote database. Measured: 20 concurrent round trips complete in the time ~3 sequential
+      // ones take. The cap keeps the Supabase pooler alive -- it closes long single-connection
+      // runs, which is what killed 25x21 before this.
+      const SIM_CONCURRENCY = Math.max(1, Math.min(
+        Number(process.env.SIMULATE_CONCURRENCY) || 6, 12));
+      let nextUser = 0;
+      await Promise.all(
+        Array.from({ length: Math.min(SIM_CONCURRENCY, simUserCount) }, async () => {
+          for (;;) {
+            const i = nextUser++;
+            if (i >= simUserCount) return;
+            try {
+              await runUser(i);
+            } catch (e) {
+              // One user must not take the run down; it is already counted as skipped.
+              skippedUsers++;
+            }
+          }
+        })
+      );
 
       // ─── 8. Generate Payee Relationships ────────────────
       // Link some simulated users as payees of each other
       let payeesCreated = 0;
-      if (createdUserIds.length >= 3) {
-        const shuffled = [...createdUserIds].sort(() => Math.random() - 0.5);
-        const pairCount = Math.min(Math.floor(createdUserIds.length * 0.4), 30);
+      if (createdUsers.length >= 3) {
+        const shuffled = [...createdUsers].sort(() => Math.random() - 0.5);
+        const pairCount = Math.min(Math.floor(createdUsers.length * 0.4), 30);
+        // Every user here was created by THIS run, so no payee link can pre-exist; a local set is
+        // enough to keep pairs unique and costs nothing.
+        const linked = new Set<string>();
 
         for (let p = 0; p < pairCount && p + 1 < shuffled.length; p++) {
           try {
-            const payerCustomer = await prisma.customer.findUnique({ where: { id: shuffled[p] } });
-            const payeeCustomer = await prisma.customer.findUnique({ where: { id: shuffled[p + 1] } });
-            if (!payerCustomer || !payeeCustomer) continue;
-
-            const payerAccount = await prisma.account.findFirst({ where: { customerId: payerCustomer.id } });
-            const payeeAccount = await prisma.account.findFirst({ where: { customerId: payeeCustomer.id } });
-            if (!payerAccount || !payeeAccount) continue;
-
-            const existing = await prisma.payee.findFirst({
-              where: { payerCustomerId: payerCustomer.id, payeeCustomerId: payeeCustomer.id }
-            });
-            if (existing) continue;
+            const payer = shuffled[p];
+            const payee = shuffled[p + 1];
+            const key = `${payer.id}->${payee.id}`;
+            if (payer.id === payee.id || linked.has(key)) continue;
+            linked.add(key);
 
             await prisma.payee.create({
               data: {
-                name: payeeCustomer.name,
-                payeeAccNo: payeeAccount.accNo,
-                payeeifsc: payeeAccount.ifsc,
-                payeeCustomerId: payeeCustomer.id,
-                payerCustomerId: payerCustomer.id,
+                name: payee.name,
+                payeeAccNo: payee.accNo,
+                payeeifsc: payee.ifsc,
+                payeeCustomerId: payee.id,
+                payerCustomerId: payer.id,
                 payeeType: "INDIVIDUAL",
               }
             });
             payeesCreated++;
 
             // Some payees also do a transfer
-            if (Math.random() < 0.4 && payerAccount.balance > 5000) {
+            if (Math.random() < 0.4 && payer.balance > 5000) {
               const transferAmount = Math.floor(1000 + Math.random() * 5000);
               await prisma.transaction.create({
                 data: {
                   transactionType: "TRANSFER",
-                  senderAccNo: payerAccount.accNo,
-                  receiverAccNo: payeeAccount.accNo,
+                  senderAccNo: payer.accNo,
+                  receiverAccNo: payee.accNo,
                   amount: transferAmount,
                   status: "SUCCESS",
                   category: "PAYEE_TRANSFER",
                   channel: "WEB",
-                  description: `Transfer to ${payeeCustomer.name}`,
+                  description: `Transfer to ${payee.name}`,
                 }
               });
-              await prisma.account.update({ where: { accNo: payerAccount.accNo }, data: { balance: { decrement: transferAmount } } });
-              await prisma.account.update({ where: { accNo: payeeAccount.accNo }, data: { balance: { increment: transferAmount } } });
+              await prisma.account.update({ where: { accNo: payer.accNo }, data: { balance: { decrement: transferAmount } } });
+              await prisma.account.update({ where: { accNo: payee.accNo }, data: { balance: { increment: transferAmount } } });
+              payer.balance -= transferAmount;
+              payee.balance += transferAmount;
               transactionsCreated++;
             }
           } catch (e) {
@@ -1595,9 +1782,19 @@ router.post(
 
       res.status(200).json({
         message: "Stochastic worldwide simulation complete",
+        mode: "slow",
         requestedUsers: userCount,
         requestedTenant: rawTenant || "bank_a",
         resolvedTenant: tenantId,
+        // Which population this run acted on. Without it a reuse run and a create run are
+        // indistinguishable on the operator's screen.
+        createAccounts,
+        simulatedUsers: simUserCount,
+        // "selected", not "available": the query is capped at userCount, so this is how many
+        // were used, not how many the bank has.
+        population: createAccounts
+          ? "created"
+          : `existing (${existing.length} customers selected)`,
         usersCreated,
         totalUsers: await prisma.customer.count({ where: { tenantId } }),
         transactionsCreated,

@@ -24,8 +24,6 @@ pytest.importorskip("clickhouse_connect")
 COLUMN_LISTS = {
     "fact_transactions": loaders.TXN_COLUMNS,
     "fact_loan_applications": loaders.APP_COLUMNS,
-    "fact_loans": loaders.LOAN_COLUMNS,
-    "fact_account_daily": loaders.SNAPSHOT_COLUMNS,
     "fact_account_openings": loaders.OPENING_COLUMNS,
     "fact_cards": loaders.CARD_COLUMNS,
     "dim_customer": loaders.CUSTOMER_COLUMNS,

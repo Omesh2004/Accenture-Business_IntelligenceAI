@@ -27,17 +27,26 @@
     "allowed": [
       "cfo",
       "ops_manager",
-      "analyst"
+      "analyst",
+      "marketing_lead",
+      "risk_officer",
+      "data_steward"
     ],
     "selectable_by_role": {
       "super_admin": [
         "cfo",
         "ops_manager",
-        "analyst"
+        "analyst",
+        "marketing_lead",
+        "risk_officer",
+        "data_steward"
       ],
       "app_admin": [
         "ops_manager",
-        "analyst"
+        "analyst",
+        "marketing_lead",
+        "risk_officer",
+        "data_steward"
       ],
       "user": [
         "analyst"

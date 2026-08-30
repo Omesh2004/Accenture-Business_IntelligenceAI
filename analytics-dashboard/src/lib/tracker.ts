@@ -70,7 +70,7 @@ class FeatureTracker {
     try {
       await axios.post(INGEST_URL, payload);
     } catch (err) {
-      // Silent fail — analytics should never break the app
+      // Silent fail, analytics should never break the app
       console.warn(`[FI Tracker] Failed to send "${eventName}":`, err);
     }
   }

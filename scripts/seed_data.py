@@ -24,7 +24,7 @@ DEVICE_WEIGHTS = [0.50, 0.42, 0.08]
 
 WORLD_PROFILES = [
     {"city": "Mumbai", "country": "India", "continent": "Asia", "tz": 5.5, "weight": 0.11},
-    {"city": "Bengaluru", "country": "India", "continent": "Asia", "tz": 5.5, "weight": 0.09},
+    {"city": "Bangalore", "country": "India", "continent": "Asia", "tz": 5.5, "weight": 0.09},
     {"city": "Delhi", "country": "India", "continent": "Asia", "tz": 5.5, "weight": 0.08},
     {"city": "Singapore", "country": "Singapore", "continent": "Asia", "tz": 8, "weight": 0.05},
     {"city": "Tokyo", "country": "Japan", "continent": "Asia", "tz": 9, "weight": 0.04},
@@ -37,7 +37,7 @@ WORLD_PROFILES = [
     {"city": "San Francisco", "country": "USA", "continent": "North America", "tz": -8, "weight": 0.07},
     {"city": "Toronto", "country": "Canada", "continent": "North America", "tz": -5, "weight": 0.04},
     {"city": "Mexico City", "country": "Mexico", "continent": "North America", "tz": -6, "weight": 0.03},
-    {"city": "Sao Paulo", "country": "Brazil", "continent": "South America", "tz": -3, "weight": 0.05},
+    {"city": "São Paulo", "country": "Brazil", "continent": "South America", "tz": -3, "weight": 0.05},
     {"city": "Buenos Aires", "country": "Argentina", "continent": "South America", "tz": -3, "weight": 0.02},
     {"city": "Sydney", "country": "Australia", "continent": "Oceania", "tz": 10, "weight": 0.03},
     {"city": "Melbourne", "country": "Australia", "continent": "Oceania", "tz": 10, "weight": 0.02},

@@ -683,6 +683,111 @@ Fifty comments across `api/`, `core/`, `ingestion/`, `processing/` and `storage/
 retry rule. Those comments are the only surviving record of several real incidents, and every link
 is dead. Either restore the directory or move the reasoning into the comments.
 
+### Found and fixed 2026-08-30
+
+Recorded because each was invisible to every existing guard, which is the property that made them
+worth writing down.
+
+**L10. The simulate console's fabricated dimensions reached `events_raw` unmarked. P0 — fixed.**
+`getSessionProfile` marks a key simulated only when *it* invented the value, reading "the caller
+supplied the key" as "a real signal supplied it". True for `POST /events/location`; false for the
+console, which invents geo, device, channel and latency of its own. So `metrics.simulated_keys`
+returned nothing for console traffic, `sliceable_dimensions` had no reason to drop those keys, and
+Localize would rank cells over a dice roll — CLAUDE.md rule 13, reached through a door nobody had
+checked. `forwardToIngestionAPI` now unions a caller-declared `metadata._simulated`, and the console
+declares. A dimension the operator *forced* is deliberately excluded: that one carries intent.
+
+**L11. A4 was reopened through the simulate path. P0 — fixed.**
+The same root cause, with a sharper symptom. `responseTime` in the generator is a Box-Muller
+log-normal draw, and because the route supplied the key, `/metrics/kpi`'s
+`has_measured = JSONHas(response_time_ms) AND NOT has(_simulated, ...)` evaluated **true**. The Avg
+Response Time card rendered `simulated: false` over a value that is 100% synthetic — exactly the
+defect P0-9 had closed on the `eventTracker` path. `simEmit` now declares it for every emit.
+
+**L12. A forced country kept the city and continent of the country it replaced. P1 — fixed.**
+The mix override patched `location` and `country` only, so a session forced to India reported an
+Austin or São Paulo city and North/South America. `continent` is a declared contract dimension, so
+this was not a generated cell but a **wrong** one — and the marker cannot catch it, because
+wrong-and-consistent and wrong-and-inconsistent both just say "simulated". A forced country now
+re-resolves city and continent from the same table the unforced path draws from. Verified against
+the data: every non-Asia continent on a forced-India session stops at the deploy boundary.
+
+**L13. Twelve regression guards were green by not running. P1 — fixed.**
+Seven needed `node` on PATH and five needed `NexaBank/` source; the `tests` image had neither, and
+pytest reports an unmeetable prerequisite as a **skip**, which reads as green in a summary line.
+Among them were the guards that police `eventTracker.ts` — so the very source being changed above
+was unpoliced. `nodejs` is now installed under the existing `INSTALL_DEV` flag (dev-only; runtime
+images keep no node) and the two source subtrees are bind-mounted into the `tests` service, since
+`.dockerignore` excludes `NexaBank/` from that image's build context and it can never be baked in.
+466 passed / 12 skipped became **478 passed / 0 skipped** with no test modified. This also closes
+the "two commands that cannot be containerised" note in `CLAUDE.md`.
+
+**L14. `verify_data_quality.py` cannot exit 0, for a reason unrelated to data quality. P2 — open.**
+Its `DIMS ... declared dimensions populated` check looks for every contract dimension as a metadata
+key in `events_raw`. The seven retail contracts declare **fact-table columns** (`region`,
+`branch_code`, `txn_type`, ...), which are not in `events_raw` at all, so they fail by construction
+— 7 of the 11 current failures. The check predates fact-based contracts and needs to branch on
+`Contract.is_fact_based`. `docs/FOUNDATION_STATUS.md` says "exit 0 only when every check passes",
+so the gate is permanently red and will train readers to ignore it.
+
+### Found and fixed 2026-08-30 (geography)
+
+**L15. The bank had two disjoint geographies. P1 — fixed.**
+The clickstream producers emitted global countries and continents — which is what the dashboard's
+Geographic Distribution renders — while `seedReferenceData.ts` seeded four **US regions**
+(Northeast, Midwest, South, West) with US cities, which is what every retail KPI localized on. So
+`/locations` showed India, USA and Brazil while an intelligence answer about `net_deposit_growth`
+said "Northeast", a place on no chart. Both were internally consistent, so neither looked wrong;
+the incoherence only appeared when a reader tried to reconcile a KPI with a map.
+
+`region` is now a **continent** and every branch city is drawn from the clickstream vocabulary.
+Three spelling drifts inside the supposedly-shared global set were fixed with it —
+`seed_data.py` had `Bengaluru` and `Sao Paulo` where the other two producers had `Bangalore` and
+`São Paulo`, which would have split one city into two cells. `tests/test_geo_vocabulary_alignment.py`
+parses all four producers and fails if they diverge again.
+
+**L16. Retiring a reference row left it live in ClickHouse forever. P1 — fixed.**
+Surfaced by L15 rather than sought. An extract has **no tombstone**: a row deleted at source stops
+appearing, and a `ReplacingMergeTree` keyed on it keeps the last version it ever saw. Globalising
+the branches therefore left `dim_branch` reporting the retired US regions *alongside* the new
+continents, so an enumeration returned both geographies at once and the split was still visible
+downstream after the source was fixed. `load_market_ops` now reconciles against the full batch.
+
+This is safe **only** for the full-re-read sources. For a watermarked feed, absence from a batch is
+indistinguishable from "unchanged", so the same reconcile there would delete live data — the
+function refuses to be called from those paths for that reason.
+
+**L17. A denormalised attribute did not re-extract when its source changed. P2 — fixed.**
+`fact_transactions.region` is copied from the branch at extract time, but the extract cursors on
+`Transaction.updatedOn`. Changing a branch's region touches no transaction row, so the analytics
+copy kept the old region indefinitely — the same class of bug the extract's own comment records for
+transaction status. It only came right the first time because the change happened to be followed by
+a deliberate `load_core_banking(full=True)`.
+
+`load_market_ops` now fingerprints `(branch_code, region, country)` across the branch set and, when
+it moves, resets the watermarks of every feed that copies a branch attribute so the next
+incremental load re-reads in full. Verified: an ordinary `load_core_banking()` re-read all 2,627
+transactions and picked up the new geography.
+
+One trap found while building it: the entity key is the **loader's own watermark name**, not the
+table it writes. `load_account_openings` writes `fact_account_openings` but registers as
+`accounts`, so resetting `account_openings` created a phantom ledger row and reset nothing — the
+feed reported 1 row where it should have reported 354. Only visible by checking the row counts.
+
+**L18. Two fact tables were loaded on every run and read by nothing. P3 — fixed.**
+No contract declared a fundamental against `fact_loans` or `fact_account_daily`, and no endpoint
+touched them; they were registered in `FACT_TABLES` and loaded regardless. `fact_account_daily` was
+the fastest-growing table in the schema — one row per account per day — entirely to be ignored.
+Both dropped, along with their extract routes, loaders, column lists and DDL. The Postgres rows
+behind them still exist and still matter: a loan disbursement books a real DEPOSIT that
+`net_deposit_growth` deliberately excludes.
+
+**L19. The migration ledger was empty while eighteen migrations were live. P2 — fixed.**
+`schema_migrations` had zero rows, so `migrate.py --status` reported all eighteen as *pending*
+against a database that already had them. Running it would have replayed historic migrations onto
+a migrated schema — the exact failure `CLAUDE.md` warns about. Baselined; the runner now reports
+"no pending migrations" and applied the 2026-08-30 migration cleanly on top.
+
 ---
 
 ## One closing observation

@@ -31,7 +31,7 @@ export default function AppSelectorPage() {
   const { data: session, status } = useSession();
   const router = useRouter();
 
-  // Deployment info is now fetched via React Query / API — no thunk needed
+  // Deployment info is now fetched via React Query / API, no thunk needed
 
   const handleViewDashboard = (appId: string, tenantIds: string[]) => {
     const knownTenants = tenantIds.filter((tenantId) => ALL_TENANT_IDS.includes(tenantId));

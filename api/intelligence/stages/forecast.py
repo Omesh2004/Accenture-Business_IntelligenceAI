@@ -75,11 +75,15 @@ def run(kpi_id: str, series_values: list[float], contract, as_of, tenant_id: str
     cfg = contract.forecast_cfg
     min_history = int(cfg.get("min_history_days", 14))
     period = config.SEASONAL_PERIOD_DAYS
+    # The +/-1 floor below is a COUNT resolution -- you cannot resolve below one event. On a
+    # ratio it spans the whole of [0,1], so the band swallowed every rate movement and no rate
+    # anomaly could ever fire. Scale the floor to what the contract says it is measuring.
+    floor = config.RATE_SPREAD_FLOOR if str(contract.raw.get("unit") or "") == "ratio" else 1.0
 
     # Cold start: widen honestly rather than pretend precision.
     if len(series_values) < min_history:
         point = rolling_median(series_values)
-        spread = max(mad(series_values) * 3.0, abs(point) * 0.5, 1.0)
+        spread = max(mad(series_values) * 3.0, abs(point) * 0.5, floor)
         return ForecastResult(round6(point), round6(max(0.0, point - spread)),
                               round6(point + spread), "rolling_median",
                               config.COLD_START_CONFIDENCE, 0.0, "insufficient_history")
@@ -100,8 +104,8 @@ def run(kpi_id: str, series_values: list[float], contract, as_of, tenant_id: str
     fn = METHODS[best]
     point = fn(series_values)
     resid = [series_values[i] - fn(series_values[:i]) for i in range(period, len(series_values))]
-    sigma = mad(resid) * config.MAD_TO_SIGMA if resid else max(abs(point) * 0.2, 1.0)
-    spread = max(config.Z_95 * sigma, 1.0)
+    sigma = mad(resid) * config.MAD_TO_SIGMA if resid else max(abs(point) * 0.2, floor)
+    spread = max(config.Z_95 * sigma, floor)
 
     return ForecastResult(
         round6(point), round6(max(0.0, point - spread)), round6(point + spread), best,

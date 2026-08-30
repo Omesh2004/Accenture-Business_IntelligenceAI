@@ -284,6 +284,13 @@ def check_dimensions() -> None:
 
     for path in sorted(glob.glob(os.path.join(REPO, "contracts", "*.yaml"))):
         contract = yaml.safe_load(open(path, encoding="utf-8"))
+        # A fact-based contract's dimensions are COLUMNS on a fact table, not metadata keys in
+        # events_raw -- `region`, `branch_code`, `txn_type` are not in the clickstream at all, so
+        # looking for them here fails by construction. This check predates fact-based contracts;
+        # without the skip it reported seven permanent failures and the script could never exit 0,
+        # which is how a gate teaches people to ignore it.
+        if any(f.get("table") for f in (contract.get("fundamentals") or [])):
+            continue
         allowed = (contract.get("dimensions") or {}).get("allowed") or []
         keys = [k for k in allowed if k != "event_name"]
         if not keys:
@@ -324,6 +331,37 @@ def check_dimensions() -> None:
                     int(bad) == 0,
                     f"{bad} sessions carry more than one value for {key}",
                 )
+
+
+def check_geo_consistency() -> None:
+    """One country must sit in exactly one continent, on every path.
+
+    The producers derive city/country/continent from a single table each, so a mismatch means one
+    of them patched a field without its siblings. That happened: forcing a country on the simulate
+    console rewrote `location` and left `city`/`continent` describing the country it replaced, so
+    events claimed India from Berlin, Austin and Sydney. `continent` is a declared contract
+    dimension -- that cell was not merely generated, it was wrong, and no existing check looked.
+    """
+    rows = query(
+        """
+        SELECT JSONExtractString(metadata, 'location')  AS country,
+               JSONExtractString(metadata, 'continent') AS continent,
+               count() AS n
+        FROM feature_intelligence.events_raw
+        WHERE tenant_id = %(tenant)s AND country != '' AND continent != ''
+        GROUP BY country, continent
+        """,
+        {"tenant": TENANT},
+    )
+    by_country: dict[str, set] = {}
+    for r in rows:
+        by_country.setdefault(r["country"], set()).add(r["continent"])
+    split = {c: sorted(v) for c, v in by_country.items() if len(v) > 1}
+    record(
+        "GEO each country sits in exactly one continent",
+        not split,
+        "; ".join(f"{c} in {v}" for c, v in sorted(split.items())),
+    )
 
 
 def check_contract_events_land() -> None:
@@ -416,6 +454,7 @@ def main() -> int:
         ("Session grain", check_sessions),
         ("Duplicate emission", check_duplicates),
         ("Dimension coverage", check_dimensions),
+        ("Geo consistency", check_geo_consistency),
         ("Contract events landed", check_contract_events_land),
         ("Rollup consistency", check_rollup),
     ]:

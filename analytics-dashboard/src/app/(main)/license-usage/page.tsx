@@ -249,7 +249,7 @@ export default function LicenseUsagePage() {
 
   const summary = (data as LicenseData | undefined)?.summary;
   const hasWastedLicenses = (summary?.waste_pct || 0) > 20;
-  // Use canonical licensed list — deduplicated by feature_name
+  // Use canonical licensed list, deduplicated by feature_name
   const seenFeatures = new Set<string>();
   const licensedFeatures = [...((data as LicenseData | undefined)?.licensed || []), ...((data as LicenseData | undefined)?.unused_licensed || [])].filter(f => {
     if (seenFeatures.has(f.feature_name)) return false;
@@ -351,7 +351,7 @@ export default function LicenseUsagePage() {
             <p className="text-sm mt-0.5 text-gray-700">
               <strong>{(data as LicenseData | undefined)?.unused_licensed?.length ?? 0}</strong> enterprise licenses are inactive.
               You could save up to <strong>{formatCurrency(((data as LicenseData | undefined)?.unused_licensed?.length ?? 0) * (summary?.pro_users ?? 0) * 500)}</strong>/month
-              by reviewing your plan — current waste is at <strong>{summary.waste_pct}%</strong>.
+              by reviewing your plan, current waste is at <strong>{summary.waste_pct}%</strong>.
             </p>
           </div>
         </div>
@@ -393,7 +393,7 @@ export default function LicenseUsagePage() {
                   Licensed
                 </span>
               </div>
-              <p className="text-3xl font-bold text-gray-900">{summary.total_licensed}</p>
+              <p className="num text-3xl font-bold text-gray-900">{summary.total_licensed}</p>
               <p className="text-xs text-gray-500 mt-1">Enterprise features with active license</p>
               <div className="mt-3 pt-3 border-t border-gray-50 flex items-center text-xs text-gray-400">
                 <CheckCircle className="h-3 w-3 mr-1 text-green-500" />
@@ -415,8 +415,8 @@ export default function LicenseUsagePage() {
                   {timeRange}
                 </span>
               </div>
-              <p className="text-3xl font-bold text-gray-900">
-                {proUsersLoading ? '—' : proUsersData?.pro_users ?? 0}
+              <p className="num text-3xl font-bold text-gray-900">
+                {proUsersLoading ? '-' : proUsersData?.pro_users ?? 0}
               </p>
               <p className="text-xs text-gray-500 mt-1">Pro users in {timeRange.toLowerCase()}</p>
               <div className="mt-3 pt-3 border-t border-gray-50">
@@ -442,7 +442,7 @@ export default function LicenseUsagePage() {
                   Revenue
                 </span>
               </div>
-              <p className="text-3xl font-bold text-gray-900">{formatCurrency(summary.estimated_revenue)}</p>
+              <p className="num text-3xl font-bold text-gray-900">{formatCurrency(summary.estimated_revenue)}</p>
               <p className="text-xs text-gray-500 mt-1">Estimated license revenue / month</p>
               <div className="mt-3 pt-3 border-t border-gray-50 text-xs text-gray-400">
                 ₹2,000 × {summary.pro_users} pro users
@@ -459,7 +459,7 @@ export default function LicenseUsagePage() {
                   {summary.waste_pct > 20 ? 'ALERT' : 'OPTIMAL'}
                 </span>
               </div>
-              <p className="text-3xl font-bold text-gray-900">
+              <p className="num text-3xl font-bold text-gray-900">
                 {summary.waste_pct}%
               </p>
               <p className="text-xs text-gray-500 mt-1">License waste rate</p>
@@ -499,7 +499,7 @@ export default function LicenseUsagePage() {
 
             {/* 3 columns */}
             <ChartContainer
-              title="Pro Features — Active Usage"
+              title="Pro Features, Active Usage"
               id="feature-distribution"
               className="lg:col-span-3"
             >
@@ -620,7 +620,7 @@ export default function LicenseUsagePage() {
 
           {/* ─── Tab: Licensed Features Table ─── */}
           {activeTab === 'licensed' && (
-            <ChartContainer title="Enterprise Licensed Features — Usage Details" id="license-table">
+            <ChartContainer title="Enterprise Licensed Features, Usage Details" id="license-table">
               <div className="mb-3 p-3 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">
                 <p>
                   <strong className="font-semibold">Active Features ({(data as LicenseData | undefined)?.licensed?.length ?? 0}):</strong> Enterprise features with active usage in the last 90 days.<br/>
@@ -679,7 +679,7 @@ export default function LicenseUsagePage() {
 
           {/* ─── Tab: Free Features Table ─── */}
           {activeTab === 'free' && (
-            <ChartContainer title="Free/Unentitled Features — Used Without License" id="unlicensed-table">
+            <ChartContainer title="Free/Unentitled Features, Used Without License" id="unlicensed-table">
               {unlicensedFeatures.length > 0 ? (
                 <div className="overflow-x-auto mt-2">
                   <table className="w-full text-left text-sm text-gray-600">

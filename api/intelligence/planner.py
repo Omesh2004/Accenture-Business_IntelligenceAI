@@ -20,7 +20,7 @@ import json
 import re
 from dataclasses import dataclass, field
 
-from api.intelligence import config, llm_client, matching, personas, tools
+from api.intelligence import config, llm_client, matching, personas, tools, understanding
 
 _WORD = re.compile(r"[a-z0-9_]+")
 MAX_CALLS_PER_ROUND = 4
@@ -56,6 +56,10 @@ class Observation:
     citation: str
     reason: str = ""
     rendered: str = ""
+    # The structured payload and figures this observation produced. Charts are built from these
+    # rather than from a fresh query, so a panel and the sentence beside it cannot disagree.
+    data: dict = field(default_factory=dict)
+    claims: list[dict] = field(default_factory=list)
 
 
 # ── shared context ─────────────────────────────────────────────────────────────────────────────
@@ -69,6 +73,8 @@ class Context:
     # Metrics with a recorded anomaly. A persona preference may order these; it may not promote a
     # quiet metric over one that moved.
     moved_ids: list[str] = field(default_factory=list)
+    # How the question was read. Cached so comprehension happens once per run.
+    reading: "understanding.Reading | None" = None
 
     @property
     def profile(self):
@@ -136,6 +142,26 @@ def resolve_metrics(question: str, candidates: list[str], limit: int = 4) -> lis
     return [kpi for overlap, _, kpi in scored[:limit] if overlap == best]
 
 
+def restricted_capabilities(ctx: Context) -> list[tools.ToolSpec]:
+    """Capabilities this question asks for that the persona may not use.
+
+    Entitlement was applied silently: a CFO asking "what should I do" got a ranking and no word
+    about the lever, because `get_recommendations` was filtered out of the catalogue before the
+    planner ever saw it. Being refused is an answer; being quietly given a different one is not.
+    """
+    allowed = {spec.name for spec in tools.catalogue(ctx.persona)}
+    named = _mentions_metric(ctx)
+    out = []
+    for spec in tools.REGISTRY.values():
+        if spec.name in allowed or spec.intent in ("greeting", "help"):
+            continue
+        if spec.needs_named_metric and not named:
+            continue
+        if score_tool(ctx.question, spec) >= MIN_SELECT_SCORE:
+            out.append(spec)
+    return sorted(out, key=lambda s: s.name)
+
+
 _STOP = frozenset("""a an and are as at be by for from how in is it its of on or that the
 their this to use used using what when where which who why with your you""".split())
 
@@ -149,10 +175,92 @@ def _description_terms(spec: tools.ToolSpec) -> tuple[str, ...]:
 def _mentions_metric(ctx: Context) -> bool:
     """Does the question name a metric this tenant actually has?
 
-    Every word of the id must be present, so "loan" alone does not claim `loan_approval_volume`
-    while "loan approval volume" -- or "loan aproval volume" -- does.
+    Either every word of the id is present ("loan approval volume", or "loan aproval volume"), or
+    one DISTINCTIVE word identifies a single metric unambiguously ("kyc"). The second case is what
+    people actually type; requiring the full id meant "tell me about kyc activity" was read as
+    naming no metric at all and the whole question was abstained on.
+
+    A word shared by several ids -- "loan", "rate" -- still resolves nothing, so an ambiguous
+    question is never silently answered about whichever metric sorted first.
     """
-    return matching.names_any(ctx.question, ctx.metric_ids)
+    return (matching.names_any(ctx.question, ctx.metric_ids)
+            or bool(matching.names_distinctly(ctx.question, ctx.metric_ids)))
+
+
+def score_tool(question: str, spec: tools.ToolSpec) -> float:
+    """Relevance of one capability to this question.
+
+    Selectors carry full weight; words from the tool's own description carry a fraction, so a
+    capability nobody wrote a cue for is still reachable by what it says it does. Substring
+    tests are gone: they missed "hii" and fired on fragments inside unrelated words.
+    """
+    direct = matching.score(question, spec.selectors)
+    described = matching.score(question, _description_terms(spec))
+    return direct + 0.25 * described
+
+
+def comprehend(ctx: Context) -> understanding.Reading:
+    """What kind of question this is. Computed once and cached on the context."""
+    if ctx.reading is None:
+        catalogue = tools.catalogue(ctx.persona)
+        scored = sorted(((score_tool(ctx.question, s), s) for s in catalogue),
+                        key=lambda t: -t[0])
+        top = scored[0] if scored else (0.0, None)
+        conversational = bool(top[1]) and top[1].intent in ("greeting", "help") \
+            and top[0] >= MIN_SELECT_SCORE
+        ctx.reading = understanding.read(ctx.question, _mentions_metric(ctx), conversational)
+    return ctx.reading
+
+
+def candidates(ctx: Context,
+               catalogue: list[tools.ToolSpec]) -> list[tuple[float, tools.ToolSpec]]:
+    """Every capability this question needs, best first. The planner's search space.
+
+    Selection follows the READING of the question, not its spelling. An investigation asks for the
+    whole chain -- what moved, what explains it, what to do -- whether or not the user happened to
+    use a cue word for each stage, which is why "how is my business doing" now returns a briefing
+    instead of an abstention.
+
+    Module-level because the critic needs the same view: sufficiency is "has every capability the
+    question ASKED FOR been attempted", and answering that from a different scorer than the one
+    that chose the calls would let the two disagree.
+    """
+    named = _mentions_metric(ctx)
+    usable = [s for s in catalogue if named or not s.needs_named_metric]
+    scored = [(value, spec) for value, spec in
+              ((score_tool(ctx.question, spec), spec) for spec in usable)
+              if value >= MIN_SELECT_SCORE]
+    scored.sort(key=lambda t: (-t[0], t[1].priority, t[1].name))
+    # A salutation is a whole intent. Pairing it with a variance report answers a question
+    # nobody asked and buries the greeting.
+    conversational = [t for t in scored if t[1].intent in ("greeting", "help")]
+    if conversational and scored and conversational[0][0] >= scored[0][0]:
+        return conversational[:1]
+    keyword = [t for t in scored if t[1].intent not in ("greeting", "help")]
+
+    reading = comprehend(ctx)
+    if not reading.is_investigation:
+        return keyword
+
+    # The chain the reading asks for, in narrative order, plus anything the wording additionally
+    # matched. Entitlement still applies: `usable` is already the persona's catalogue.
+    by_intent: dict[str, tools.ToolSpec] = {}
+    for spec in usable:
+        by_intent.setdefault(spec.intent, spec)
+    wanted = [understanding.slot_for(i) for i in reading.chain]
+    chain = [by_intent[intent] for intent, slot in zip(reading.chain, wanted)
+             if intent in by_intent and (not slot or slot in reading.wants)]
+
+    ordered: list[tuple[float, tools.ToolSpec]] = []
+    seen: set[str] = set()
+    for spec in chain:
+        ordered.append((1.0, spec))
+        seen.add(spec.name)
+    for value, spec in keyword:
+        if spec.name not in seen:
+            ordered.append((value, spec))
+            seen.add(spec.name)
+    return ordered
 
 
 # ── deterministic planner ──────────────────────────────────────────────────────────────────────
@@ -168,31 +276,11 @@ class RulePlanner:
         return self._replan(ctx, catalogue, observations)
 
     def _score(self, question: str, spec: tools.ToolSpec) -> float:
-        """Relevance of one capability to this question.
-
-        Selectors carry full weight; words from the tool's own description carry a fraction, so a
-        capability nobody wrote a cue for is still reachable by what it says it does. Substring
-        tests are gone: they missed "hii" and fired on fragments inside unrelated words.
-        """
-        direct = matching.score(question, spec.selectors)
-        described = matching.score(question, _description_terms(spec))
-        return direct + 0.25 * described
+        return score_tool(question, spec)
 
     def _candidates(self, ctx: Context,
                     catalogue: list[tools.ToolSpec]) -> list[tuple[float, tools.ToolSpec]]:
-        """Every capability this question expresses, best first. The planner's search space."""
-        named = _mentions_metric(ctx)
-        usable = [s for s in catalogue if named or not s.needs_named_metric]
-        scored = [(score, spec) for score, spec in
-                  ((self._score(ctx.question, spec), spec) for spec in usable)
-                  if score >= MIN_SELECT_SCORE]
-        scored.sort(key=lambda t: (-t[0], t[1].priority, t[1].name))
-        # A salutation is a whole intent. Pairing it with a variance report answers a question
-        # nobody asked and buries the greeting.
-        conversational = [t for t in scored if t[1].intent in ("greeting", "help")]
-        if conversational and conversational[0][0] >= scored[0][0]:
-            return conversational[:1]
-        return [t for t in scored if t[1].intent not in ("greeting", "help")]
+        return candidates(ctx, catalogue)
 
     def _first(self, ctx: Context, catalogue: list[tools.ToolSpec]) -> Plan:
         # A tool that explains ONE metric is only a candidate when the question names one.
@@ -205,19 +293,21 @@ class RulePlanner:
         width = min(MAX_CALLS_PER_ROUND, ctx.profile.max_tools_per_round)
         chosen = sorted((spec for _, spec in candidates[:width]),
                         key=lambda spec: (spec.priority, spec.name))
+        reading = comprehend(ctx)
         if not chosen:
             # Nothing matched. Reading the standing finding is a reasonable default for a question
             # that IS about the business ("give me the position") and a bad one for a question
             # that is not -- answering an unrelated question with a variance report is worse than
             # saying no.
             if not named:
-                return Plan(thought="No capability matches this question.", done=True,
-                            engine=self.engine)
+                return Plan(thought="Understood: %s. No capability answers it." % reading.reason,
+                            done=True, engine=self.engine)
             chosen = [tools.REGISTRY["get_insight"]] if personas.allows(ctx.persona, "status") \
                 else catalogue[:1]
-        calls = [Call(s.name, self._args(ctx, s), "matched the question") for s in chosen]
-        return Plan(thought="Selected %d capability(ies) by relevance to the question: %s."
-                            % (len(calls), ", ".join(c.tool for c in calls)),
+        calls = [Call(s.name, self._args(ctx, s), "%s stage of the reading" % s.intent)
+                 for s in chosen]
+        return Plan(thought="Understood: %s. Running %s."
+                            % (reading.reason, ", ".join(c.tool for c in calls)),
                     calls=calls, engine=self.engine)
 
     def _replan(self, ctx: Context, catalogue: list[tools.ToolSpec],
@@ -293,20 +383,72 @@ class LLMPlanner:
         self.tokens_out = 0
 
     def plan(self, ctx: Context, observations: list[Observation], round_n: int) -> Plan:
+        # The refusal lived only in the rule planner, so turning the model on quietly removed it:
+        # "what is the capital of France" and "tell me a joke" were handed to the model, which
+        # dutifully planned a metric lookup and answered them with a variance report. A question
+        # this system has no business answering is refused BEFORE the model is asked, which is also
+        # the cheaper order.
+        reading = comprehend(ctx)
+        if round_n == 0 and reading.shape == "unmatched":
+            return Plan(thought="Understood: %s. No capability answers it." % reading.reason,
+                        done=True, engine=self.engine)
+
         prompt = self._prompt(ctx, observations, round_n)
         obj, t_in, t_out = llm_client.complete_json(prompt)
         self.tokens_in += t_in
         self.tokens_out += t_out
         if not isinstance(obj, dict):
             return self._fallback.plan(ctx, observations, round_n)
-        calls = []
+        # A capability that already returned must not be called again. A small model re-proposes
+        # its last action rather than moving on: asked one question it planned `get_causes` three
+        # rounds running, never reached `get_insight`, and the answer lost its "what changed"
+        # section entirely while spending three rounds of tokens. The rule planner has always
+        # excluded what it has tried; this holds the model to the same rule rather than trusting
+        # it to notice.
+        already = {o.tool for o in observations if o.ok}
+        calls, repeats = [], []
         for raw in (obj.get("calls") or [])[:MAX_CALLS_PER_ROUND]:
             if not isinstance(raw, dict) or not raw.get("tool"):
                 continue
+            name = str(raw["tool"])
+            if name in already:
+                repeats.append(name)
+                continue
             args = raw.get("args") if isinstance(raw.get("args"), dict) else {}
             args.setdefault("tenant_id", ctx.tenant_id)
-            calls.append(Call(str(raw["tool"]), args, str(raw.get("why") or "")))
+            calls.append(Call(name, args, str(raw.get("why") or "")))
+
+        # An investigation establishes WHAT moved before asking where it concentrated. The model
+        # planned `get_causes` on round 0 for "why did KYC fall"; Localize refused because it had
+        # no movement to decompose, the round was wasted, and only the fallback then reached
+        # `get_insight`. Ordering is not the model's to choose: you cannot localise a movement you
+        # have not established.
+        if round_n == 0 and comprehend(ctx).is_investigation and calls:
+            status = next((s for s in tools.catalogue(ctx.persona)
+                           if s.intent == "status" and not s.needs_named_metric), None)
+            named = {c.tool for c in calls}
+            if status and status.name not in named:
+                calls.insert(0, Call(status.name, self._fallback._args(ctx, status),
+                                     "establish the movement before explaining it"))
+            else:
+                calls.sort(key=lambda c: tools.REGISTRY[c.tool].priority
+                           if c.tool in tools.REGISTRY else 99)
+
         thought = str(obj.get("thought") or "").strip() or "Planning the next step."
+        if repeats and not calls:
+            # The model had nothing new to propose. Stopping here would end the run early and lose
+            # the parts of the question it never got to, so the deterministic planner takes over
+            # and fills the gap it can already see. The model chooses while it is contributing;
+            # it does not get to end an investigation by repeating itself.
+            gap = self._fallback.plan(ctx, observations, round_n)
+            if gap.calls:
+                gap.thought = ("%s already consulted; continuing with %s."
+                               % (", ".join(sorted(set(repeats))),
+                                  ", ".join(c.tool for c in gap.calls)))
+                return gap
+            return Plan(thought="%s already answered; nothing further bears on the question."
+                                % ", ".join(sorted(set(repeats))),
+                        calls=[], done=True, engine=self.engine)
         done = bool(obj.get("done")) or not calls
         if not calls and not observations:
             # A model that plans nothing on the first round is not usable here.
@@ -329,6 +471,13 @@ class LLMPlanner:
             f"METRICS AVAILABLE: {', '.join(ctx.metric_ids[:40]) or 'none'}\n"
             f"METRIC THE QUESTION APPEARS TO BE ABOUT: {ctx.focus_metric or 'not identified'}\n\n"
             f"QUESTION: {ctx.question}\n\n"
+            # The reading is computed deterministically and given to the model as context. Without
+            # it a small model answers only the first clause of a compound question: asked "why
+            # did X change AND where is it concentrated" it planned the cause tool alone and the
+            # answer never said what changed.
+            f"HOW THE QUESTION READS: {comprehend(ctx).reason}\n"
+            f"Plan for ALL of that, not only the first part. Do not call a tool that already "
+            f"appears in OBSERVATIONS SO FAR.\n\n"
             f"TOOLS YOU MAY CALL:\n{json.dumps(catalogue, indent=1)}\n\n"
             f"OBSERVATIONS SO FAR (round {round_n}):\n{json.dumps(seen, indent=1) or '[]'}\n\n"
             "Decide the NEXT step. Call several tools at once when they are independent. Set "
@@ -350,9 +499,13 @@ def choose(engine: str = "auto"):
 # ── critic ─────────────────────────────────────────────────────────────────────────────────────
 @dataclass
 class Validation:
-    sufficient: bool
+    sufficient: bool                                    # is there anything worth saying at all?
     issues: list[str] = field(default_factory=list)
     escalate: bool = False
+    # Has every capability the question asked for been attempted? Drives another round; never a
+    # reason to withhold an answer that is already usable.
+    complete: bool = True
+    uncovered: list[str] = field(default_factory=list)
 
 
 def validate(ctx: Context, observations: list[Observation],
@@ -386,4 +539,14 @@ def validate(ctx: Context, observations: list[Observation],
                 if not o.ok and o.reason and focus and focus.replace("_", " ") in
                 o.reason.lower().replace("_", " ")]
     issues.extend(sorted(set(relevant)))
-    return Validation(True, issues=issues, escalate=False)
+
+    # A compound question is not fully answered because ITS FIRST PART was. "Which metric moved
+    # most and what should I do?" stopped as soon as the ranking came back and the CFO was never
+    # told the lever -- Decide never ran. `complete` is coverage of what the question asked for and
+    # is what drives another round; `sufficient` stays "there is something worth saying", so an
+    # exhausted round budget still publishes the partial answer instead of abstaining on it.
+    tried = {o.tool for o in observations}
+    uncovered = sorted(spec.name for _, spec in candidates(ctx, tools.catalogue(ctx.persona))
+                       if spec.name not in tried)
+    return Validation(True, issues=issues, escalate=False, complete=not uncovered,
+                      uncovered=uncovered)

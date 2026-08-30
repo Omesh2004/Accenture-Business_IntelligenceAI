@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
-import { Inter } from "next/font/google";
+import { Inter, Instrument_Serif, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import StoreProvider from "@/lib/StoreProvider";
 import AuthProvider from "@/components/AuthProvider";
@@ -16,6 +16,23 @@ import QueryProvider from "@/lib/QueryProvider";
 const inter = Inter({
   subsets: ["latin"],
   variable: "--font-inter",
+  display: "swap",
+});
+
+// Display face for the intelligence report's headlines. A finding stated in the same face as the
+// chrome around it reads as another label; a distinct display face makes it read as a statement.
+const display = Instrument_Serif({
+  subsets: ["latin"],
+  weight: "400",
+  variable: "--font-display",
+  display: "swap",
+});
+
+// Figures are compared column-to-column, so they need fixed advance widths. Inter's proportional
+// digits make a 236 and a 5 in adjacent rows look like different magnitudes than they are.
+const mono = JetBrains_Mono({
+  subsets: ["latin"],
+  variable: "--font-mono",
   display: "swap",
 });
 
@@ -39,7 +56,10 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${inter.variable} h-full antialiased`}>
+    <html
+      lang="en"
+      className={`${inter.variable} ${display.variable} ${mono.variable} h-full antialiased`}
+    >
       <body className="min-h-full flex flex-col font-sans bg-gray-100/50">
         <AuthProvider>
           {/*
