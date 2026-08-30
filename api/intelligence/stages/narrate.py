@@ -14,14 +14,17 @@ from api.intelligence.ids import insight_id, round6
 
 # Personas are render configs over the SAME claim set, so numbers are identical by construction.
 # Which sections each persona sees; an unknown persona gets everything.
+# Every persona gets an action section. Which levers appear inside it is decided by
+# `personas.owner_roles`, not by removing the section: a reader who is shown a movement and no
+# route to act on it has been given half an answer, and the half that cannot be used.
 PERSONA_SECTIONS = {
-    "cfo": {"cause", "forecast", "impact"},
+    "cfo": {"cause", "forecast", "impact", "action"},
     "ops_manager": {"cause", "action"},
     "analyst": {"cause", "forecast", "action", "impact"},
     "marketing_lead": {"cause", "forecast", "action"},
     "risk_officer": {"cause", "action", "forecast"},
-    # A steward certifies the figure rather than acting on it, so no action section.
-    "data_steward": {"cause"},
+    # A steward owns the `analytics` levers -- data quality remediation is still an action.
+    "data_steward": {"cause", "action"},
 }
 
 # What EVERY known persona may see. An unrecognised persona gets this, not the widest set:
@@ -129,13 +132,24 @@ def build_claim_set(ctx, trust, anomaly, causes, band, causal, decision,
 
 
 def apply_entitlement(claim_set: ClaimSet, contract, persona: str) -> tuple[ClaimSet, bool]:
-    """Drop restricted claims BEFORE the narrator sees them, so a number cannot be phrased.
+    """Every persona sees every movement. What changes is the ANSWER, not the visibility.
 
-    Returns (filtered, restricted) -- restricted means this persona may not see the KPI at all.
+    This used to drop the whole claim set when `contract.visible_to` omitted the persona, and the
+    result was a monitoring surface that monitored almost nothing: an Operations Manager could see
+    2 of 20 metrics and none of the 7 that had actually moved, so the page truthfully reported "no
+    movement recorded" while the business had seven anomalies running.
+
+    Hiding a movement from the person who could act on it is the opposite of what this layer is
+    for. Persona still shapes the answer, and it does so where it belongs:
+
+      * `personas.detail`      how much method is shown (summary / standard / full)
+      * `personas.lead_in`     how the finding is framed for that reader
+      * `personas.owner_roles` which levers are THEIRS to pull; the rest are shown as belonging to
+                               another owner rather than withheld
+
+    `contract.visible_to` is left in the contracts as a record of intended readership, but it no
+    longer gates what anyone is allowed to be told.
     """
-    visible = contract.visible_to
-    if visible and persona not in visible:
-        return ClaimSet(), True
     return claim_set, False
 
 

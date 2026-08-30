@@ -63,6 +63,26 @@ export interface SimCatalog {
   events: { id: string; route: string; label: string; kind: string; proGated: boolean }[]
 }
 
+/**
+ * Run settings a template needs beyond the behavior block itself.
+ *
+ * A movement is only measurable against history the SAME customers generated, and fast mode keys
+ * a generated application on (customer, date). So a paired before/after demo has to re-run the
+ * same `seed`: without one, the second run writes a fresh set of customer-days and leaves the
+ * first run's approvals in place, which dilutes the movement instead of replacing it. That is why
+ * running a collapse template five times appeared to change nothing.
+ */
+export interface TemplateRun {
+  /** Fixed RNG seed. Two templates sharing one seed generate the same customer-days. */
+  seed?: number
+  /** Clear these tables first. Scoped so a single-KPI reset spares the other metrics' history. */
+  purgeTables?: string[]
+  count?: number
+  days?: number
+  /** Generation passes. One pass can leave a KPI under its contract's min_denominator. */
+  passes?: number
+}
+
 interface Template {
   id: string
   label: string
@@ -70,6 +90,8 @@ interface Template {
   expect: string
   /** The starting-point override this template fills the controls with. */
   build: () => BehaviorPayload | null
+  /** Fast-mode run settings this template needs. Applied to the controls on selection. */
+  run?: TemplateRun
 }
 
 /**
@@ -77,12 +99,35 @@ interface Template {
  * route from the catalog; the backend drops anything it does not recognise. Numbers scale
  * the generator's baseline rates (BASELINE_BEHAVIOR in simulationBehavior.ts).
  */
+// The seed the paired loan-demo templates share. Both must regenerate the SAME customer-days:
+// step 2 replaces step 1's applications rather than adding a second, healthier cohort beside them.
+const LOAN_DEMO_SEED = 4242
+
 export const TEMPLATES: Template[] = [
   {
     id: "baseline",
     label: "Baseline — no change",
     expect: "Normal traffic. Use this to establish history before introducing a movement.",
     build: () => null,
+  },
+  {
+    id: "demo_loan_step1_healthy",
+    label: "Demo step 1 · Loan approvals healthy (reset)",
+    expect:
+      "Clears the mock loan history and rebuilds 30 quiet days at ~0.60 approval. loan_approval_rate reads inside its band and the agent reports no movement. This is the BEFORE state to record. Only the loan table is cleared, so the revenue, deposit and KYC movements are left alone. Fast mode.",
+    build: () => null,
+    run: { seed: LOAN_DEMO_SEED, purgeTables: ["fact_loan_applications"], count: 121, days: 30, passes: 4 },
+  },
+  {
+    id: "demo_loan_step2_freeze",
+    label: "Demo step 2 · Loan approvals freeze",
+    expect:
+      "Re-runs the SAME customers and days as step 1, approving none of the last 7 days. Approvals go to 0.000 while applications hold, so the break is at the decision step and not in demand. loan_approval_rate falls from ~0.62 to ~0.08, well outside its 0.38 to 0.77 band. Run step 1 first: without that history there is nothing to measure the fall against.",
+    build: () => ({
+      windowDays: 7,
+      targets: [{ kind: "event", id: "loan.approved.success", traffic: 0 }],
+    }),
+    run: { seed: LOAN_DEMO_SEED, count: 121, days: 30, passes: 4 },
   },
   {
     id: "kyc_drop_segment",
@@ -182,6 +227,100 @@ export const TEMPLATES: Template[] = [
       windowDays: 3,
       targets: [{ kind: "event", id: "auth.role.violation", traffic: 12 }],
       relaxJourney: true,
+    }),
+  },
+
+  // ── Governed-KPI scenarios ────────────────────────────────────────────────────────────────
+  //
+  // The templates above target an EVENT and leave which KPI moves to be worked out. These name
+  // the governed contract they are built to move, and size the movement against that metric's own
+  // noise. That second part is what the earlier ones got wrong in practice: a drop the generator
+  // faithfully produced still sat inside the forecast band, so Detect stayed quiet and the run
+  // looked broken. A band is fitted on the metric's own history, so how far a movement must travel
+  // to count is a property of the metric, not a number that transfers between them.
+  //
+  //   loan_approval_rate      band ~0.78 wide on a few dozen applications a day -> needs a collapse
+  //   kyc_completion_rate     band ~0.15 wide on hundreds of events a day       -> a third is plenty
+  //   digital_adoption_rate   band ~0.02 wide, pinned at 1.0                    -> very sensitive
+  //
+  // Run "Build baseline history" first on a quiet tenant. Without dense history behind it the band
+  // is fitted on noise, and nothing short of a collapse will ever clear it.
+  {
+    id: "baseline_history",
+    label: "Build baseline history — no movement",
+    expect:
+      "High volume, no rate change, so every KPI gets a dense and quiet history. Detect scores against a band fitted on this, and a band fitted on thin data is too wide for any real movement to clear. Run this before planting anything.",
+    build: () => ({ windowDays: 0 }),
+  },
+  {
+    id: "kpi_kyc_collapse",
+    label: "KPI · KYC completion rate collapses",
+    expect:
+      "kyc_completion_rate falls from ~0.68 to ~0.20 for five days while starts hold. KYC carries hundreds of events a day, so its band is narrow and this clears it comfortably. Loan applications dip a few days later as the funnel narrows.",
+    build: () => ({
+      windowDays: 5,
+      targets: [{ kind: "event", id: "loan.kyc_completed.success", traffic: 0.3 }],
+    }),
+  },
+  {
+    id: "kpi_approval_freeze",
+    label: "KPI · Loan approvals freeze",
+    expect:
+      "loan_approval_rate falls from ~0.62 to ~0.06 for five days while applications hold, so the drop is at the decision step and not in demand. Deliberately severe: this metric's band is wide, and a milder cut stays inside it.",
+    build: () => ({
+      windowDays: 5,
+      targets: [{ kind: "event", id: "loan.approved.success", traffic: 0.1 }],
+    }),
+  },
+  {
+    id: "kpi_digital_outage",
+    label: "KPI · Digital channels degrade",
+    expect:
+      "digital_adoption_rate falls from 1.00 to ~0.45 as transactions move to BRANCH and ATM. Its band is only a couple of points wide, so this is the sharpest signal available and the easiest to localize.",
+    build: () => ({
+      windowDays: 4,
+      targets: [{ kind: "event", id: "transaction.pay_now.success", traffic: 0.45 }],
+    }),
+  },
+  {
+    id: "kpi_activation_stall",
+    label: "KPI · Product activations stall",
+    expect:
+      "new_product_activations falls as card activation drops from ~0.18 to ~0.02. A count rather than a rate, so the movement reads directly in volume.",
+    build: () => ({
+      windowDays: 5,
+      targets: [{ kind: "event", id: "card.activation.success", traffic: 0.1 }],
+    }),
+  },
+  {
+    id: "kpi_acquisition_burn",
+    label: "KPI · Acquisition cost rises",
+    expect:
+      "campaign_reach halves, so cost_per_acquisition rises: the same spend converts fewer customers. A currency metric, and one of the few whose movement is an INCREASE.",
+    build: () => ({
+      windowDays: 6,
+      targets: [{ kind: "event", id: "campaign.interaction.success", traffic: 0.5 }],
+    }),
+  },
+  {
+    id: "kpi_kyc_india_mobile",
+    label: "KPI · KYC falls, mobile users in India only",
+    expect:
+      "The same KYC collapse, confined to device_type=mobile AND location=India. The aggregate moves less, so this is the case that separates a real driver from noise: Localize should name that cell rather than spreading the loss across the cube.",
+    build: () => ({
+      windowDays: 5,
+      segment: { device_type: "mobile", location: "India" },
+      targets: [{ kind: "event", id: "loan.kyc_completed.success", traffic: 0.2 }],
+    }),
+  },
+  {
+    id: "kpi_noise_control",
+    label: "KPI · Noise control (should NOT be flagged)",
+    expect:
+      "A movement deliberately smaller than the metric's own daily variation: KYC completion moved barely a tenth. Detect should stay quiet. Use it to check the engine distinguishes a real movement from ordinary noise, rather than flagging anything that moves.",
+    build: () => ({
+      windowDays: 4,
+      targets: [{ kind: "event", id: "loan.kyc_completed.success", traffic: 0.92 }],
     }),
   },
 ]

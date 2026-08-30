@@ -519,6 +519,17 @@ class FastSeedRequest(BaseModel):
     days: int = 30
     seed: int | None = None
     purge_first: bool = False
+    # Which tables the purge clears. None means all of them. A single-KPI reset must not take the
+    # other metrics' history with it: rebuilding the loan series cleared 30k mock transactions too.
+    purge_tables: list[str] | None = None
+    # How many generation passes to run, each on `seed + i`.
+    #
+    # One pass gives a user 1-12 active days out of `days`, and only ~15% of those reach a loan
+    # application, so a 30-day run leaves 3-6 applications a day -- under the loan contract's
+    # min_denominator of 5, with daily rates swinging 0.33 to 1.00 on counts that small. That noise
+    # widens the forecast band until only a total collapse can leave it. Extra passes sample more
+    # customer-days at the SAME rates, so density rises while the distribution does not move.
+    passes: int = 1
     # A planted movement is echoed back to the caller, never persisted -- see api/fast_seed.py.
     behavior: dict | None = None
     # Off by default: a run generates activity for customers the bank already has. Minting a
@@ -540,12 +551,28 @@ async def seed_fast(req: FastSeedRequest):
     """
     from api import fast_seed
     try:
-        removed = fast_seed.purge(req.tenant_id) if req.purge_first else {}
-        written = await asyncio.to_thread(
-            fast_seed.generate, req.tenant_id, req.users, req.days, req.seed, req.behavior,
-            req.create_accounts)
+        removed = (fast_seed.purge(req.tenant_id, req.purge_tables)
+                   if req.purge_first else {})
+        passes = max(1, min(int(req.passes or 1), 10))
+        written: dict = {}
+        for i in range(passes):
+            # Each pass gets its own seed so it samples DIFFERENT customer-days. Derived from the
+            # base rather than random, so a paired before/after demo re-running the same base seed
+            # regenerates the same set and the second run replaces the first run's outcomes.
+            seed = None if req.seed is None else req.seed + i
+            one = await asyncio.to_thread(
+                fast_seed.generate, req.tenant_id, req.users, req.days, seed, req.behavior,
+                req.create_accounts)
+            for key, value in one.items():
+                # Row counts accumulate; everything else (`users`, `days`, the echoed movement)
+                # describes the run and is taken as-is. Summing `users` across passes reported
+                # 484 customers on a bank that has 121.
+                if key in fast_seed._PURGE_PREDICATE and isinstance(value, int):
+                    written[key] = written.get(key, 0) + value
+                else:
+                    written[key] = value
         return {"mode": "fast", "tenant_id": req.tenant_id, "written": written,
-                "purged": removed}
+                "purged": removed, "passes": passes}
     except ValueError as exc:
         raise HTTPException(status_code=409, detail=str(exc))
     except Exception as exc:
@@ -555,9 +582,15 @@ async def seed_fast(req: FastSeedRequest):
 
 @app.post("/events/seed/fast/purge", status_code=200)
 async def seed_fast_purge(req: FastSeedRequest):
-    """Remove everything fast mode wrote for a tenant. Mock data has to be reversible."""
+    """Remove what fast mode wrote for a tenant. Mock data has to be reversible.
+
+    `purge_tables` narrows it to one metric's history; omitting it clears everything.
+    """
     from api import fast_seed
-    removed = await asyncio.to_thread(fast_seed.purge, req.tenant_id)
+    try:
+        removed = await asyncio.to_thread(fast_seed.purge, req.tenant_id, req.purge_tables)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
     return {"tenant_id": req.tenant_id, "purged": removed}
 
 

@@ -27,7 +27,7 @@ import { toast } from "sonner"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { UserData } from "@/components/context/UserContext"
 import { useEventTracker } from "@/hooks/useEventTracker"
-import { BehaviorControls, type BehaviorPayload, type SimCatalog } from "@/components/admin/BehaviorControls"
+import { BehaviorControls, TEMPLATES, type BehaviorPayload, type SimCatalog } from "@/components/admin/BehaviorControls"
 
 interface ProcessingSummary {
    users?: { requested?: number; created?: number; skipped?: number };
@@ -90,6 +90,9 @@ export default function AdminSimulatePage() {
    const [activeStep, setActiveStep] = useState(0)
    const [templateId, setTemplateId] = useState("baseline")
    const [behavior, setBehavior] = useState<BehaviorPayload | null>(null)
+   // Run settings the SELECTED template needs. Derived rather than stored, so it cannot drift out
+   // of step with the template the operator is actually looking at.
+   const activeRun = TEMPLATES.find((t) => t.id === templateId)?.run
    const [catalog, setCatalog] = useState<SimCatalog | null>(null)
   // Slow mode proves the real pipeline works: every row goes to Postgres, then the ingestion API,
   // Kafka and the worker. Fast mode writes the analytics tables directly -- mock data only, for
@@ -203,6 +206,10 @@ export default function AdminSimulatePage() {
                `${API_BASE_URL}/events/simulate`,
                { count: safeCount, days: safeDays, tenantId, behavior,
                  mode: fastMode ? "fast" : "slow", purgeFirst: fastMode && purgeFirst,
+                 // A paired demo needs both runs to land on the same customer-days, so the seed
+                 // travels with the template rather than being re-rolled per run.
+                 seed: activeRun?.seed, purgeTables: activeRun?.purgeTables,
+                 passes: activeRun?.passes,
                  createAccounts },
                { withCredentials: true }
             )
@@ -210,8 +217,28 @@ export default function AdminSimulatePage() {
       })
       toast.success("Simulation complete!")
     } catch (err: any) {
+      // A 409 is the run REFUSING for a reason the operator can fix, not a fault. It surfaced as a
+      // bare AxiosError with a stack trace, which reads as a broken page rather than as "this
+      // tenant has no population yet, tick Create accounts". The two causes are distinguishable
+      // and each has a one-step remedy, so say which one it is.
+      const status = err?.response?.status
+      if (status === 409) {
+        const detail: string =
+          err?.response?.data?.detail || err?.response?.data?.error || ""
+        const needsPopulation = /account|customer|population/i.test(detail)
+        toast.error(needsPopulation ? "This tenant has no population yet" : "Simulation refused", {
+          description: needsPopulation
+            ? `${detail} Tick "Create accounts" to build one first, or switch to a tenant that already has customers.`
+            : detail || "The run was refused because a precondition was not met.",
+          duration: 12000,
+          action: needsPopulation
+            ? { label: "Create accounts", onClick: () => setCreateAccounts(true) }
+            : undefined,
+        })
+        return
+      }
       console.error("Simulation failed:", err)
-         toast.error(resolveErrorMessage(err))
+      toast.error(resolveErrorMessage(err))
     } finally {
       setLoading(false)
     }
@@ -322,6 +349,18 @@ export default function AdminSimulatePage() {
                                     onTemplateChange={(id: string) => {
                                        setTemplateId(id)
                                        setCreateAccounts(id.startsWith("shift_"))
+                                       // A template may carry the run settings its movement needs:
+                                       // a fixed seed so a paired before/after pair regenerates the
+                                       // SAME customer-days, and a scoped reset. Filling them in is
+                                       // what makes the loan demo one click rather than four
+                                       // controls the operator has to know to match by hand.
+                                       const run = TEMPLATES.find((t) => t.id === id)?.run
+                                       if (run) {
+                                          setFastMode(true)
+                                          if (run.count) setCount(run.count)
+                                          if (run.days) setDays(run.days)
+                                          setPurgeFirst(Boolean(run.purgeTables?.length))
+                                       }
                                     }}
                                     catalog={catalog}
                                     disabled={loading}

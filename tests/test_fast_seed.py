@@ -127,3 +127,46 @@ def test_it_refuses_rather_than_inventing_a_population(monkeypatch):
     _install(monkeypatch, [])
     with pytest.raises(ValueError, match="no existing accounts"):
         fast_seed.generate("nexabank", users=2, days=5, seed=1)
+
+
+# ── purge must actually match what the generator wrote ─────────────────────────────────────────
+def test_purge_matches_events_by_ingest_path_not_a_user_id_prefix():
+    """Fast mode generates activity for the bank's OWN customers, so `user_id` is a real id.
+
+    The old predicate was `startsWith(user_id, 'fast_')`, which matched nothing on that path: every
+    event fast mode ever wrote survived a purge that reported success. Only a `create_accounts` run
+    mints `fast_` users. `ingest_path` is stamped on every generated event either way.
+    """
+    from api import fast_seed
+    assert fast_seed._PURGE_PREDICATE["events_raw"] == "ingest_path = 'fast_seed'"
+    assert "user_id" not in fast_seed._PURGE_PREDICATE["events_raw"]
+
+
+def test_purge_covers_every_table_the_generator_writes():
+    """A table written but not purgeable is mock data that cannot be undone."""
+    from api import fast_seed
+    written = {"events_raw", "fact_transactions", "fact_account_openings", "fact_cards",
+               "dim_customer", "fact_campaign_interactions", "fact_loan_applications"}
+    assert written <= set(fast_seed._PURGE_PREDICATE)
+
+
+def test_purge_rejects_a_table_it_does_not_own():
+    """A typo must not silently widen a scoped reset into a full one."""
+    import pytest
+    from api import fast_seed
+    with pytest.raises(ValueError):
+        fast_seed.purge("nexabank", ["events_raw", "fact_loans"])
+
+
+def test_generated_application_ids_are_keyed_on_the_date_not_the_day_index():
+    """`fastapp_<cid>_<d>` collided across runs with different `days`.
+
+    fact_loan_applications is ReplacingMergeTree ORDER BY (tenant_id, application_id), so a 7-day
+    run's ids _0.._6 replaced a 30-day run's rows for dates a month earlier -- silently deleting
+    that history and relocating it into the recent window. Row counts still looked right.
+    """
+    import inspect
+    from api import fast_seed
+    source = inspect.getsource(fast_seed.generate)
+    assert 'app_id = "fastapp_%s_%s" % (cid, stamp)' in source
+    assert 'stamp = day.strftime("%Y%m%d")' in source

@@ -348,3 +348,40 @@ def test_ordering_still_degrades_quietly(monkeypatch):
     monkeypatch.setattr(contracts, "load_declared",
                         lambda: (_ for _ in ()).throw(RuntimeError("x")))
     assert reader._declared_ids() == ("",)
+
+
+# ── the tier boundary: a governed KPI outranks an auto-discovered event series ──────────────────
+def test_a_governed_contract_outranks_a_discovered_series_of_the_same_name():
+    """"loan" reaches both loan contracts AND eight `loan.*` event series.
+
+    Ranked together, `loan.page.view` -- a page counter -- led the answer while an urgent governed
+    contract sat below it. Materiality on a governed KPI and on a discovered series are not the
+    same score, which is the same boundary `rank_movements` already draws.
+    """
+    from api.intelligence import planner
+    ctx = planner.Context("nexabank", "what about loan data?", "analyst",
+                          ["loan.page.view", "loan.kyc.failure", "loan_approval_rate",
+                           "loan_approval_volume"])
+    matched = planner.matched_metrics(ctx)
+    assert set(matched) == {"loan_approval_rate", "loan_approval_volume"}
+    assert "loan.page.view" not in matched
+
+
+def test_a_discovered_series_stays_reachable_when_nothing_governed_matches():
+    """Tier 0 is deprioritised, not hidden: with no governed match it IS the answer."""
+    from api.intelligence import planner
+    ctx = planner.Context("nexabank", "how are page views doing?", "analyst",
+                          ["loan.page.view", "loan_approval_rate"])
+    assert planner.matched_metrics(ctx) == ("loan.page.view",)
+
+
+def test_a_scoped_ranking_reports_the_quiet_metrics_too():
+    """A reader who named part of the business needs "nothing moved there", not silence.
+
+    Unscoped, `rank_movements` returns False when nothing moved, which renders as "no governed
+    metric is outside its band" -- a non-answer to "what about loan data".
+    """
+    from api.intelligence import tools
+    spec = tools.REGISTRY["rank_movements"]
+    assert "scope" in spec.params
+    assert spec.params["scope"]["required"] is False

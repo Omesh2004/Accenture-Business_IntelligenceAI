@@ -96,3 +96,48 @@ def test_slot_order_is_the_order_a_finding_is_told():
     assert u.SLOT_ORDER.index(u.WHY) < u.SLOT_ORDER.index(u.WHAT_NOW)
     for slot in u.SLOT_ORDER:
         assert slot in u.SLOT_LABEL
+
+
+# ── an ambiguous metric mention is a question to answer, not one to refuse ──────────────────────
+_IDS = ("kyc_completion_rate", "loan_approval_rate", "loan_approval_volume",
+        "digital_adoption_rate", "fee_revenue", "net_deposit_growth")
+
+
+def test_a_word_reaching_two_metrics_is_a_briefing_not_an_abstention():
+    """"loan" means both loan KPIs. Two matches is the opposite of no match.
+
+    This was refused outright with "the question names no metric and uses no vocabulary about this
+    business" -- the same verdict given to "what is the capital of France" -- because ambiguity was
+    scored as absence.
+    """
+    reading = u.read("what about loan data?", False, False,
+                     matched=("loan_approval_rate", "loan_approval_volume"))
+    assert reading.shape == "briefing"
+    assert reading.is_investigation
+    assert set(reading.metrics) == {"loan_approval_rate", "loan_approval_volume"}
+
+
+def test_an_ambiguous_reading_names_the_metrics_it_covered():
+    """The reader did not choose from a catalogue they have seen, so the answer must say."""
+    reading = u.read("what about loan data?", False, False,
+                     matched=("loan_approval_rate", "loan_approval_volume"))
+    assert "loan_approval_rate" in reading.reason
+    assert "loan_approval_volume" in reading.reason
+
+
+def test_an_unrelated_question_is_still_refused_when_nothing_matched():
+    for question in ("tell me a joke", "what is the capital of France", "who won the world cup"):
+        assert u.read(question, False, False, matched=()).shape == "unmatched"
+
+
+def test_metrics_named_reports_every_match_where_distinctly_reports_none():
+    from api.intelligence import matching
+    assert matching.names_distinctly("what about loan data?", _IDS) == ""
+    assert matching.metrics_named("what about loan data?", _IDS) == [
+        "loan_approval_rate", "loan_approval_volume"]
+
+
+def test_metrics_named_finds_nothing_in_an_unrelated_question():
+    from api.intelligence import matching
+    assert matching.metrics_named("what is the capital of France", _IDS) == []
+    assert matching.metrics_named("tell me a joke", _IDS) == []

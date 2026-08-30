@@ -206,6 +206,7 @@ def resolve_behavior(behavior: dict | None) -> tuple[dict, int, dict]:
     """
     if not isinstance(behavior, dict):
         return dict(BASELINE_RATES), 0, {}
+    behavior = _translate_console_behavior(behavior)
     rates = dict(BASELINE_RATES)
     for key, value in (behavior.get("rates") or {}).items():
         if key in BASELINE_RATES and isinstance(value, (int, float)):
@@ -214,6 +215,85 @@ def resolve_behavior(behavior: dict | None) -> tuple[dict, int, dict]:
     segment = {k: str(v) for k, v in (behavior.get("segment") or {}).items()
                if k in ("country", "device_type", "channel") and v}
     return rates, max(0, window), segment
+
+
+# The console's templates speak the SLOW generator's vocabulary: an event id and a traffic
+# multiplier. This generator speaks in rates. Each template names the step it thins, so the two
+# vocabularies do line up -- they were simply never connected, and `resolve_behavior` drops what it
+# does not recognise. Every template therefore ran as a no-op in fast mode: data was written, no
+# movement was planted, and the run reported success.
+_EVENT_TO_RATE = {
+    "loan.kyc_started.success": "kyc_start",
+    "loan.kyc_completed.success": "kyc_completion",
+    "loan.kyc.failure": "kyc_completion",        # more rejections == fewer completions
+    "loan.applied.success": "loan_application",
+    "loan.approved.success": "loan_approval",
+    "features.unlock.success": "pro_conversion",
+    "features.unlock.failed": "pro_conversion",  # more failures == fewer conversions
+    "card.activation.success": "card_activation",
+    "campaign.interaction.success": "campaign_reach",
+    "transaction.pay_now.success": "digital_share",
+}
+
+# Rates that are not a probability in [0, 1]. Clamping a weight to 1 would silently turn a
+# "withdrawals triple" template into a no-op.
+_UNBOUNDED_RATES = {"withdrawal_weight", "txn_max_per_day"}
+
+
+def _translate_console_behavior(behavior: dict) -> dict:
+    """Accept the console's template shape as well as this generator's own.
+
+    The console speaks the SLOW generator's vocabulary -- a list of `targets`, each an event id
+    with a traffic or failure multiplier -- while this one speaks in rates. Every template names
+    the step it thins, so the two do line up; they were simply never connected, and
+    `resolve_behavior` drops what it does not recognise. The result was that every template ran as
+    a no-op in fast mode: data was written, no movement was planted, and the run reported success.
+    """
+    if "rates" in behavior or "window_days" in behavior:
+        return behavior                                   # already native
+
+    out: dict = {"window_days": int(behavior.get("windowDays") or 0)}
+
+    segment = dict(behavior.get("segment") or {})
+    # The console says `location` where the metadata key is `country`; both name the same thing.
+    if "location" in segment and "country" not in segment:
+        segment["country"] = segment.pop("location")
+    out["segment"] = segment
+
+    # `targets` is a LIST. Reading it as a flat object silently matched nothing, which is the same
+    # failure this function exists to fix, one level down.
+    targets = behavior.get("targets")
+    if isinstance(behavior.get("id"), str):
+        targets = [behavior]                              # tolerate a single flat target too
+    rates: dict = {}
+    for target in targets or []:
+        if not isinstance(target, dict) or str(target.get("kind") or "event") != "event":
+            continue
+        key = _EVENT_TO_RATE.get(str(target.get("id") or ""))
+        if not key:
+            continue
+        base = BASELINE_RATES[key]
+        if isinstance(target.get("traffic"), (int, float)):
+            value = base * float(target["traffic"])
+        elif isinstance(target.get("failure"), (int, float)) and target["failure"] > 0:
+            # A failure multiplier is the same movement seen from the other side: 4x the failures
+            # leaves roughly a quarter of the successes.
+            value = base / float(target["failure"])
+        else:
+            continue
+        rates[key] = max(0.0, value if key in _UNBOUNDED_RATES else min(1.0, value))
+    if rates:
+        out["rates"] = rates
+
+    # A population-mix template moves WHO is active rather than any rate, so it carries no rate
+    # change and is expressed as the segment it concentrates on.
+    mix = behavior.get("mix") or {}
+    if mix and not out.get("segment"):
+        weights = mix.get("countryWeights") or mix.get("deviceWeights") or {}
+        top = max(weights, key=weights.get) if weights else ""
+        if top:
+            out["segment"] = {"country" if mix.get("countryWeights") else "device_type": top}
+    return out
 
 
 def _in_segment(segment: dict, country: str, device: str) -> bool:
@@ -360,7 +440,14 @@ def generate(tenant_id: str = "nexabank", users: int = 100, days: int = 30,
                 moved_days += 1
 
             day = start + timedelta(days=d, hours=random.randint(6, 21))
-            session = "fastsess_%s_%d" % (cid, d)
+            # Keyed on the DATE, not the day index. `d` is an offset into `days`, so a 7-day run
+            # produced ids _0.._6 that collided with a 30-day run's ids for dates a month earlier;
+            # fact_loan_applications is ReplacingMergeTree ORDER BY (tenant_id, application_id), so
+            # the new rows silently replaced that older history and moved it into the recent window.
+            # Row counts looked right, which is what made it invisible. A date key makes a re-run
+            # for the same customer-day idempotent and leaves every other day alone.
+            stamp = day.strftime("%Y%m%d")
+            session = "fastsess_%s_%s" % (cid, stamp)
             channel = random.choice(DIGITAL_CHANNELS)
             meta = _meta(branch, session, device, channel)
 
@@ -379,7 +466,7 @@ def generate(tenant_id: str = "nexabank", users: int = 100, days: int = 30,
                     # The loan funnel sits downstream of KYC, as the contract graph declares.
                     if random.random() < r["loan_application"]:
                         ev(LOAN_APPLIED, day + timedelta(seconds=300))
-                        app_id = "fastapp_%s_%d" % (cid, d)
+                        app_id = "fastapp_%s_%s" % (cid, stamp)
                         approved = random.random() < r["loan_approval"]
                         apps.append([app_id, tenant_id, cid, random.choice(LOAN_TYPES),
                                      "APPROVED" if approved else "REJECTED",
@@ -463,30 +550,45 @@ def generate(tenant_id: str = "nexabank", users: int = 100, days: int = 30,
     return written
 
 
-def purge(tenant_id: str = "nexabank") -> dict:
-    """Remove everything fast mode wrote, by its id prefix. Mock data must be reversible."""
+# How each table's mock rows are recognised. `events_raw` is matched on `ingest_path`, NOT on an
+# id prefix: fast mode generates activity for the bank's OWN customers, so `user_id` holds a real
+# customer id and the old `startsWith(user_id, 'fast_')` test matched nothing at all. Every event
+# fast mode ever wrote survived a purge that reported success, which is why a "reset" left the
+# clickstream KPIs exactly where they were. Only a `create_accounts` run ever minted `fast_` users.
+_PURGE_PREDICATE = {
+    "events_raw": "ingest_path = 'fast_seed'",
+    "fact_transactions": "startsWith(txn_id, 'fasttxn_')",
+    "fact_account_openings": "startsWith(customer_id, 'fast_')",
+    "fact_cards": "startsWith(card_id, 'fastcard_')",
+    "dim_customer": "startsWith(customer_id, 'fast_')",
+    "fact_campaign_interactions": "startsWith(interaction_id, 'fastint_')",
+    "fact_loan_applications": "startsWith(application_id, 'fastapp_')",
+}
+
+
+def purge(tenant_id: str = "nexabank", tables: list[str] | None = None) -> dict:
+    """Remove what fast mode wrote. Mock data must be reversible.
+
+    `tables` limits the reset to a subset. Resetting one KPI's history used to mean clearing every
+    table, so rebuilding the loan series also deleted 30k mock transactions and took the revenue
+    and deposit movements with it. A demo needs to rebuild one metric without collateral damage.
+    """
+    wanted = list(tables) if tables else list(_PURGE_PREDICATE)
+    unknown = [t for t in wanted if t not in _PURGE_PREDICATE]
+    if unknown:
+        raise ValueError("not tables fast mode writes: %s" % ", ".join(sorted(unknown)))
     removed = {}
     client = _client()
     try:
-        for table, col, prefix in (
-            ("events_raw", "user_id", "fast_"),
-            ("fact_transactions", "txn_id", "fasttxn_"),
-            ("fact_account_openings", "customer_id", "fast_"),
-            ("fact_cards", "card_id", "fastcard_"),
-            ("dim_customer", "customer_id", "fast_"),
-            ("fact_campaign_interactions", "interaction_id", "fastint_"),
-            ("fact_loan_applications", "application_id", "fastapp_"),
-        ):
+        for table in wanted:
+            predicate = _PURGE_PREDICATE[table]
             n = client.query(
-                f"SELECT count() FROM {DB}.{table} WHERE tenant_id = %(t)s "
-                f"AND startsWith({col}, %(p)s)",
-                parameters={"t": tenant_id, "p": prefix}).result_rows[0][0]
+                f"SELECT count() FROM {DB}.{table} WHERE tenant_id = %(t)s AND {predicate}",
+                parameters={"t": tenant_id}).result_rows[0][0]
             if n:
                 client.command(
-                    f"ALTER TABLE {DB}.{table} DELETE WHERE tenant_id = %(t)s "
-                    f"AND startsWith({col}, %(p)s)",
-                    parameters={"t": tenant_id, "p": prefix},
-                    settings={"mutations_sync": 1})
+                    f"ALTER TABLE {DB}.{table} DELETE WHERE tenant_id = %(t)s AND {predicate}",
+                    parameters={"t": tenant_id}, settings={"mutations_sync": 1})
             removed[table] = int(n)
     finally:
         try:

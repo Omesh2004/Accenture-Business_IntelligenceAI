@@ -713,14 +713,39 @@ router.post(
           users: Number.isFinite(rawCount) ? Math.max(1, Math.min(Math.floor(rawCount), 5000)) : 100,
           days: Number.isFinite(rawDays) ? Math.max(1, Math.min(Math.floor(rawDays), 365)) : 30,
           purge_first: Boolean((req.body as { purgeFirst?: unknown })?.purgeFirst),
+          // Scoped reset: clearing one KPI's history must not take the others' with it. Omitted
+          // means every table, which is the pre-existing behaviour.
+          purge_tables: (req.body as { purgeTables?: unknown })?.purgeTables ?? null,
+          // A fixed seed makes a paired before/after demo land on the SAME customer-days, so the
+          // second run replaces the first run's outcomes instead of adding a cohort beside them.
+          seed: Number.isFinite((req.body as { seed?: number })?.seed)
+            ? (req.body as { seed?: number }).seed
+            : null,
+          // Generation passes. One pass leaves a KPI as thin as 3 rows a day, under the loan
+          // contract's min_denominator; more passes raise density without moving the rates.
+          passes: Number.isFinite((req.body as { passes?: number })?.passes)
+            ? (req.body as { passes?: number }).passes
+            : 1,
           behavior: (req.body as { behavior?: unknown })?.behavior ?? null,
           create_accounts: Boolean((req.body as { createAccounts?: unknown })?.createAccounts),
         }, { timeout: 300000 });
+        // Report through the SAME field names slow mode uses. The console reads flat
+        // `simulatedUsers` / `eventsCreated` / `transactionsCreated`, while the generator returns
+        // its counts nested under `written` -- so every figure rendered as 0 and a run that had
+        // just written a thousand events looked like a no-op. Teaching the UI two response shapes
+        // would leave the same trap for the next reader; one shape is the fix.
+        const w = (r.data?.written ?? {}) as Record<string, number>;
         res.status(200).json({
           message: "Fast seed complete (pipeline bypassed)",
           mode: "fast",
           resolvedTenant: analyticsTenant,
           runMs: Date.now() - started,
+          simulatedUsers: w.users ?? 0,
+          usersCreated: w.dim_customer ?? 0,
+          transactionsCreated: w.fact_transactions ?? 0,
+          eventsCreated: w.events_raw ?? 0,
+          loanApplicationsCreated: w.fact_loan_applications ?? 0,
+          simulatedDays: w.days ?? 0,
           ...r.data,
         });
       } catch (err: unknown) {

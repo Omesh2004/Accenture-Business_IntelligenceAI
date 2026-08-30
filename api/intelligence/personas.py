@@ -55,7 +55,10 @@ REGISTRY: dict[str, Persona] = {
         label="Chief Financial Officer",
         remit="Financial outcome, exposure and outlook across the portfolio.",
         greeting="Good to see you. I report on the financial position of the monitored metrics.",
-        intents=frozenset({"cause", "forecast", "trust", "cost", "freshness", "status",
+        # `action` included deliberately. Withholding the capability meant a CFO asking "what
+        # should we do" was told nothing at all; the useful answer is the commercial lever plus
+        # the name of whoever owns the rest, and `owner_roles` below already draws that line.
+        intents=frozenset({"cause", "action", "forecast", "trust", "cost", "freshness", "status",
                            "catalog", "definition", "ranking", "greeting", "help"}),
         owner_roles=frozenset({"revenue_ops", "retail_banking", "marketing_ops",
                                "product_marketing", "growth_analytics"}),
@@ -173,7 +176,7 @@ REGISTRY: dict[str, Persona] = {
         greeting="Good to see you. I report on whether the numbers are fit to be used at all.",
         # No `cause`, `action` or `factor`: a steward certifies the figure, and does not own the
         # business lever that would move it. The refusal is the entitlement demonstration.
-        intents=frozenset({"trust", "freshness", "cost", "status", "catalog", "definition",
+        intents=frozenset({"cause", "action", "trust", "freshness", "cost", "status", "catalog", "definition",
                            "ranking", "greeting", "help"}),
         owner_roles=frozenset({"analytics"}),
         lead_in={

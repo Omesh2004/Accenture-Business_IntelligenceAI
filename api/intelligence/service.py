@@ -64,8 +64,17 @@ async def run_investigation_sweep(interval_minutes: int = None) -> None:
             ml = ClickHouseMetricLayer()
             orch = Orchestrator(ml)
             for tenant in TENANTS:
+                # Refit the band inside the sweep rather than trusting the hourly batch.
+                #
+                # The two loops run at different intervals (15 min against 60), so for up to
+                # three quarters of an hour an investigation scored against a band fitted on
+                # older data. While data was actively arriving that produced a finding which
+                # contradicted itself: "it read 0.48, the band runs 0 to 0.01, there is no
+                # movement to explain" -- the verdict came from one run and the band from the
+                # next. A decision and the band it was made against have to come from the same
+                # read, and the only way to guarantee that is to take both here.
                 results = orch.sweep(tenant, current_window(), dataset=DATASET,
-                                     run_forecast=False)
+                                     run_forecast=True)
                 fired = sum(1 for r in results if r.get("anomaly"))
                 logger.info("sweep: tenant=%s investigations=%d anomalies=%d",
                             tenant, len(results), fired)
