@@ -4,7 +4,7 @@
  * Dashboard layout component.
  * Wraps dashboard pages with sidebar and top navbar.
  * Handles responsive sidebar behavior.
- * Pages manage their own loading states — no global overlay.
+ * Pages manage their own loading states, no global overlay.
  */
 
 import { ReactNode } from 'react';
@@ -12,6 +12,7 @@ import Sidebar from '@/components/Sidebar';
 import TopNavbar from '@/components/TopNavbar';
 import { useAppSelector, RootState } from '@/lib/store';
 import AuthGuard from '@/components/AuthGuard';
+import PageTransition from '@/components/PageTransition';
 import { useRealtimeEvents } from '@/hooks/useRealtimeEvents';
 import { Activity } from 'lucide-react';
 
@@ -25,7 +26,7 @@ export default function DashboardLayoutClient({ children }: DashboardLayoutProps
 
   return (
     <AuthGuard>
-    <div className="min-h-screen bg-[#f8f9fa] font-sans relative">
+    <div className="min-h-screen bg-[var(--color-bg-secondary)] font-sans relative">
       {/* Sidebar - hidden on mobile via CSS, toggled via Redux */}
       <div className="hidden lg:block print:hidden">
         <Sidebar />
@@ -52,7 +53,9 @@ export default function DashboardLayoutClient({ children }: DashboardLayoutProps
         </div>
 
         <main className="p-4 lg:p-6 max-w-[1600px] mx-auto print:p-0 print:max-w-none min-h-[calc(100vh-64px)]">
-          {children}
+          {/* One entrance animation for every route, so navigation feels like one product rather
+              than a set of pages that each decided separately whether to animate. */}
+          <PageTransition>{children}</PageTransition>
         </main>
       </div>
     </div>

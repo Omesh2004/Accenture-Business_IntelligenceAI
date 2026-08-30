@@ -44,7 +44,7 @@ export default function AppOverviewPage({ params }: { params: { appId: string } 
                 <div className="flex items-center gap-3 mb-4 text-gray-500">
                   <span className="font-medium">{metric.label}</span>
                 </div>
-                <h2 className="text-3xl font-bold text-gray-900">{metric.value}</h2>
+                <h2 className="num text-3xl font-bold text-gray-900">{metric.value}</h2>
               </div>
             ))}
           </div>

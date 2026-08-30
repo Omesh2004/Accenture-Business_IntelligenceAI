@@ -68,7 +68,7 @@ export default function AdminSummaryPage() {
           </div>
           <div>
             <p className="text-sm font-medium text-gray-500">Total Active Tenants</p>
-            <h2 className="text-3xl font-bold text-gray-900">{data?.available === false ? '—' : (data?.total_tenants ?? '—')}</h2>
+            <h2 className="num text-3xl font-bold text-gray-900">{data?.available === false ? '-' : (data?.total_tenants ?? '-')}</h2>
           </div>
         </div>
 
@@ -78,7 +78,7 @@ export default function AdminSummaryPage() {
           </div>
           <div>
             <p className="text-sm font-medium text-gray-500">Total Events Processed ({data?.time_range ?? '30d'})</p>
-            <h2 className="text-3xl font-bold text-gray-900">{data?.available === false ? '—' : (data?.total_events ?? 0).toLocaleString()}</h2>
+            <h2 className="num text-3xl font-bold text-gray-900">{data?.available === false ? '-' : (data?.total_events ?? 0).toLocaleString()}</h2>
           </div>
         </div>
       </div>

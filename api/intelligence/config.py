@@ -58,16 +58,29 @@ PROMOTION_MARGIN = _f("INTEL_PROMOTION_MARGIN", 0.95)
 Z_95 = _f("INTEL_Z_95", 1.959964)
 MAD_TO_SIGMA = _f("INTEL_MAD_TO_SIGMA", 1.4826)
 COLD_START_CONFIDENCE = _f("INTEL_COLD_START_CONFIDENCE", 0.3)
+# Narrowest band a RATE may be given. The count floor of 1.0 spans all of [0,1] on a ratio,
+# which made every rate movement land inside its own band.
+RATE_SPREAD_FLOOR = _f("INTEL_RATE_SPREAD_FLOOR", 0.01)
 
 # --- localize ---------------------------------------------------------------
 MAX_CAUSES = _i("INTEL_MAX_CAUSES", 5)
+# A cell must move this much faster than the population, in relative terms, to be a driver.
+# Without it Localize ranks the population: rank 1 was USA at 16.9% of the movement against a
+# 16.5% natural share -- the distribution restated as a cause (CLAUDE.md rule 13).
+LOCALIZE_BASE_RATE_MARGIN = _f("INTEL_LOCALIZE_BASE_RATE_MARGIN", 0.15)
+# How much volume the baseline needs, relative to the current window, before its distribution is
+# trusted as the population estimate. Unit-free on purpose: a row threshold is meaningless for a
+# currency sum. Under this the share is taken from the current window instead -- 66 openings split
+# six ways gave North America 19.7% by chance, and its ordinary 25.3% then read as concentration.
+LOCALIZE_MIN_BASELINE_SHARE = _f("INTEL_LOCALIZE_MIN_BASELINE_SHARE", 0.05)
 
 # --- trust gate -------------------------------------------------------------
 # A daily series is at best one bucket stale, so a streaming SLA can never pass on daily grain.
 DAILY_FRESHNESS_FLOOR_MIN = _i("INTEL_DAILY_FRESHNESS_FLOOR_MIN", 1440)
 
 # --- narrate ----------------------------------------------------------------
-PERSONAS = _list("INTEL_PERSONAS", "cfo,ops_manager,analyst")
+PERSONAS = _list("INTEL_PERSONAS",
+                 "cfo,ops_manager,analyst,marketing_lead,risk_officer,data_steward")
 DEFAULT_PERSONA = _s("INTEL_DEFAULT_PERSONA", "analyst")
 VERIFIER_TOLERANCE = _f("INTEL_VERIFIER_TOLERANCE", 0.01)
 
@@ -77,6 +90,24 @@ LLM_BASE_URL = _s("VLLM_URL", "http://vllm-server:8000/v1")
 # Empty means "ask the server what it serves" -- no model name is assumed anywhere.
 LLM_MODEL = _s("INTEL_LLM_MODEL", "")
 LLM_MAX_ATTEMPTS = _i("INTEL_LLM_MAX_ATTEMPTS", 2)
+
+# Let the model re-word each part of an ANSWER. Off by default, and the default is a measurement
+# rather than caution: on the 1.5B tier that fits a 6GB card, rewriting degraded the answer in
+# three distinct ways that the numeric verifier cannot see, because none of them changes a figure.
+#
+#   * a figure moved into a clause it does not belong to
+#     "the rate increased from 236 to 29 August 2026"
+#   * a unit silently dropped inside a list where every other item kept it
+#     "the North America region (22.8)" among shares written as 22.8%
+#   * a comparison the pipeline never made, asserted as fact
+#     "remained at 0.9, indicating no change from its previous value" -- Detect compared the
+#     reading to a FORECAST BAND, not to a previous value
+#
+# The last one is the reason this is a flag and not a tighter guard: it invents a relationship
+# while using only approved numbers, so there is nothing syntactic left to check. A larger model
+# is the fix; until one is serving, the deterministic wording is the better answer and is also
+# strictly more informative, because it states the band.
+LLM_NARRATE_SECTIONS = _s("INTEL_LLM_NARRATE_SECTIONS", "0") == "1"
 LLM_TIMEOUT_S = _i("INTEL_LLM_TIMEOUT_S", 60)
 LLM_MAX_TOKENS = _i("INTEL_LLM_MAX_TOKENS", 400)
 LLM_TEMPERATURE = _f("INTEL_LLM_TEMPERATURE", 0.0)

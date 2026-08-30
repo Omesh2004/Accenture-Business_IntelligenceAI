@@ -55,7 +55,7 @@ fundamentals:
     engine_type: sql
 
 dimensions:
-  allowed: [network, region, card_type, status]
+  allowed: [network, region, country, card_type, status]
   max_depth: 1
   min_segment_volume: 2
   availability:
@@ -129,7 +129,7 @@ lineage:
     exist yet, so no monetary figure may be reported for it at all.
 
 access_restriction:
-  visible_to: [cfo, ops_manager, analyst]
+  visible_to: [cfo, ops_manager, analyst, marketing_lead, data_steward]
   suppress_for_others: []
 
 observability:

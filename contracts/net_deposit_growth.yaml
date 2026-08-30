@@ -80,7 +80,7 @@ decomposition:
 dimensions:
   # Real columns on fact_transactions. region and branch_code come from the account's branch,
   # which is invariant within a transaction, so contributions are meaningful rather than dice.
-  allowed: [region, branch_code, channel, txn_type, category]
+  allowed: [region, country, branch_code, channel, txn_type, category]
   max_depth: 2
   min_segment_volume: 3
   availability:
@@ -164,7 +164,7 @@ lineage:
     telemetry KPIs may not.
 
 access_restriction:
-  visible_to: [cfo, ops_manager, analyst]
+  visible_to: [cfo, ops_manager, analyst, data_steward]
   suppress_for_others: []
 
 observability:

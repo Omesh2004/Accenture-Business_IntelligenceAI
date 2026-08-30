@@ -418,7 +418,7 @@ def _conversational(tenant_id, question, persona, intent, trace) -> Answer:
                 _pretty(k) for k in moved[:4]))
         elif quiet:
             parts.append("Nothing is currently outside its expected band.")
-        parts.append("Ask me anything about them — for example “%s”."
+        parts.append("Ask me anything about them. For example: “%s”."
                      % (profile.examples[0] if profile.examples else "What drove the change?"))
     else:
         parts = ["As %s you can ask about: %s." % (
@@ -806,17 +806,20 @@ def _answer_cost(tenant_id, question, persona, trace=None) -> Answer:
     return _finish(question, persona, "cost", {"kpi_id": ""}, cs, draft, trace=trace)
 
 
-def ask(tenant_id: str, question: str, persona: str, engine: str = "auto") -> dict:
+def ask(tenant_id: str, question: str, persona: str, engine: str = "auto", emit=None) -> dict:
     """Entry point. Runs the orchestration loop, then records the call as a model_run.
 
     The loop owns the decision of which capabilities to use; `answer_question` below remains as
     the single-shot router and is what the loop degrades to if the loop itself cannot run.
+
+    `emit` receives each trace step as it happens, for the streaming endpoint. It is never given
+    to the fallback router, which has no incremental trace to publish.
     """
     started = time.time()
     from api.intelligence import loop, tools as tool_registry
 
     try:
-        res = loop.run(tenant_id, question, persona, engine=engine)
+        res = loop.run(tenant_id, question, persona, engine=engine, emit=emit)
         payload = res.as_dict()
         seen: list[str] = []
         for name in res.tools_used:
@@ -853,3 +856,55 @@ def ask(tenant_id: str, question: str, persona: str, engine: str = "auto") -> di
         # Telemetry must never take down an answer.
         pass
     return payload
+
+
+def ask_stream(tenant_id: str, question: str, persona: str, engine: str = "auto"):
+    """The same answer, published step by step as the agent reasons.
+
+    The loop is synchronous and runs its tool calls on a thread pool, so it is driven on a worker
+    thread here and its steps are handed over a queue. Nothing about the reasoning changes: this
+    yields exactly the trace `ask` would have returned in one piece, and the same final payload.
+    """
+    import json
+    import queue
+    import threading
+
+    from api.intelligence import gates
+
+    channel: queue.Queue = queue.Queue()
+    box: dict = {}
+
+    def emit(step: dict) -> None:
+        # `_event` marks a non-step publication (a result table, a chart) so the client can route
+        # it to the workspace instead of appending it to the reasoning trail.
+        kind = step.pop("_event", None) if isinstance(step, dict) else None
+        channel.put((kind or "step", step))
+
+    def drive() -> None:
+        try:
+            box["payload"] = ask(tenant_id, question, persona, engine=engine, emit=emit)
+        except Exception as exc:                                    # noqa: BLE001
+            box["error"] = str(exc)
+        finally:
+            channel.put(("done", None))
+
+    worker = threading.Thread(target=drive, daemon=True)
+
+    def event(kind: str, data) -> str:
+        return "event: %s\ndata: %s\n\n" % (kind, json.dumps(data, default=str))
+
+    # The rail is sent first so the UI can render every gate as pending before any of them runs.
+    yield event("rail", {"gates": gates.catalogue(), "question": question, "persona": persona})
+    worker.start()
+    while True:
+        kind, data = channel.get()
+        if kind == "done":
+            break
+        yield event(kind, data)
+    worker.join(timeout=5)
+
+    if "error" in box:
+        yield event("error", {"detail": box["error"]})
+    else:
+        yield event("answer", box.get("payload") or {})
+    yield event("end", {})

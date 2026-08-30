@@ -4,7 +4,7 @@ import { useEffect, useCallback, useMemo, useRef } from 'react';
 import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useAppDispatch, useAppSelector } from '@/lib/store';
 import { setTimeRange, setSelectedTenants, updateRealTimeUsers, updateKPIMetrics } from '@/lib/dashboardSlice';
-import { TimeRange, LocationData, AuditLog } from '@/types';
+import { TimeRange, LocationData, AuditLog, DimensionProvenance } from '@/types';
 import { useSession } from 'next-auth/react';
 import { usePathname } from 'next/navigation';
 import { dashboardAPI } from '@/lib/api';
@@ -33,7 +33,7 @@ function timeRangeToParam(tr: TimeRange): string {
 
 /**
  * Central dashboard hook. Single source of truth for tenants + timeRange.
- * All pages MUST use this hook — never derive tenant arrays locally.
+ * All pages MUST use this hook, never derive tenant arrays locally.
  */
 export function useDashboardData() {
   const dispatch = useAppDispatch();
@@ -145,11 +145,10 @@ export function useDashboardData() {
         pagesPerMinute,
         topPages,
         deviceBreakdown,
-        acquisitionChannels,
         locations,
         auditLogs,
         featureConfigs,
-        retentionData,
+        dimensionProvenance,
       ] = await Promise.all([
         dashboardAPI.getKPIMetrics(tenantsParam, rangeParam),
         dashboardAPI.getSecondaryKPIMetrics(tenantsParam, rangeParam),
@@ -163,7 +162,6 @@ export function useDashboardData() {
         dashboardAPI.getPagesPerMinute(tenantsParam),
         dashboardAPI.getTopPages(tenantsParam, rangeParam),
         dashboardAPI.getDeviceBreakdown(tenantsParam, rangeParam),
-        dashboardAPI.getAcquisitionChannels(tenantsParam, rangeParam),
         mayReadDetailedAnalytics
           ? dashboardAPI.getLocations(tenantsParam, rangeParam)
           : Promise.resolve([] as LocationData[]),
@@ -171,7 +169,11 @@ export function useDashboardData() {
           ? dashboardAPI.getAuditLogs(tenantsParam, rangeParam)
           : Promise.resolve([] as AuditLog[]),
         dashboardAPI.getFeatureConfigs(tenantsParam, rangeParam),
-        dashboardAPI.getRetentionData(tenantsParam, rangeParam),
+        // Same gate as locations/devices: it describes those charts, so it must not be
+        // reachable where they are not.
+        mayReadDetailedAnalytics
+          ? dashboardAPI.getDimensionProvenance(tenantsParam, rangeParam)
+          : Promise.resolve({} as Record<string, DimensionProvenance>),
       ]);
 
       return {
@@ -188,11 +190,10 @@ export function useDashboardData() {
         pagesPerMinute,
         topPages,
         deviceBreakdown,
-        acquisitionChannels,
         locations,
         auditLogs,
         featureConfigs,
-        retentionData,
+        dimensionProvenance,
       };
     },
     // Keep data responsive while avoiding noisy re-fetching.
@@ -269,7 +270,7 @@ export function useDashboardData() {
     timeRange: dashboardState.timeRange,
     deploymentMode: dashboardState.deploymentMode,
     sidebarCollapsed: dashboardState.sidebarCollapsed,
-    // Computed API params — pages MUST use these, never derive their own
+    // Computed API params, pages MUST use these, never derive their own
     tenantsParam,
     rangeParam,
     // React Query data
@@ -286,11 +287,10 @@ export function useDashboardData() {
     pagesPerMinute: dashboardData?.pagesPerMinute || [],
     topPages: dashboardData?.topPages || [],
     deviceBreakdown: dashboardData?.deviceBreakdown || [],
-    acquisitionChannels: dashboardData?.acquisitionChannels || [],
     locations: dashboardData?.locations || [],
+    dimensionProvenance: dashboardData?.dimensionProvenance || {},
     auditLogs: dashboardData?.auditLogs || [],
     featureConfigs: dashboardData?.featureConfigs || [],
-    retentionData: dashboardData?.retentionData || [],
     aiInsights: aiInsightsData || [],
     isLoading,
     isFetching,

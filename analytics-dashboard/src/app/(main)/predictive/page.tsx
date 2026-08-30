@@ -175,7 +175,7 @@ export default function PredictivePage() {
           <p className="text-xs uppercase tracking-wide text-gray-500">
             Features Modeled
           </p>
-          <p className="mt-2 text-2xl font-semibold text-gray-900">
+          <p className="num mt-2 text-2xl font-semibold text-gray-900">
             {summary.total}
           </p>
         </article>
@@ -183,7 +183,7 @@ export default function PredictivePage() {
           <p className="text-xs uppercase tracking-wide text-gray-500">
             Average Score
           </p>
-          <p className="mt-2 text-2xl font-semibold text-[#1a73e8]">
+          <p className="num mt-2 text-2xl font-semibold text-[#1a73e8]">
             {summary.avgScore.toFixed(1)}
           </p>
         </article>
@@ -191,7 +191,7 @@ export default function PredictivePage() {
           <p className="text-xs uppercase tracking-wide text-gray-500">
             High Adoption
           </p>
-          <p className="mt-2 text-2xl font-semibold text-gray-900">
+          <p className="num mt-2 text-2xl font-semibold text-gray-900">
             {summary.highAdoption}
           </p>
         </article>
@@ -199,7 +199,7 @@ export default function PredictivePage() {
           <p className="text-xs uppercase tracking-wide text-gray-500">
             At Risk
           </p>
-          <p className="mt-2 text-2xl font-semibold text-gray-900">
+          <p className="num mt-2 text-2xl font-semibold text-gray-900">
             {summary.atRisk}
           </p>
         </article>
@@ -207,7 +207,7 @@ export default function PredictivePage() {
           <p className="text-xs uppercase tracking-wide text-gray-500">
             Projected 7d Volume
           </p>
-          <p className="mt-2 text-2xl font-semibold text-gray-900">
+          <p className="num mt-2 text-2xl font-semibold text-gray-900">
             {summary.projectedTotal7d.toLocaleString()}
           </p>
         </article>
@@ -343,10 +343,13 @@ export default function PredictivePage() {
                         ? "Declining"
                         : "Stable";
 
+                  // Every row in this table IS an anomaly, so tinting all of them carried no
+                  // information; it just made the panel read as one large warning. A left rule
+                  // marks the section, and the row itself stays neutral and legible.
                   return (
                     <tr
                       key={a.feature_name}
-                      className="border-b border-gray-100 bg-yellow-50  hover:bg-yellow-100 transition"
+                      className="border-b border-gray-100 border-l-2 border-l-(--color-warning) transition hover:bg-gray-50"
                     >
                       {/* Feature */}
                       <td className="px-6 py-4 font-medium text-gray-900">
@@ -377,7 +380,7 @@ export default function PredictivePage() {
                       <td className="px-6 py-4 text-gray-900">
                         {a.projected_next_7d
                           ? a.projected_next_7d.toLocaleString()
-                          : "—"}
+                          : "-"}
                       </td>
                     </tr>
                   );
@@ -424,18 +427,26 @@ export default function PredictivePage() {
               {sortedPredictions.map((p) => (
                 <tr
                   key={p.feature_name}
-                  className={`border-b border-gray-100 hover:bg-gray-100 transition-colors ${p.anomaly ? "bg-yellow-50 hover:bg-yellow-100" : ""}`}
+                  className={`border-b border-gray-100 transition-colors hover:bg-gray-50 ${
+                    p.anomaly ? "border-l-2 border-l-(--color-warning)" : ""
+                  }`}
                 >
                   <td className="px-4 py-3 whitespace-nowrap font-medium text-gray-900">
                     {p.feature_name}
+                    {/* This span was EMPTY: a 10px bold amber marker with no content, so an
+                        anomaly row carried no marker at all. Only the row tint distinguished it,
+                        and the tint is now gone, so the label has to actually say something. */}
                     {p.anomaly && (
-                      <span className="ml-1.5 text-amber-600 text-[10px] font-bold"></span>
+                      <span
+                        className="ml-2 rounded-full px-1.5 py-0.5 text-[10px] font-semibold tracking-wider uppercase"
+                        style={{ background: "var(--color-primary-lightest)", color: "var(--color-warning)" }}
+                      >
+                        anomaly
+                      </span>
                     )}
                   </td>
                   <td
-                    className={`px-4 py-3 whitespace-nowrap font-bold text-lg ${
-                      p.anomaly ? "text-yellow-600" : getScoreColor(p.score)
-                    }`}
+                    className={`px-4 py-3 whitespace-nowrap font-bold text-lg ${getScoreColor(p.score)}`}
                   >
                     {p.score}
                   </td>
@@ -458,7 +469,7 @@ export default function PredictivePage() {
                     </div>
                   </td>
                   <td className="px-4 py-3 whitespace-nowrap text-right font-mono text-xs">
-                    {p.projected_next_7d?.toLocaleString() ?? "—"}
+                    {p.projected_next_7d?.toLocaleString() ?? "-"}
                   </td>
                   <td className="px-4 py-3 whitespace-nowrap text-right font-mono text-xs">
                     {p.users_pct}%

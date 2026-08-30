@@ -89,11 +89,15 @@ class TestQuantity:
 
 
 class TestScoredMeasure:
-    def test_a_ratio_contract_reports_the_fundamental_it_is_scored_on(self):
+    def test_a_ratio_with_a_denominator_is_scored_on_the_rate_itself(self):
+        """Detect scores the rate, so there is no proxy count to declare and no per-day noun.
+
+        This asserted the opposite while Detect scored the numerator: a rate that fell was
+        published as "Digital Adoption Rate rose 3463.6%" of a count.
+        """
         measure, cadence, proxy = phrasing.scored_measure("digital_adoption_rate")
-        assert measure == "digital transactions"
-        assert cadence == "daily"
-        assert proxy is True, "a ratio scored on its numerator must be marked a proxy"
+        assert (measure, cadence) == ("", "")
+        assert proxy is False
 
     def test_a_count_contract_is_not_a_proxy(self):
         _measure, _cadence, proxy = phrasing.scored_measure("new_account_openings")

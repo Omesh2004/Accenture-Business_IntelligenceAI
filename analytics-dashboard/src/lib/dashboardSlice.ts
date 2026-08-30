@@ -1,7 +1,7 @@
 /**
  * Dashboard Redux slice.
  * Single source of truth for: selectedTenants, timeRange, deploymentMode.
- * Data fetching is handled entirely by React Query — not Redux.
+ * Data fetching is handled entirely by React Query, not Redux.
  */
 
 import { createSlice, PayloadAction } from '@reduxjs/toolkit';

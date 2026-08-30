@@ -63,6 +63,33 @@ class Series:
         return sorted(self.points)
 
 
+def ratio_series(metric_layer, tenant_id: str, contract, window: Window) -> Series | None:
+    """Daily rate for a ratio contract, or None when it has no usable denominator.
+
+    Detect scored the NUMERATOR for every ratio KPI, so a conversion rate that halved while
+    volume grew read as an urgent rise. The rate is the quantity the contract names, so it is
+    the quantity scored. Localize still works on the additive fundamentals -- a rate cannot be
+    decomposed across cells (docs/KPI_CONTRACT.md).
+
+    A module function rather than a MetricSource method so the stub layer needs no change.
+    """
+    num_spec, den_spec = contract.numerator(), contract.denominator()
+    if not num_spec or not den_spec:
+        return None
+    num = metric_layer.fundamental_series(tenant_id, num_spec, window)
+    den = metric_layer.fundamental_series(tenant_id, den_spec, window)
+    known = {d: num.points.get(d, 0.0) / den.points[d]
+             for d in den.points if den.points[d] > 0}
+    if not known:
+        return None
+    # A day with no denominator has an UNDEFINED rate, not a zero one. Filling it with zero
+    # manufactures the collapse this function exists to detect, so it takes the median of the
+    # days that do have one -- neutral, and it keeps seasonal_naive's lag aligned.
+    filler = sorted(known.values())[len(known) // 2]
+    points = {d: round(known.get(d, filler), config.ROUND_DP) for d in sorted(den.points)}
+    return Series(kpi_id=str(contract.id), points=points)
+
+
 class MetricSource(Protocol):
     """Implemented by ClickHouseMetricLayer (live) and StubMetricLayer (tests)."""
 

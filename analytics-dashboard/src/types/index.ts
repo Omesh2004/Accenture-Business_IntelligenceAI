@@ -2,7 +2,7 @@
  * Core type definitions for the analytics dashboard.
  * All data models, component props, and API response types are defined here
  * to enforce strict typing across the application.
- * No `any` types — strict TypeScript throughout.
+ * No `any` types, strict TypeScript throughout.
  */
 
 /* ─────────────── Data Models ─────────────── */
@@ -160,6 +160,24 @@ export interface TopPage {
 export interface LocationData {
   country: string;
   visits: number;
+}
+
+/** Provenance of one metadata dimension: measured by a client, or invented by a producer. */
+export interface DimensionProvenance {
+  simulated_events: number;
+  total_events: number;
+  simulated_pct: number;
+  /** True when ANY event declared this key fabricated. A partly-invented dimension cannot
+   *  carry a contribution share honestly, so there is no threshold below which it is fine. */
+  simulated: boolean;
+}
+
+/** Response of GET /metrics/dimension_provenance, keyed by metadata dimension. */
+export interface DimensionProvenanceResponse {
+  tenant_id: string;
+  time_range: string;
+  total_events: number;
+  dimensions: Record<string, DimensionProvenance>;
 }
 
 /* ─────────────── AI Insights ─────────────── */
@@ -443,6 +461,24 @@ export interface AgentStep {
   status: 'ok' | 'skipped' | 'abstained' | 'failed';
   ms: number;
   kind: 'reason' | 'act' | 'observe' | 'validate' | 'synthesize';
+  /** Pipeline gate this step answered for; empty for infrastructure steps. */
+  gate: string;
+  /** The numbers this step read, each carrying the table it came from. */
+  evidence: EvidenceClaim[];
+  citation: string;
+  why: string;
+}
+
+/** One stage of the pipeline, with what it decided on this run, or why it did not run. */
+export interface AgentGate {
+  id: string;
+  label: string;
+  question: string;
+  engine: string;
+  status: 'idle' | 'engaged' | 'skipped' | 'failed' | 'restricted';
+  detail: string;
+  tools: string[];
+  claims: number;
 }
 
 /** Where a figure came from: the capability that produced it and the table it read. */
@@ -479,6 +515,58 @@ export interface AgentAnswer {
   sections: AgentSection[];
   confidence: number;
   uncertainty: string[];
+  /** Every pipeline gate with its outcome, including the ones that did not run and why. */
+  rail: AgentGate[];
+  /** Charts built from the observations the agent already read, never from a second query. */
+  visuals: AgentVisual[];
+  /** The result sets behind the narrative, the rows the prose is speaking from. */
+  datasets: AgentDataset[];
+}
+
+/** A metric's real daily path, read through the Metric Layer. */
+export interface KpiSeries {
+  kpi_id: string;
+  name: string;
+  /** 'ratio' when the rate itself was charted; 'count' when it fell back to the numerator. */
+  unit: 'ratio' | 'count';
+  measure: string;
+  points: { date: string; value: number }[];
+  days: number;
+  source: string;
+  /** The stored band. Flat by construction, one row, no per-day path. */
+  forecast?: {
+    point: number;
+    lower: number;
+    upper: number;
+    method: string;
+    horizon_days: number;
+    flat: boolean;
+  };
+  /** Set instead of `forecast` when the stored band is not on this series' scale. */
+  forecast_withheld?: string;
+  detail?: string;
+}
+
+/** One result set, as the workspace displays it. */
+export interface AgentDataset {
+  title: string;
+  columns: string[];
+  rows: (string | number | null)[][];
+  source: string;
+  tool: string;
+}
+
+/** A chart the run can honestly draw. `source` is the table its numbers were read from. */
+export interface AgentVisual {
+  kind: 'bars' | 'delta';
+  title: string;
+  subtitle: string;
+  unit: string;
+  series: { label: string; value: number; severity?: string }[];
+  pct_change?: number;
+  source: string;
+  gate: string;
+  tool: string;
 }
 
 /** A labelled part of an answer, named after the intent the capability behind it serves. */
@@ -487,6 +575,10 @@ export interface AgentSection {
   text: string;
   tool: string;
   source: string;
+  /** 'findings' renders as a bulleted list; 'prose' renders as a paragraph. A greeting split into
+   *  five bullets under a heading reads as five findings, which is what it looked like. */
+  kind?: 'findings' | 'prose';
+  slot?: string;
 }
 
 /** A persona view the signed-in role may switch to. The list is server-authored. */

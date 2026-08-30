@@ -158,10 +158,19 @@ prose anywhere in this layer, any digit in it must come from a claim or from a `
   From the host: `cd e2e && DASHBOARD_URL=http://localhost:3001 NEXABANK_URL=http://localhost:3002
   node node_modules/playwright/cli.js test tests/<spec>`. If the browser is missing,
   `node node_modules/playwright/cli.js install chromium`.
-- **The dashboard can serve a stale compile.** Turbopack's file watcher does not reliably see
-  writes through a Windows bind mount. An edit to `analytics-dashboard/src` may silently not take
-  effect — `docker compose restart analytics-dashboard`. Do not judge a frontend change visually
-  without ruling this out; it has masked correct work more than once.
+- **Every bind-mounted watcher can serve a stale compile, not just the dashboard.** File watchers
+  do not reliably see writes through a Windows bind mount, so an edit can silently not take effect
+  and a correct change looks broken. This has now cost time on both watchers:
+  - `analytics-dashboard/src` (Turbopack) — `docker compose restart analytics-dashboard`
+  - `NexaBank/backend/src` (nodemon, `npx ts-node src/server.ts`) —
+    `docker compose restart nexabank-backend`, then wait for boot; it re-runs the Prisma seed
+    first, so the port is refused for ~10-20s and a request in that gap is `ECONNREFUSED`, not a
+    failure of your change.
+
+  Restart before judging any edit to those two trees. `tsc --noEmit` passing proves the mount is
+  current; it proves nothing about the *running process*. Note the contrast with the three Python
+  services, which bind-mount nothing and need a `--build` — three trees, three different reasons
+  an edit does not take, and only this one is silent.
 - **Python services bake their source.** `docker compose up -d --build analytics-api` after *any*
   Python edit. `--reload` in the compose command is watching files that never change.
 - **Heredocs break on apostrophes** in this shell (`cat > f <<'EOF'`, `python - <<'PY'` with a

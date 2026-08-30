@@ -52,6 +52,7 @@ router.get("/extract/transactions", async (req: Request, res: Response): Promise
         direction: senderIsOwn ? "out" : "in",
         branch_code: owner?.branchCode || "",
         region: owner?.branch?.region || "",
+        country: owner?.branch?.country || "",
         mcc: t.merchantCategoryCode || "",
         merchant_name: t.merchantName || "",
         reference_number: t.referenceNumber || "",
@@ -113,77 +114,6 @@ router.get("/extract/loan_applications", async (req: Request, res: Response): Pr
   }
 });
 
-// ─── GET /api/extract/loans ────────────────────────────────────────────────
-router.get("/extract/loans", async (req: Request, res: Response): Promise<void> => {
-  if (!requireExtractToken(req, res)) return;
-  try {
-    const { since, sinceId, limit } = parseParams(req);
-    const rows = await prisma.loan.findMany({
-      where: keysetWhere("updatedOn", since, sinceId),
-      orderBy: [{ updatedOn: "asc" }, { id: "asc" }],
-      take: limit,
-      include: { Account: { include: { customer: true } } },
-    });
-    const records = rows.map((l) => ({
-      loan_id: l.id,
-      tenant_id: analyticsTenant(l.Account?.customer?.tenantId || "bank_a"),
-      account_no: l.accNo,
-      loan_type: l.loanType,
-      principal_amount: l.principalAmount,
-      interest_amount: l.interestAmount,
-      interest_rate: l.interestRate,
-      term_months: l.term,
-      due_amount: l.dueAmount,
-      is_active: l.status === "ACTIVE" ? 1 : 0,
-      loan_status: l.status,
-      started_at: l.startDate.toISOString(),
-      updated_at: l.updatedOn.toISOString(),
-    }));
-    res.json({
-      entity: "loans", count: records.length,
-      watermark: nextWatermark(rows.map((r) => ({ ts: r.updatedOn })), since),
-      cursor_id: nextCursorId(rows, sinceId),
-      has_more: records.length === limit, records,
-    });
-  } catch (err) {
-    res.status(500).json({ error: String(err) });
-  }
-});
 
-// ─── GET /api/extract/account_snapshot ─────────────────────────────────────
-// A point-in-time SNAPSHOT, not a change feed: balances have no history in the source, so the
-// loader stamps the extract date. Snapshots must never be summed across dates downstream.
-router.get("/extract/account_snapshot", async (req: Request, res: Response): Promise<void> => {
-  if (!requireExtractToken(req, res)) return;
-  try {
-    const { limit } = parseParams(req);
-    const offset = Math.max(0, Number(req.query.offset) || 0);
-    const rows = await prisma.account.findMany({
-      orderBy: { accNo: "asc" }, take: limit, skip: offset,
-      include: { customer: true, branch: true },
-    });
-    const records = rows.map((a) => ({
-      account_no: a.accNo,
-      tenant_id: analyticsTenant(a.customer?.tenantId || "bank_a"),
-      customer_id: a.customerId,
-      account_type: a.accountType,
-      balance: a.balance,
-      // Derived from the business lifecycle, not the operational transact flag, so analytics has
-      // one definition of "active".
-      is_active: a.lifecycleStatus === "ACTIVE" ? 1 : 0,
-      lifecycle_status: a.lifecycleStatus,
-      interest_rate: a.interestRate,
-      branch_code: a.branchCode || "",
-      region: a.branch?.region || "",
-      opened_at: a.createdOn.toISOString(),
-    }));
-    res.json({
-      entity: "account_snapshot", count: records.length,
-      offset, has_more: records.length === limit, records,
-    });
-  } catch (err) {
-    res.status(500).json({ error: String(err) });
-  }
-});
 
 export default router;

@@ -30,6 +30,7 @@ export default function DashboardContent() {
     topPages,
     deviceBreakdown,
     locations,
+    dimensionProvenance,
     selectedTenants,
     timeRange,
     changeTimeRange,
@@ -78,7 +79,7 @@ export default function DashboardContent() {
 
       {/* ═══════════ LOCATIONS (WORLD MAP) ═══════════ */}
       <section id="locations-section" aria-label="Geographic Distribution">
-        <TopLocations data={locations} />
+        <TopLocations data={locations} provenance={dimensionProvenance} />
       </section>
 
       {/* ═══════════ TOP PAGES + DEVICE ═══════════ */}
@@ -89,6 +90,7 @@ export default function DashboardContent() {
             data={deviceBreakdown}
             timeRangeLabel={timeRange}
             tenantLabel={selectedTenants.join(', ')}
+            provenance={dimensionProvenance}
           />
         </div>
       </section>

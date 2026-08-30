@@ -166,7 +166,7 @@ lineage:
   tables: [events_raw, daily_feature_usage]
 
 access_restriction:
-  visible_to: [cfo, ops_manager, analyst]
+  visible_to: [cfo, ops_manager, analyst, risk_officer, data_steward]
 
 observability:
   golden_scenarios: [real_movement, sparse_history]

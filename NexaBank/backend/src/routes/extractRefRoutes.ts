@@ -41,6 +41,7 @@ router.get("/extract/accounts", async (req: Request, res: Response): Promise<voi
         interest_rate: a.interestRate,
         branch_code: a.branchCode || "",
         region: a.branch?.region || "",
+        country: a.branch?.country || "",
         opened_at: a.createdOn.toISOString(),
       })),
     });
@@ -75,6 +76,7 @@ router.get("/extract/cards", async (req: Request, res: Response): Promise<void> 
         status: c.status,
         credit_limit: c.creditLimit ?? 0,
         region: c.account?.branch?.region || "",
+        country: c.account?.branch?.country || "",
         issued_at: c.issuedOn.toISOString(),
         updated_at: c.updatedOn.toISOString(),
       })),
@@ -110,6 +112,7 @@ router.get("/extract/customers", async (req: Request, res: Response): Promise<vo
         kyc_status: c.kycStatus,
         branch_code: c.branchCode || "",
         region: c.branch?.region || "",
+        country: c.branch?.country || "",
       })),
     });
   } catch (err) {
@@ -175,6 +178,7 @@ router.get("/extract/campaign_interactions", async (req: Request, res: Response)
         interaction_type: i.type,
         risk_segment: i.customer?.riskSegment || "",
         region: i.customer?.branch?.region || "",
+        country: i.customer?.branch?.country || "",
         occurred_at: i.occurredAt.toISOString(),
       })),
     });
@@ -197,6 +201,7 @@ router.get("/extract/branches", async (req: Request, res: Response): Promise<voi
         tenant_id: analyticsTenant(b.tenantId || "bank_a"),
         name: b.name,
         region: b.region,
+        country: b.country,
         city: b.city,
         manager_name: b.managerName,
         staffing_headcount: b.staffingHeadcount,

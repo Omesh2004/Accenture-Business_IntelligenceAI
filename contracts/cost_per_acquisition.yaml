@@ -58,7 +58,7 @@ fundamentals:
     engine_type: sql
 
 dimensions:
-  allowed: [channel, campaign_name, risk_segment, region]
+  allowed: [channel, campaign_name, risk_segment, region, country]
   max_depth: 2
   min_segment_volume: 3
   availability:
@@ -138,7 +138,9 @@ lineage:
     source does not have.
 
 access_restriction:
-  visible_to: [cfo, analyst]
+  # Marketing owns this KPI and sees it. Operations and risk do not: campaign spend is
+  # commercially sensitive and CPA would let it be back-computed from the openings count.
+  visible_to: [cfo, analyst, marketing_lead]
   suppress_for_others: [campaign_spend]
 
 observability:

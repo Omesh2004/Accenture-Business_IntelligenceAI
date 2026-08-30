@@ -60,7 +60,7 @@ ids stay flat. The fixture emits byte-identical duplicates (P1-5). See `docs/PRO
 Re-assert the data claims rather than trusting this table:
 
 ```bash
-python scripts/verify_data_quality.py     # host-only; exit 0 only when every check passes
+docker compose --profile test run --rm -e CLICKHOUSE_URL=http://clickhouse:8123 \n  tests python scripts/verify_data_quality.py     # exit 0 only when every check passes
 ```
 
 The emitted check count is **not fixed** — several `record()` calls sit inside loops over the
@@ -72,9 +72,18 @@ exit code, not a count.
 
 ## How to verify
 
-`scripts/verify_data_quality.py` runs on the **host** with the stack up. It needs `node`,
-`requests` and `PyYAML` — deliberately no ClickHouse driver, so it talks to ClickHouse over the
-HTTP interface and can run where the driver is not installed.
+`scripts/verify_data_quality.py` runs in the **`tests` service** with the stack up (it also still
+runs on the host). It needs `node`, `requests` and `PyYAML` — deliberately no ClickHouse driver, so
+it talks to ClickHouse over the HTTP interface and can run where the driver is not installed. Pass
+`CLICKHOUSE_URL=http://clickhouse:8123`; the default is `localhost`, which inside a container is the
+container itself.
+
+> **It cannot currently exit 0, for a reason unrelated to data quality.** The `DIMS ... declared
+> dimensions populated` check looks for every contract dimension as a **metadata key in
+> `events_raw`**. The seven retail contracts declare **fact-table columns** (`region`,
+> `branch_code`, `txn_type`, `account_type`, ...), which are not in `events_raw` at all, so they
+> fail by construction. The check predates fact-based contracts and needs to branch on
+> `Contract.is_fact_based`. Until it does, read the check list, not the exit code.
 
 It executes the **real** Node `enforceTaxonomy` by extracting and evaluating that function's own
 source (`scripts/taxonomy_probe.js`) rather than reimplementing it. A Python port would drift,
@@ -236,10 +245,119 @@ a **segment** (confine it to e.g. mobile traffic from India, so the movement con
 cell localization can recover).
 
 Mix overrides apply per **session**, not per event — the contract requires invariance *within* a
-session, and per-event re-rolling is the FOUNDATION-2 bug.
+session, and per-event re-rolling is the FOUNDATION-2 bug. Measured on 110 console sessions: zero
+carry two values of `location`, `device_type` or `continent`.
+
+**It now declares what it invented** (2026-08-30). Every console event carries
+`metadata._simulated` listing the dimensions it generated, and `response_time_ms` with them — it is
+a log-normal draw, not a measurement. Before this the console supplied those keys itself and
+`eventTracker` read "the caller supplied the key" as "a real signal supplied it", so console geo
+reached `events_raw` indistinguishable from measured geo and the Avg Response Time honesty badge
+could not fire.
+
+**A forced mix value is excluded from that list, and only it.** When an operator forces
+`deviceWeights` / `countryWeights` / `channelWeights`, that dimension carries the intent the
+movement is meant to concentrate in — which is exactly what Localize has to be allowed to recover.
+Anything unforced stays a weighted dice roll and stays declared. A forced country also re-resolves
+its city and continent from the same city table, so the three agree; patching only `location` left
+sessions reporting India from a North American city, and `continent` is a declared dimension, so
+that cell was not merely generated, it was wrong.
 
 `loan_approval_volume`'s numerator previously had no source on this path at all: the route
 created applications but never approved one. It now emits approvals at a controllable rate.
+
+### Two modes, and why the slow one is slow
+
+`POST /events/simulate` takes `mode: "slow" | "fast"`, surfaced as a toggle on `/admin/simulate`.
+
+**Slow mode** is the default and the one that proves anything: every row goes to Postgres, then
+through `POST /events` → Kafka → worker → ClickHouse. Its cost is not the pipeline. Postgres is
+**remote** (`aws-1-ap-south-1`, measured **~350 ms per round trip**) while every other component is
+a local container (ingestion 17 ms). A run is therefore almost entirely time spent waiting on a
+network, linear in users x days.
+
+Three changes took 3 users x 7 days from **54.7 s to 11.5 s**, and 25 x 21 from *failing after
+~23 minutes* to **82.8 s**:
+
+| Change | Why it mattered |
+|---|---|
+| `trackEventsBatch` — one `createMany` per user instead of one insert per event | Events were the bulk of the round trips. `event_id` is minted in the app rather than by the database default, because `createMany` cannot return generated ids and forwarding needs one |
+| Bounded concurrency across users (`SIMULATE_CONCURRENCY`, default 6) | Users are independent and the work is waiting. The cap is what keeps the Supabase pooler from closing a long run — that is what killed 25 x 21 |
+| Hash the demo password once; drop 8 redundant balance writes; payee pass reads memory | Each was a remote round trip buying nothing. The payee pass re-read customers and accounts this same request had created seconds earlier |
+
+Concurrency required one correctness change: the journey model is built **per user**, not per
+request. It carries mutable per-session state, so one shared instance would let concurrent users
+satisfy each other's prerequisites and suppress each other's back-fills.
+
+**Fast mode** (`api/fast_seed.py`) skips Postgres *and* the ingestion path and writes the analytics
+tables directly — `events_raw` plus `fact_transactions`, `fact_account_openings`, `fact_cards`,
+`fact_loan_applications`, `fact_campaign_interactions` and `dim_customer`, so **all ten KPIs
+compute from a single run**. Measured: **2,000 users x 45 days = 73,571 rows in 3.0 s**
+(~24,600 rows/sec), against hours for the same shape through the pipeline.
+
+It is safe for one reason only: operator-triggered mock data, never a real record. `POST /events`
+remains the only door for anything real. What it costs you: no Postgres rows, so those customers
+do not exist in the NexaBank UI and the extract has nothing to ship for them; and the ingestion
+path is not exercised, which is precisely what slow mode is for. `purge_first` clears anything a
+previous fast run wrote, by id prefix.
+
+It lives in the **ingestion service**, not NexaBank: the bank has no ClickHouse client and must not
+grow one, and ingestion already owns writing `events_raw` directly on its fallback path. Geography
+is read from `dim_branch` rather than redefined, so fast mode cannot drift into a second
+geography the way the reference data once did.
+
+The UI warns before a slow run only when the estimate exceeds a minute, and separately above five
+minutes where the pooler starts dropping connections. A warning on every run is one nobody reads.
+
+### The journey model
+
+`NexaBank/backend/src/helper/journeyModel.ts`. The generator emits ~40 raw event names, and
+whether one is *allowed to occur* depends on what the session has already done: KYC has to start
+before it completes, a loan has to be applied for before it can be approved, a pro feature has to
+be reached before it can be used. That ordering used to live implicitly in the generator's control
+flow. It is now data, so it can be reasoned about and extended.
+
+It is deliberately **not** a fourth taxonomy dialect (CLAUDE.md coupling point 2). It maps each raw
+name to the canonical name Phase 0 verified it resolves to, plus its route and place in the graph,
+and is an internal concern of the generator — no contract with ingest or the read layer.
+
+**Two kinds of edge, and only one carries volume.**
+
+| | `FUNNEL_PREREQS` | `CONTEXT_PREREQS` |
+|---|---|---|
+| Declared how | hand-listed; domain knowledge a name cannot express | rule-derived, so a new event inheriting the taxonomy gets sensible ones free |
+| Examples | `approved ← applied ← kyc_completed ← kyc_started`, `unlock ← view` | every non-entry event needs a login or register; a pro-gated event needs the pro area reached; a failure needs its sibling `*.view` |
+| Enforced | yes | yes |
+| Propagates traffic | **yes** — raising a funnel endpoint raises every step feeding it | no, gate only |
+| Satisfied by | the exact prerequisite | **any-of** a group |
+
+**Missing prerequisites are back-filled, and nothing marks them.** `planBackfill` emits the missing
+steps as ordinary events — real `event_id`, real row — immediately before the event that needed
+them, then marks them satisfied so a sibling does not re-emit them. Two consequences worth holding:
+the event count a run produces is not the count it rolled, and a funnel step can appear that the
+generator never explicitly decided to emit. That is the correct behaviour for keeping a session a
+valid journey, but it means "how many kyc_started did the run intend?" is not answerable from the
+data.
+
+**Per-route and per-event knobs.** `behavior.targets` carries a `traffic` and a `failure`
+multiplier per route or event, validated against the real vocabulary — an identifier the generator
+cannot produce is **dropped, not coerced**. Two details that surprise:
+
+- A directly-targeted event with `traffic > 1` can be **introduced** from a baseline of ~0, floored
+  at `INJECT_FLOOR` (0.03). "Generate more traffic through this event" has to be able to create
+  `auth.role.violation`, whose base rate is zero. Multipliers that arrive by funnel propagation
+  never inject — they only scale what the generator already rolls.
+- `relaxJourney: true` turns the safeguard off for targeted routes and events: they may fire
+  without prerequisites and stop pulling their funnel with them. It is how an operator produces a
+  deliberately inconsistent session; it is not a performance switch.
+
+**`GET /events/simulate/catalog`** (admin only) serves the route and event vocabulary the console's
+picker offers, built from this module — so the picker cannot offer an identifier the generator is
+unable to emit.
+
+**Still no ground truth.** The journey model writes nothing. Which routes an operator targeted, and
+whether the safeguard was relaxed, appear only in the API response echo. Back-filled events are
+real events that plausibly happened, and nothing records that they were back-filled.
 
 ---
 

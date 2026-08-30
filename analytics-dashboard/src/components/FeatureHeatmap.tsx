@@ -457,7 +457,7 @@ function FeatureHeatmap() {
                             <span className="text-[10px] font-semibold leading-none tabular-nums drop-shadow-sm">
                               {segment.count > 0
                                 ? segment.count.toLocaleString()
-                                : "—"}
+                                : "-"}
                             </span>
                           </div>
                         </td>

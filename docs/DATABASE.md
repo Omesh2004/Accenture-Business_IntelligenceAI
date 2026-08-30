@@ -110,21 +110,28 @@ loader be re-run after a partial failure without reconciling anything by hand.
 
 | Table | Grain | Source | Notes |
 |---|---|---|---|
-| `fact_transactions` | transaction | A | `amount Decimal(18,2)`; carries `direction`, `branch_code`, `region`, `mcc`, `merchant_name` |
+| `fact_transactions` | transaction | A | `amount Decimal(18,2)`; carries `direction`, `branch_code`, `region`, `country`, `mcc`, `merchant_name` |
 | `fact_account_openings` | account | A | A **change feed**. Additive over time |
-| `fact_account_daily` | account-day | A | A **snapshot**. Never sum across dates |
 | `fact_cards` | card | A | `product_name` is the launch dimension |
-| `fact_loan_applications`, `fact_loans` | application, loan | A | mutating entities, cursored on `updatedOn` |
+| `fact_loan_applications` | application | A | mutating entity, cursored on `updatedOn` |
 | `dim_customer` | customer | B | demographics as **brackets**, not raw age or salary |
 | `fact_campaign_interactions` | interaction | B | the funnel CPA divides by, stored as events |
 | `dim_campaign` | campaign | B | real campaigns with real spend; no longer synthetic |
 | `dim_branch` | branch | C | region, city, manager, staffing |
 | `dim_macro_environment` | region-month | C | competitor rate, base rate, unemployment |
 
-**Openings and the snapshot must not be confused.** `fact_account_openings` counts accounts
-created in a window and is additive; `fact_account_daily` is a point-in-time balance sheet and
-summing it across dates double-counts every account once per day it existed. They are separate
-tables for exactly that reason.
+**Branch geography is denormalised onto the facts, and that has a cost.** `region` (a continent)
+and `country` are copied from `dim_branch` at extract time. The copy is deliberate — it keeps
+Localize on a single table — but a watermarked extract cursors on the ENTITY's own `updatedOn`, and
+editing a branch touches no transaction row. `load_market_ops` therefore fingerprints the branch
+set and resets the watermarks of every branch-derived feed when it changes, so the next load
+re-reads in full. Without that the analytics copy keeps a geography the source no longer holds.
+
+**`fact_loans` and `fact_account_daily` were removed** (2026-08-30). Both were loaded on every run
+and read by nothing — no contract declared a fundamental against either. `fact_account_daily` was
+also the fastest-growing table in the schema, one row per account per day, purely to be ignored.
+The Postgres `Loan` rows they came from still exist and still matter: a disbursement books a real
+DEPOSIT that `net_deposit_growth` explicitly excludes.
 
 **Money is `Decimal`, never `Float`.** A float sum over a few thousand transactions drifts in the
 cents, and a KPI whose value depends on summation order is not reproducible.

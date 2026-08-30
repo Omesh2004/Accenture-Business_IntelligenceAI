@@ -62,6 +62,11 @@ interface SimulationResult {
    requestedUsers?: number;
    requestedTenant?: string;
    resolvedTenant?: string;
+   /** Which path ran and which population it acted on. Both modes report these. */
+   mode?: string;
+   population?: string;
+   createAccounts?: boolean;
+   simulatedUsers?: number;
    processingSummary?: ProcessingSummary;
    /** Echo of the behaviour the run applied. Shown here only; never persisted. */
    behaviorApplied?: BehaviorPayload | null;
@@ -86,6 +91,15 @@ export default function AdminSimulatePage() {
    const [templateId, setTemplateId] = useState("baseline")
    const [behavior, setBehavior] = useState<BehaviorPayload | null>(null)
    const [catalog, setCatalog] = useState<SimCatalog | null>(null)
+  // Slow mode proves the real pipeline works: every row goes to Postgres, then the ingestion API,
+  // Kafka and the worker. Fast mode writes the analytics tables directly -- mock data only, for
+  // testing the intelligence layer on volume it would otherwise take hours to produce.
+  const [fastMode, setFastMode] = useState(false)
+  const [purgeFirst, setPurgeFirst] = useState(false)
+  // Off by default: a run generates activity for customers the bank already has. Creating a
+  // population every time gave each run its own cohort, so openings spiked on every run and a
+  // planted rate movement was diluted by arrivals rather than measured against a stable base.
+  const [createAccounts, setCreateAccounts] = useState(false)
 
   const { isAuth } = UserData()
 
@@ -151,9 +165,23 @@ export default function AdminSimulatePage() {
       )
    }
 
+  // Fitted to measured runs on this stack (users x days -> wall seconds):
+  //   3x7 = 11.5s | 10x14 = 30.9s | 25x21 = 82.8s | 40x30 = 127.8s
+  // ~12s of fixed cost plus ~0.10s per user-day, which lands within ~25% across that range. The
+  // per-user-day cost falls as the run gets wider because the concurrency pool saturates, so a
+  // flat rate over-predicts large runs badly -- an earlier 0.47 constant was 4x high at 40x30.
+  const slowEstimateSeconds = Math.round(
+    12 + (Number.isFinite(count) ? count : 0) * (Number.isFinite(days) ? days : 0) * 0.10)
+  const formatDuration = (s: number) =>
+    s < 90 ? `${s} seconds` : s < 5400 ? `${Math.round(s / 60)} minutes` : `${(s / 3600).toFixed(1)} hours`
+
   const handleSimulate = async () => {
-      const safeCount = Number.isFinite(count) ? Math.max(1, Math.min(Math.floor(count), 100)) : 20
-      const safeDays = Number.isFinite(days) ? Math.max(1, Math.min(Math.floor(days), 60)) : 30
+      // The slow-mode caps exist because every user costs hundreds of remote Postgres round
+      // trips. Fast mode does not pay that, so it can go much wider.
+      const maxCount = fastMode ? 5000 : 100
+      const maxDays = fastMode ? 365 : 60
+      const safeCount = Number.isFinite(count) ? Math.max(1, Math.min(Math.floor(count), maxCount)) : 20
+      const safeDays = Number.isFinite(days) ? Math.max(1, Math.min(Math.floor(days), maxDays)) : 30
 
       if (!tenantId.trim()) {
          toast.error("Please select a target tenant before running simulation")
@@ -173,7 +201,9 @@ export default function AdminSimulatePage() {
       await measureAndTrack('admin_simulate.run_simulation', async () => {
             const res = await axios.post(
                `${API_BASE_URL}/events/simulate`,
-               { count: safeCount, days: safeDays, tenantId, behavior },
+               { count: safeCount, days: safeDays, tenantId, behavior,
+                 mode: fastMode ? "fast" : "slow", purgeFirst: fastMode && purgeFirst,
+                 createAccounts },
                { withCredentials: true }
             )
         setResult(res.data)
@@ -285,10 +315,83 @@ export default function AdminSimulatePage() {
                                     value={behavior}
                                     onChange={setBehavior}
                                     templateId={templateId}
-                                    onTemplateChange={setTemplateId}
+                                    // A population-shift scenario is about who the customers ARE,
+                                    // so it needs new arrivals; every other scenario changes a
+                                    // rate and wants the existing base held still. Still a
+                                    // default, not a lock -- the operator can override it.
+                                    onTemplateChange={(id: string) => {
+                                       setTemplateId(id)
+                                       setCreateAccounts(id.startsWith("shift_"))
+                                    }}
                                     catalog={catalog}
                                     disabled={loading}
                                  />
+                              </div>
+
+                              {/* Mode. Slow proves the pipeline; fast produces volume. */}
+                              <div className="pt-2 border-t border-zinc-100 space-y-3">
+                                 <div className="flex items-start justify-between gap-3">
+                                    <div>
+                                       <p className="text-sm font-bold text-zinc-800">
+                                          {fastMode ? 'Fast mode — pipeline bypassed' : 'Slow mode — full pipeline'}
+                                       </p>
+                                       <p className="text-xs text-zinc-500 font-medium mt-0.5">
+                                          {fastMode
+                                             ? 'Writes the analytics tables directly. Mock data only: no bank records, and the ingestion path is not exercised.'
+                                             : 'Every row goes through Postgres, ingestion, Kafka and the worker — this is what proves the pipeline works.'}
+                                       </p>
+                                    </div>
+                                    <button
+                                       type="button"
+                                       role="switch"
+                                       aria-checked={fastMode}
+                                       aria-label="Fast mode"
+                                       disabled={loading}
+                                       onClick={() => setFastMode(v => !v)}
+                                       className={`shrink-0 mt-1 h-6 w-11 rounded-full transition-colors cursor-pointer disabled:opacity-50 ${fastMode ? 'bg-violet-600' : 'bg-zinc-300'}`}
+                                    >
+                                       <span className={`block h-5 w-5 bg-white rounded-full shadow transform transition-transform ${fastMode ? 'translate-x-5' : 'translate-x-0.5'}`} />
+                                    </button>
+                                 </div>
+
+                                 {fastMode && (
+                                    <label className="flex items-center gap-2 text-xs font-medium text-zinc-600 cursor-pointer">
+                                       <input type="checkbox" checked={purgeFirst} disabled={loading}
+                                              onChange={(e) => setPurgeFirst(e.target.checked)} />
+                                       Clear previously fast-seeded data first
+                                    </label>
+                                 )}
+
+                                 {/* Population. A run generates activity for customers the bank
+                                     already has; creating more is a separate decision. */}
+                                 <label className="flex items-start gap-2 text-xs font-medium text-zinc-600 cursor-pointer">
+                                    <input type="checkbox" checked={createAccounts} disabled={loading}
+                                           className="mt-0.5"
+                                           onChange={(e) => setCreateAccounts(e.target.checked)} />
+                                    <span>
+                                       Create new customers and accounts
+                                       <span className="block text-zinc-400 font-normal">
+                                          {createAccounts
+                                             ? 'Opens new accounts, so account-opening KPIs will move. Use for growth scenarios.'
+                                             : 'Off: generates activity for existing customers, so a rate change is measured against a stable base.'}
+                                       </span>
+                                    </span>
+                                 </label>
+
+                                 {/* Only shown when the run is actually long enough to matter. A
+                                     warning on every run is a warning nobody reads. */}
+                                 {!fastMode && slowEstimateSeconds > 60 && (
+                                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2">
+                                       <p className="text-xs font-bold text-amber-800">
+                                          This run will take roughly {formatDuration(slowEstimateSeconds)}.
+                                       </p>
+                                       <p className="text-[11px] text-amber-700 mt-0.5">
+                                          Slow mode writes every row to a remote database one round trip at a time.
+                                          {slowEstimateSeconds > 300 && ' Runs beyond ~5 minutes may be dropped by the database connection pooler.'}
+                                          {' '}Switch to fast mode for volume.
+                                       </p>
+                                    </div>
+                                 )}
                               </div>
 
                     <Button 
@@ -412,10 +515,20 @@ export default function AdminSimulatePage() {
                                   <div className="bg-white p-6 rounded-2xl border border-violet-100">
                                      <h3 className="text-base font-black text-zinc-900 flex items-center gap-2"><Rocket className="h-4 w-4 text-violet-700" /> Processing Details</h3>
                                      <div className="mt-4 space-y-2 text-sm">
+                                        {/* Which mode and which population. Without these a fast
+                                            run and a slow one looked identical here, and a
+                                            126s slow run read as fast mode being slow. */}
+                                        <p className="text-zinc-600"><span className="font-semibold text-zinc-900">Mode:</span> {result.mode === 'fast' ? 'Fast — pipeline bypassed' : 'Slow — full pipeline'}</p>
+                                        <p className="text-zinc-600"><span className="font-semibold text-zinc-900">Population:</span> {result.population || (result.createAccounts ? 'created' : 'existing')}</p>
                                         <p className="text-zinc-600"><span className="font-semibold text-zinc-900">Runtime:</span> {((result.runMs || 0) / 1000).toFixed(2)}s</p>
-                                        <p className="text-zinc-600"><span className="font-semibold text-zinc-900">Throughput:</span> {result.throughputEventsPerSec || 0} events/sec</p>
+                                        {result.throughputEventsPerSec ? (
+                                           <p className="text-zinc-600"><span className="font-semibold text-zinc-900">Throughput:</span> {result.throughputEventsPerSec} events/sec</p>
+                                        ) : null}
                                         <p className="text-zinc-600"><span className="font-semibold text-zinc-900">Users requested:</span> {result.requestedUsers ?? count}</p>
-                                        <p className="text-zinc-600"><span className="font-semibold text-zinc-900">Users created:</span> {result.usersCreated ?? 0}</p>
+                                        {/* On a reuse run nothing is created, so "Users created: 0"
+                                            alone reads as a failed run. Say how many were simulated. */}
+                                        <p className="text-zinc-600"><span className="font-semibold text-zinc-900">Users simulated:</span> {result.simulatedUsers ?? result.usersCreated ?? 0}</p>
+                                        <p className="text-zinc-600"><span className="font-semibold text-zinc-900">New accounts created:</span> {result.usersCreated ?? 0}</p>
                                         <p className="text-zinc-600"><span className="font-semibold text-zinc-900">Transactions:</span> {result.transactionsCreated ?? 0}</p>
                                         <p className="text-zinc-600"><span className="font-semibold text-zinc-900">Events:</span> {result.eventsCreated ?? 0}</p>
                                      </div>

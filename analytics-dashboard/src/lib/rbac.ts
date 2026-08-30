@@ -1,5 +1,5 @@
 /**
- * RBAC Configuration — Central role whitelist.
+ * RBAC Configuration, Central role whitelist.
  * 
  * Roles:
  *   super_admin → Overall platform admin
@@ -42,7 +42,7 @@ function normalizeRbacPath(pathname: string): string {
  *   ❌ /admin, /apps/* (these show cross-tenant data the app admin shouldn't see)
  * 
  * user:
- *   ❌ Everything — should only use their assigned application
+ *   ❌ Everything, should only use their assigned application
  */
 export function canAccessRoute(role: UserRole, pathname: string): boolean {
   const normalizedPathname = normalizeRbacPath(pathname);
@@ -83,7 +83,7 @@ export function canAccessRoute(role: UserRole, pathname: string): boolean {
     if (normalizedPathname.startsWith('/user-journey')) return true;
     if (normalizedPathname.startsWith('/predictive')) return true;
     if (normalizedPathname.startsWith('/intelligence')) return true;
-    // Block super admin routes — app admin shouldn't see cross-tenant data
+    // Block super admin routes, app admin shouldn't see cross-tenant data
     if (normalizedPathname === '/admin') return false;
     if (normalizedPathname.startsWith('/apps/')) return false;
     return false;

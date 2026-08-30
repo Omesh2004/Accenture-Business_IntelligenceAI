@@ -385,6 +385,7 @@ CREATE TABLE IF NOT EXISTS feature_intelligence.fact_transactions
     `direction` LowCardinality(String) DEFAULT '',
     `branch_code` LowCardinality(String) DEFAULT '',
     `region` LowCardinality(String) DEFAULT '',
+    `country` LowCardinality(String) DEFAULT '',
     `txn_type` LowCardinality(String),
     `category` LowCardinality(String),
     `mcc` LowCardinality(String) DEFAULT '',
@@ -401,70 +402,6 @@ ENGINE = ReplacingMergeTree(_version)
 PARTITION BY toYYYYMM(occurred_at)
 ORDER BY (tenant_id, occurred_at, txn_id)
 SETTINGS index_granularity = 8192;
-
-CREATE TABLE IF NOT EXISTS feature_intelligence.fact_loan_applications
-(
-    `application_id` String,
-    `tenant_id` String,
-    `customer_id` String,
-    `loan_type` LowCardinality(String),
-    `status` LowCardinality(String),
-    `principal_amount` Decimal(18, 2),
-    `interest_rate` Decimal(9, 4),
-    `term_months` UInt16,
-    `kyc_step` UInt8,
-    `created_at` DateTime,
-    `decided_at` DateTime DEFAULT toDateTime(0),
-    `loaded_at` DateTime DEFAULT now(),
-    `_version` DateTime DEFAULT now()
-)
-ENGINE = ReplacingMergeTree(_version)
-PARTITION BY toYYYYMM(created_at)
-ORDER BY (tenant_id, application_id)
-SETTINGS index_granularity = 8192;
-
-CREATE TABLE IF NOT EXISTS feature_intelligence.fact_loans
-(
-    `loan_id` String,
-    `tenant_id` String,
-    `account_no` String,
-    `loan_type` LowCardinality(String),
-    `principal_amount` Decimal(18, 2),
-    `interest_amount` Decimal(18, 2),
-    `interest_rate` Decimal(9, 4),
-    `term_months` UInt16,
-    `due_amount` Decimal(18, 2),
-    `is_active` UInt8 DEFAULT 1,
-    `started_at` DateTime,
-    `loaded_at` DateTime DEFAULT now(),
-    `_version` DateTime DEFAULT now()
-)
-ENGINE = ReplacingMergeTree(_version)
-PARTITION BY toYYYYMM(started_at)
-ORDER BY (tenant_id, loan_id)
-SETTINGS index_granularity = 8192;
-
-CREATE TABLE IF NOT EXISTS feature_intelligence.fact_account_daily
-(
-    `snapshot_date` Date,
-    `tenant_id` String,
-    `account_no` String,
-    `customer_id` String,
-    `account_type` LowCardinality(String),
-    `balance` Decimal(18, 2),
-    `is_active` UInt8,
-    `lifecycle_status` LowCardinality(String) DEFAULT '',
-    `interest_rate` Decimal(9, 4) DEFAULT 0,
-    `branch_code` LowCardinality(String) DEFAULT '',
-    `region` LowCardinality(String) DEFAULT '',
-    `loaded_at` DateTime DEFAULT now(),
-    `_version` DateTime DEFAULT now()
-)
-ENGINE = ReplacingMergeTree(_version)
-PARTITION BY toYYYYMM(snapshot_date)
-ORDER BY (tenant_id, snapshot_date, account_no)
-SETTINGS index_granularity = 8192;
-
 CREATE TABLE IF NOT EXISTS feature_intelligence.dim_campaign
 (
     `campaign_id` String,
@@ -549,6 +486,7 @@ CREATE TABLE IF NOT EXISTS feature_intelligence.dim_branch
     `tenant_id` String,
     `name` String,
     `region` LowCardinality(String),
+    `country` LowCardinality(String) DEFAULT '',
     `city` LowCardinality(String),
     `manager_name` String,
     `staffing_headcount` UInt16 DEFAULT 0,
@@ -572,6 +510,7 @@ CREATE TABLE IF NOT EXISTS feature_intelligence.dim_customer
     `kyc_status` LowCardinality(String) DEFAULT '',
     `branch_code` LowCardinality(String) DEFAULT '',
     `region` LowCardinality(String) DEFAULT '',
+    `country` LowCardinality(String) DEFAULT '',
     `loaded_at` DateTime DEFAULT now(),
     `_version` DateTime DEFAULT now()
 )
@@ -594,6 +533,27 @@ ENGINE = ReplacingMergeTree(_version)
 ORDER BY (region, month_year)
 SETTINGS index_granularity = 8192;
 
+CREATE TABLE IF NOT EXISTS feature_intelligence.fact_loan_applications
+(
+    `application_id` String,
+    `tenant_id` String,
+    `customer_id` String,
+    `loan_type` LowCardinality(String),
+    `status` LowCardinality(String),
+    `principal_amount` Decimal(18, 2),
+    `interest_rate` Decimal(9, 4),
+    `term_months` UInt16,
+    `kyc_step` UInt8,
+    `created_at` DateTime,
+    `decided_at` DateTime DEFAULT toDateTime(0),
+    `loaded_at` DateTime DEFAULT now(),
+    `_version` DateTime DEFAULT now()
+)
+ENGINE = ReplacingMergeTree(_version)
+PARTITION BY toYYYYMM(created_at)
+ORDER BY (tenant_id, application_id)
+SETTINGS index_granularity = 8192;
+
 CREATE TABLE IF NOT EXISTS feature_intelligence.fact_account_openings
 (
     `account_no` String,
@@ -604,6 +564,7 @@ CREATE TABLE IF NOT EXISTS feature_intelligence.fact_account_openings
     `interest_rate` Decimal(9, 4) DEFAULT 0,
     `branch_code` LowCardinality(String) DEFAULT '',
     `region` LowCardinality(String) DEFAULT '',
+    `country` LowCardinality(String) DEFAULT '',
     `opened_at` DateTime,
     `loaded_at` DateTime DEFAULT now(),
     `_version` DateTime DEFAULT now()
@@ -624,6 +585,7 @@ CREATE TABLE IF NOT EXISTS feature_intelligence.fact_campaign_interactions
     `interaction_type` LowCardinality(String),
     `risk_segment` LowCardinality(String) DEFAULT '',
     `region` LowCardinality(String) DEFAULT '',
+    `country` LowCardinality(String) DEFAULT '',
     `occurred_at` DateTime,
     `loaded_at` DateTime DEFAULT now(),
     `_version` DateTime DEFAULT now()
@@ -645,6 +607,7 @@ CREATE TABLE IF NOT EXISTS feature_intelligence.fact_cards
     `status` LowCardinality(String),
     `credit_limit` Decimal(18, 2) DEFAULT 0,
     `region` LowCardinality(String) DEFAULT '',
+    `country` LowCardinality(String) DEFAULT '',
     `issued_at` DateTime,
     `loaded_at` DateTime DEFAULT now(),
     `_version` DateTime DEFAULT now()

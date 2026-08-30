@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import hashlib
 import os
 import sys
 import urllib.error
@@ -188,24 +189,58 @@ def _insert(table: str, columns: list[str], rows: list[list]) -> int:
             pass
 
 
+def _reconcile(table: str, key_col: str, present: list[str]) -> int:
+    """Drop reference rows whose key is gone from the source.
+
+    An extract has no tombstone: a deleted row simply stops appearing, and a ReplacingMergeTree
+    keyed on that row keeps the last version it ever saw, forever. For a watermarked feed there is
+    no way to tell "deleted" from "unchanged", so this is unsafe there -- it is called ONLY from
+    the full-re-read sources, where absence from the batch really does mean absence at source.
+
+    Without it, globalising the branch vocabulary left `dim_branch` reporting the retired US
+    regions alongside the new continents, so an enumeration of regions returned both geographies
+    at once and the split this change removed was still visible downstream.
+    """
+    if not present:
+        return 0
+    client = _client()
+    try:
+        before = client.query(
+            f"SELECT count() FROM {DB}.{table} FINAL WHERE {key_col} NOT IN %(present)s",
+            parameters={"present": tuple(sorted(set(present)))}).result_rows[0][0]
+        if before:
+            # mutations_sync=1: the caller reports a count, and an async mutation would make that
+            # count a guess about the future rather than a statement about the database.
+            client.command(
+                f"ALTER TABLE {DB}.{table} DELETE WHERE {key_col} NOT IN %(present)s",
+                parameters={"present": tuple(sorted(set(present)))},
+                settings={"mutations_sync": 1})
+        return int(before)
+    finally:
+        try:
+            client.close()
+        except Exception:
+            pass
+
+
 # ── entity loaders ──────────────────────────────────────────────────────────
 OPENING_COLUMNS = ["account_no", "tenant_id", "customer_id", "account_type",
-                   "lifecycle_status", "interest_rate", "branch_code", "region", "opened_at",
+                   "lifecycle_status", "interest_rate", "branch_code", "region", "country", "opened_at",
                    "loaded_at", "_version"]
 
 CARD_COLUMNS = ["card_id", "tenant_id", "customer_id", "account_no", "product_name", "card_type",
-                "network", "status", "credit_limit", "region", "issued_at", "loaded_at",
+                "network", "status", "credit_limit", "region", "country", "issued_at", "loaded_at",
                 "_version"]
 
 CUSTOMER_COLUMNS = ["customer_id", "tenant_id", "age_bracket", "income_bracket",
                     "employment_status", "risk_segment", "lifetime_value", "kyc_status",
-                    "branch_code", "region", "loaded_at", "_version"]
+                    "branch_code", "region", "country", "loaded_at", "_version"]
 
 INTERACTION_COLUMNS = ["interaction_id", "tenant_id", "campaign_id", "campaign_name", "channel",
-                       "customer_id", "interaction_type", "risk_segment", "region",
+                       "customer_id", "interaction_type", "risk_segment", "region", "country",
                        "occurred_at", "loaded_at", "_version"]
 
-BRANCH_COLUMNS = ["branch_code", "tenant_id", "name", "region", "city", "manager_name",
+BRANCH_COLUMNS = ["branch_code", "tenant_id", "name", "region", "country", "city", "manager_name",
                   "staffing_headcount", "opened_at", "loaded_at", "_version"]
 
 MACRO_COLUMNS = ["region", "month_year", "competitor_deposit_rate", "central_bank_base_rate",
@@ -215,7 +250,7 @@ CAMPAIGN_COLUMNS = ["campaign_id", "tenant_id", "name", "channel", "segment", "s
                     "end_date", "spend", "_version"]
 
 TXN_COLUMNS = ["txn_id", "tenant_id", "customer_id", "account_no", "counterparty_acc",
-               "direction", "branch_code", "region", "txn_type", "category", "mcc",
+               "direction", "branch_code", "region", "country", "txn_type", "category", "mcc",
                "merchant_name", "reference_number", "channel", "status", "amount",
                "occurred_at", "loaded_at", "_version"]
 
@@ -223,13 +258,7 @@ APP_COLUMNS = ["application_id", "tenant_id", "customer_id", "loan_type", "statu
                "principal_amount", "interest_rate", "term_months", "kyc_step", "created_at",
                "decided_at", "loaded_at", "_version"]
 
-LOAN_COLUMNS = ["loan_id", "tenant_id", "account_no", "loan_type", "principal_amount",
-                "interest_amount", "interest_rate", "term_months", "due_amount", "is_active",
-                "started_at", "loaded_at", "_version"]
 
-SNAPSHOT_COLUMNS = ["snapshot_date", "tenant_id", "account_no", "customer_id", "account_type",
-                    "lifecycle_status", "interest_rate", "branch_code", "region",
-                    "balance", "is_active", "loaded_at", "_version"]
 
 
 def load_transactions(full: bool = False) -> int:
@@ -250,7 +279,8 @@ def load_transactions(full: bool = False) -> int:
             max_ts = max(max_ts, occurred)
             rows.append([r["txn_id"], r["tenant_id"], r["customer_id"], r["account_no"],
                          r.get("counterparty_acc", ""), r.get("direction", ""),
-                         r.get("branch_code", ""), r.get("region", ""), r["txn_type"],
+                         r.get("branch_code", ""), r.get("region", ""), r.get("country", ""),
+                         r["txn_type"],
                          r.get("category", ""), r.get("mcc", ""), r.get("merchant_name", ""),
                          r.get("reference_number", ""), r["channel"], r["status"],
                          _money(r["amount"]), occurred, now, occurred])
@@ -295,59 +325,6 @@ def load_loan_applications(full: bool = False) -> int:
     return total
 
 
-def load_loans(full: bool = False) -> int:
-    entity, source = "loans", "nexabank_core"
-    since = EPOCH if full else read_watermark(source, entity)
-    cursor_id = "" if full else read_cursor_id(source, entity)
-    now = datetime.utcnow()
-    total, max_ts = 0, since
-    for _ in range(MAX_PAGES):
-        page = _fetch(entity, {"since": since.isoformat(), "since_id": cursor_id,
-                               "limit": PAGE_SIZE})
-        records = page.get("records") or []
-        if not records:
-            break
-        rows = []
-        for r in records:
-            updated = _dt(r["updated_at"])
-            max_ts = max(max_ts, updated)
-            rows.append([r["loan_id"], r["tenant_id"], r["account_no"], r["loan_type"],
-                         _money(r["principal_amount"]), _money(r["interest_amount"]),
-                         _rate(r["interest_rate"]), int(r["term_months"] or 0),
-                         _money(r["due_amount"]), int(r["is_active"]), _dt(r["started_at"]),
-                         now, updated])
-        total += _insert("fact_loans", LOAN_COLUMNS, rows)
-        since = _dt(page.get("watermark")) or max_ts
-        cursor_id = str(page.get("cursor_id") or "")
-        if not page.get("has_more"):
-            break
-    write_watermark(source, entity, max_ts, total, cursor_id=cursor_id)
-    return total
-
-
-def load_account_snapshot(snapshot_date: date | None = None) -> int:
-    """Point-in-time balances stamped with the extract date. Re-running the same day overwrites
-    rather than appending, because the key includes snapshot_date."""
-    entity, source = "account_snapshot", "nexabank_core"
-    snapshot_date = snapshot_date or datetime.utcnow().date()
-    now = datetime.utcnow()
-    total, offset = 0, 0
-    for _ in range(MAX_PAGES):
-        page = _fetch(entity, {"limit": PAGE_SIZE, "offset": offset})
-        records = page.get("records") or []
-        if not records:
-            break
-        rows = [[snapshot_date, r["tenant_id"], r["account_no"], r["customer_id"],
-                 r["account_type"], r.get("lifecycle_status", ""), _rate(r.get("interest_rate", 0)),
-                 r.get("branch_code", ""), r.get("region", ""),
-                 _money(r["balance"]), int(r["is_active"]), now, now]
-                for r in records]
-        total += _insert("fact_account_daily", SNAPSHOT_COLUMNS, rows)
-        offset += len(records)
-        if not page.get("has_more"):
-            break
-    write_watermark(source, entity, datetime.combine(snapshot_date, datetime.min.time()), total)
-    return total
 
 
 def load_account_openings(full: bool = False) -> int:
@@ -370,7 +347,8 @@ def load_account_openings(full: bool = False) -> int:
             max_ts = max(max_ts, opened)
             rows.append([r["account_no"], r["tenant_id"], r["customer_id"], r["account_type"],
                          r.get("lifecycle_status", ""), _rate(r.get("interest_rate", 0)),
-                         r.get("branch_code", ""), r.get("region", ""), opened, now, opened])
+                         r.get("branch_code", ""), r.get("region", ""), r.get("country", ""),
+                         opened, now, opened])
         total += _insert("fact_account_openings", OPENING_COLUMNS, rows)
         since = _dt(page.get("watermark")) or max_ts
         cursor_id = str(page.get("cursor_id") or "")
@@ -399,6 +377,7 @@ def load_cards(full: bool = False) -> int:
             rows.append([r["card_id"], r["tenant_id"], r["customer_id"], r["account_no"],
                          r["product_name"], r["card_type"], r["network"], r["status"],
                          _money(r.get("credit_limit", 0)), r.get("region", ""),
+                         r.get("country", ""),
                          _dt(r["issued_at"]), now, updated])
         total += _insert("fact_cards", CARD_COLUMNS, rows)
         since = _dt(page.get("watermark")) or max_ts
@@ -424,7 +403,8 @@ def load_customers() -> int:
         rows = [[r["customer_id"], r["tenant_id"], r.get("age_bracket", ""),
                  r.get("income_bracket", ""), r.get("employment_status", ""),
                  r.get("risk_segment", ""), _money(r.get("lifetime_value", 0)),
-                 r.get("kyc_status", ""), r.get("branch_code", ""), r.get("region", ""), now, now]
+                 r.get("kyc_status", ""), r.get("branch_code", ""), r.get("region", ""),
+                 r.get("country", ""), now, now]
                 for r in records]
         total += _insert("dim_customer", CUSTOMER_COLUMNS, rows)
         offset += len(records)
@@ -482,7 +462,7 @@ def load_campaign_interactions(full: bool = False) -> int:
             rows.append([r["interaction_id"], r["tenant_id"], r["campaign_id"],
                          r.get("campaign_name", ""), r.get("channel", ""), r["customer_id"],
                          r["interaction_type"], r.get("risk_segment", ""), r.get("region", ""),
-                         occurred, now, occurred])
+                         r.get("country", ""), occurred, now, occurred])
         total += _insert("fact_campaign_interactions", INTERACTION_COLUMNS, rows)
         since = _dt(page.get("watermark")) or max_ts
         cursor_id = str(page.get("cursor_id") or "")
@@ -508,6 +488,62 @@ def load_crm(full: bool = False) -> dict:
 
 
 # -- source C: branch operations and macro environment ----------------------
+# Entities whose rows carry a COPY of a branch attribute (region, country). They are watermarked
+# on their own mutation clock, which a branch edit never touches -- so without this the analytics
+# copy keeps the old geography forever. Same class of staleness the transaction extract documents
+# for status, one level up.
+# NB: the entity name is the loader's OWN watermark key, not the table it writes.
+# `load_account_openings` writes fact_account_openings but registers as "accounts" -- resetting
+# "account_openings" silently created a phantom row and reset nothing.
+BRANCH_DERIVED_FEEDS = [
+    ("nexabank_core", "transactions"),          # fact_transactions.region/country
+    ("nexabank_core", "accounts"),              # fact_account_openings.region/country
+    ("nexabank_core", "cards"),                 # fact_cards.region/country
+    ("nexabank_crm", "campaign_interactions"),  # fact_campaign_interactions.region/country
+    ("nexabank_crm", "customers"),              # dim_customer.region/country
+]
+
+
+def _branch_fingerprint(branches: list[dict]) -> str:
+    """What a downstream row copies. Name and headcount are excluded: nothing denormalises them."""
+    parts = sorted("%s|%s|%s" % (b.get("branch_code", ""), b.get("region", ""),
+                                 b.get("country", "")) for b in branches)
+    return hashlib.sha1(chr(10).join(parts).encode("utf-8")).hexdigest()
+
+
+def _invalidate_on_branch_change(branches: list[dict], retired: int) -> list[str]:
+    """Reset the watermarks of every feed that denormalises a branch attribute, when one changed.
+
+    A watermarked extract cursors on the ENTITY's own `updatedOn`. Re-pointing a branch, or
+    renaming its region, touches no transaction row, so the next incremental load reads nothing and
+    `fact_transactions.region` keeps a value the source no longer holds. Resetting the watermark
+    makes the following core/CRM load re-read in full, which is the only way the copy catches up.
+    """
+    client = _client()
+    try:
+        rows = client.query(
+            f"SELECT cursor_id FROM {DB}.ingest_watermarks FINAL "
+            "WHERE source_id = 'market_ops' AND entity = 'branch_fingerprint'").result_rows
+        previous = rows[0][0] if rows else ""
+    except Exception:
+        previous = ""
+    finally:
+        try:
+            client.close()
+        except Exception:
+            pass
+
+    current = _branch_fingerprint(branches)
+    if previous == current and not retired:
+        return []
+
+    for source_id, entity in BRANCH_DERIVED_FEEDS:
+        write_watermark(source_id, entity, EPOCH, 0, cursor_id="")
+    write_watermark("market_ops", "branch_fingerprint", datetime.utcnow(), len(branches),
+                    cursor_id=current)
+    return ["%s/%s" % (s, e) for s, e in BRANCH_DERIVED_FEEDS]
+
+
 def load_market_ops(tenants: list[str] | None = None) -> dict:
     """Source C. Fully re-read every time: monthly reference data has no change feed, and
     re-reading a few hundred rows is cheaper than tracking a cursor for them."""
@@ -515,7 +551,8 @@ def load_market_ops(tenants: list[str] | None = None) -> dict:
 
     page = _fetch("branches", {})
     branches = page.get("records") or []
-    branch_rows = [[b["branch_code"], b["tenant_id"], b["name"], b["region"], b["city"],
+    branch_rows = [[b["branch_code"], b["tenant_id"], b["name"], b["region"],
+                    b.get("country", ""), b["city"],
                     b["manager_name"], int(b.get("staffing_headcount", 0)),
                     _dt(b["opened_at"]), now, now] for b in branches]
     n_branch = _insert("dim_branch", BRANCH_COLUMNS, branch_rows)
@@ -527,10 +564,21 @@ def load_market_ops(tenants: list[str] | None = None) -> dict:
                    _dt(m["recorded_at"]), now, now] for m in macro]
     n_macro = _insert("dim_macro_environment", MACRO_COLUMNS, macro_rows)
 
+    # Safe here and nowhere else: this source re-reads in full, so a key missing from the batch
+    # has genuinely been retired. Macro reconciles on region, not (region, month): a month falling
+    # out of the rolling window is history, not a deletion.
+    dropped_branches = _reconcile("dim_branch", "branch_code",
+                                  [b["branch_code"] for b in branches])
+    invalidated = _invalidate_on_branch_change(branches, dropped_branches)
+    dropped_macro = _reconcile("dim_macro_environment", "region",
+                               [m["region"] for m in macro])
+
     latest = max((_dt(m["recorded_at"]) for m in macro), default=now)
     for tenant in (tenants or []):
         record_freshness("market_ops", tenant, latest, n_branch + n_macro)
-    return {"branches": n_branch, "macro_environment": n_macro}
+    return {"branches": n_branch, "macro_environment": n_macro,
+            "retired_branch_rows": dropped_branches, "retired_macro_rows": dropped_macro,
+            "invalidated_watermarks": invalidated}
 
 
 def load_core_banking(full: bool = False) -> dict:
@@ -538,10 +586,8 @@ def load_core_banking(full: bool = False) -> dict:
     counts = {
         "transactions": load_transactions(full),
         "loan_applications": load_loan_applications(full),
-        "loans": load_loans(full),
         "account_openings": load_account_openings(full),
         "cards": load_cards(full),
-        "account_snapshot": load_account_snapshot(),
     }
     rows = _ch().query(
         f"SELECT tenant_id, max(occurred_at) AS m, count() AS n FROM {DB}.fact_transactions "

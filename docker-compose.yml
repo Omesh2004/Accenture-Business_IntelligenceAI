@@ -334,6 +334,11 @@ services:
       # schema.sql is compared against the live database; baked into the image the test
       # reads a stale copy and reports drift that was already fixed.
       - ./storage:/app/storage:ro
+      # NexaBank source for the producer-side guards. .dockerignore excludes NexaBank/ from this
+      # image's build CONTEXT, so it can never be baked in -- a bind mount is the only way these
+      # tests see it. Just the two subtrees they read, not the whole tree with its node_modules.
+      - ./NexaBank/backend/src:/app/NexaBank/backend/src:ro
+      - ./NexaBank/frontend/lib:/app/NexaBank/frontend/lib:ro
     command: python -m pytest tests/ -q
 
   # ═══════════════════════════════════════════════════════════

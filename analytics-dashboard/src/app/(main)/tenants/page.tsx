@@ -133,11 +133,11 @@ function ComparisonMetricCard({
       <div className="mt-5 grid grid-cols-2 gap-4">
         <div className="rounded-xl border border-slate-200 bg-slate-50 p-4">
           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{left.name}</p>
-          <p className="mt-2 text-2xl font-semibold text-slate-900">{formatValue(left.value)}</p>
+          <p className="num mt-2 text-2xl font-semibold text-slate-900">{formatValue(left.value)}</p>
         </div>
         <div className="rounded-xl border border-slate-200 bg-white p-4">
           <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">{right.name}</p>
-          <p className="mt-2 text-2xl font-semibold text-slate-900">{formatValue(right.value)}</p>
+          <p className="num mt-2 text-2xl font-semibold text-slate-900">{formatValue(right.value)}</p>
         </div>
       </div>
 

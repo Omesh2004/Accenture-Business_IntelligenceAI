@@ -220,7 +220,10 @@ Keys verified to exist, and where:
 | `country`, `feature_id`, `kyc_step` | **do not exist** | — | never reference them |
 
 `selectGeoProfile()` and `selectDevice()` run once per **session** now, so live dimensions are
-additive — but still invented, and `_simulated` says so. Localize cannot recover a planted segment
+additive — but still invented, and `_simulated` says so. The simulate console declares its own
+fabrication the same way, with one deliberate exception: a dimension the operator **forced** via a
+mix override is omitted from the list, because a planted segment carries intent and is the thing
+Localize exists to recover. Unforced dimensions on that path stay declared and stay unsliceable. Localize cannot recover a planted segment
 from live traffic and is not permitted to try. The seeded path assigns one profile per session and
 is the path the Phase 1 demo runs on (decision **D4**).
 
@@ -525,7 +528,10 @@ business, and the Trust Gate has to catch that before Detect narrates it.
 
 **`net_deposit_growth` is the multi-factor case.** Deposits falling in one region is an internal
 observation; `dim_macro_environment.competitor_deposit_rate` is the external factor that explains
-it. Causal may only reach `corroborated_cause` when both are present and must degrade to
+it. Both halves are planted in **Europe** — `DEPOSIT_FLIGHT_REGION` in `eventRoutes.ts` and the
+competitor-rate step in `seedReferenceData.ts` — and a test asserts they stay in the same region,
+because drifting apart leaves an internal segment with no external driver and Causal correctly
+degrades to attribution, silently ending the scenario. Causal may only reach `corroborated_cause` when both are present and must degrade to
 `attribution` otherwise — so a regional drop with no external corroboration is reported as a
 correlation, not a cause.
 

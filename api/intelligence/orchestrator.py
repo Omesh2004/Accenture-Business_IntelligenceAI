@@ -14,7 +14,7 @@ from api.intelligence import config
 from api.intelligence import signal_store as store
 from api.intelligence.contracts import Contract, load_all, sliceable_dimensions
 from api.intelligence.ids import investigation_id, run_id, inputs_hash
-from api.intelligence.metrics import ClickHouseMetricLayer, MetricSource, Window
+from api.intelligence.metrics import ClickHouseMetricLayer, MetricSource, Window, ratio_series
 from api.intelligence.stages import (causal_decide, decompose, detect, forecast,
                                      llm_narrator, localize, narrate, trust_gate)
 
@@ -34,6 +34,8 @@ class Ctx:
     trigger: str = "scheduled"
     watermark: datetime | None = None
     stage_runs: list[dict] = field(default_factory=list)
+    # True when Detect scored the contract's own rate rather than an additive fundamental.
+    rate_scored: bool = False
 
 
 class Orchestrator:
@@ -72,7 +74,11 @@ class Orchestrator:
             spec = contract.scored_fundamental or None
             if spec is None:
                 continue
-            series = self.metrics.fundamental_series(tenant_id, spec, window)
+            # A ratio is banded on the rate, because that is what Detect now scores against it.
+            series = (ratio_series(self.metrics, tenant_id, contract, window)
+                      if contract.is_ratio else None)
+            if series is None:
+                series = self.metrics.fundamental_series(tenant_id, spec, window)
             result = forecast.run(kpi_id, series.values(), contract, as_of, tenant_id)
             store.write_forecast(forecast.to_row(
                 result, tenant_id, kpi_id, as_of,
@@ -129,7 +135,14 @@ class Orchestrator:
         spec = contract.scored_fundamental
         den_spec = contract.denominator()
         t0 = time.perf_counter()
-        series = self.metrics.fundamental_series(tenant_id, spec, window)
+        # A ratio KPI is scored on its own rate. Scoring the numerator instead let a conversion
+        # rate halve while volume grew and be reported as an urgent RISE -- the movement the
+        # contract names was never scored by anything. Localize still uses the fundamentals.
+        series = (ratio_series(self.metrics, tenant_id, contract, window)
+                  if contract.is_ratio else None)
+        ctx.rate_scored = series is not None
+        if series is None:
+            series = self.metrics.fundamental_series(tenant_id, spec, window)
         band = store.read_forecast(tenant_id, contract.id, window.start)
         # Detect scores the whole window, so the movement covers the KPI's entire population and
         # reach is 1.0 by construction; partial coverage is Localize's finding, not Detect's.

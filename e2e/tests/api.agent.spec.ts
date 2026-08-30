@@ -93,8 +93,12 @@ test.describe("intelligence agent API", () => {
   });
 
   test("personas get different briefings for the same question", async ({ request }) => {
-    const cfo = await ask(request, "Why did loan approval volume fall?", "cfo");
-    const ops = await ask(request, "Why did loan approval volume fall?", "ops_manager");
+    // Asked of a KPI that has actually moved. Persona shaping varies the DEPTH of a finding, so a
+    // metric sitting inside its band gives every persona the same one-line "no movement" reply and
+    // the comparison proves nothing -- which is what this asserted against before.
+    const q = "Why did KYC completion rate fall?";
+    const cfo = await ask(request, q, "cfo");
+    const ops = await ask(request, q, "ops_manager");
     expect(cfo.persona).toBe("cfo");
     expect(ops.persona).toBe("ops_manager");
     expect(cfo.answer).not.toBe(ops.answer);

@@ -1,7 +1,7 @@
 'use client';
 
 /**
- * Real-Time Users widget — India IST edition.
+ * Real-Time Users widget, India IST edition.
  * Shows currently active users with a live IST clock,
  * pulsing indicator, and pages-per-minute bar chart.
  * All timestamps are localized to Asia/Kolkata (IST, UTC+5:30).
@@ -78,7 +78,7 @@ function RealTimeUsers({ activeUsers, pagesPerMinute, timestampIST }: RealTimeUs
     return () => clearInterval(interval);
   }, [activeUsers]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Live IST clock — ticks every second
+  // Live IST clock, ticks every second
   useEffect(() => {
     const timer = setInterval(() => {
       setIstTime(getISTTime());

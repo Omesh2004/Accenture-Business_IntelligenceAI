@@ -56,7 +56,7 @@ fundamentals:
     engine_type: sql
 
 dimensions:
-  allowed: [region, branch_code, txn_type, category]
+  allowed: [region, country, branch_code, txn_type, category]
   max_depth: 2
   min_segment_volume: 5
   availability:
@@ -131,7 +131,7 @@ lineage:
     fundamental: a headcount is a stock, and summing it across a window would be meaningless.
 
 access_restriction:
-  visible_to: [cfo, ops_manager, analyst]
+  visible_to: [cfo, ops_manager, analyst, marketing_lead, data_steward]
   suppress_for_others: []
 
 observability:

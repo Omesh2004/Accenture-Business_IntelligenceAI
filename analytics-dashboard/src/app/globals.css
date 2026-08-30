@@ -1,32 +1,89 @@
 @import "tailwindcss";
 
+/* ─────────────── Palette ───────────────
+   One palette for the whole product, defined here rather than per page.
+
+   The dashboard was built on Tailwind's stock `slate` scale plus a hardcoded Google blue, and the
+   intelligence report was then given its own ink/indigo register — so the same neutral meant two
+   different greys depending on which route you were on. Rather than edit several hundred class
+   names, the SCALE ITSELF is redefined: Tailwind v4 resolves `text-slate-900`, `border-slate-200`
+   and the rest from these tokens, so every existing component moves to the new palette with no
+   component edits and no risk of a half-migrated page.
+
+   The neutrals are warm-shifted (a touch of blue-violet in the shadows) so they sit under the
+   indigo accent instead of fighting it. Lightness steps are unchanged, so every existing
+   foreground/background pairing keeps the contrast it was designed with. */
+@theme {
+  --color-slate-50:  #f7f8fa;
+  --color-slate-100: #eff1f5;
+  --color-slate-200: #e7e8ef;
+  --color-slate-300: #d6d8e3;
+  --color-slate-400: #8b8fa3;
+  --color-slate-500: #6b7085;
+  --color-slate-600: #4a4d5e;
+  --color-slate-700: #33364a;
+  --color-slate-800: #1f2233;
+  --color-slate-900: #12131a;
+  --color-slate-950: #0a0b11;
+
+  /* Gray is used interchangeably with slate across the codebase; keeping them in step stops a
+     card border and the divider inside it being two different greys. */
+  --color-gray-50:  #f7f8fa;
+  --color-gray-100: #eff1f5;
+  --color-gray-200: #e7e8ef;
+  --color-gray-300: #d6d8e3;
+  --color-gray-400: #8b8fa3;
+  --color-gray-500: #6b7085;
+  --color-gray-600: #4a4d5e;
+  --color-gray-700: #33364a;
+  --color-gray-800: #1f2233;
+  --color-gray-900: #12131a;
+}
+
+/* The accent. `#1a73e8` is written as a Tailwind ARBITRARY value in ~120 places
+   (`bg-[#1a73e8]`, `text-[#1a73e8]`, ...), and an arbitrary value cannot be remapped through
+   `@theme` — it compiles to a literal. Overriding the generated classes is the only way to move
+   them without touching every call site, and it keeps the migration in one reversible block. */
+:root {
+  --accent: #4338ca;
+  --accent-strong: #3730a3;
+  --accent-soft: #eef0fd;
+}
+
+.bg-\[\#1a73e8\]      { background-color: var(--accent) !important; }
+.text-\[\#1a73e8\]    { color: var(--accent) !important; }
+.border-\[\#1a73e8\]  { border-color: var(--accent) !important; }
+.hover\:bg-\[\#1557b0\]:hover { background-color: var(--accent-strong) !important; }
+.fill-\[\#1a73e8\]    { fill: var(--accent) !important; }
+.stroke-\[\#1a73e8\]  { stroke: var(--accent) !important; }
+
 /* ─────────────── Design System Tokens ─────────────── */
 
 :root {
   /* Primary Color Palette (Google Analytics Blue) */
-  --color-primary: #1A73E8;
-  --color-primary-light: #4285F4;
-  --color-primary-lighter: #8AB4F8;
-  --color-primary-lightest: #D2E3FC;
+  --color-primary: #4338ca;
+  --color-primary-light: #6366f1;
+  --color-primary-lighter: #a5b4fc;
+  --color-primary-lightest: #eef0fd;
 
   /* Background Colors */
   --color-bg-primary: #FFFFFF;
-  --color-bg-secondary: #F8F9FA;
-  --color-bg-tertiary: #F1F3F4;
+  --color-bg-secondary: #fbfbfd;
+  --color-bg-tertiary: #f5f6fa;
 
   /* Text Colors */
-  --color-text-primary: #111827;
-  --color-text-secondary: #6B7280;
-  --color-text-tertiary: #9CA3AF;
+  --color-text-primary: #12131a;
+  --color-text-secondary: #4a4d5e;
+  --color-text-tertiary: #8b8fa3;
 
   /* Border Colors */
-  --color-border: #E5E7EB;
-  --color-border-light: #F3F4F6;
+  --color-border: #e7e8ef;
+  --color-border-light: #eff1f5;
 
   /* Semantic Colors */
-  --color-success: #10B981;
-  --color-warning: #F59E0B;
-  --color-error: #EF4444;
+  --color-success: #047857;
+  --color-warning: #b45309;
+  --color-error: #be123c;
 
   /* Spacing (8px grid system) */
   --space-1: 4px;
@@ -111,6 +168,61 @@ body {
   scrollbar-color: #E5E7EB transparent;
 }
 
+/* ─────────────── Type scale ───────────────
+   One typographic system for the whole dashboard, so a heading means the same thing on every
+   page. Three faces, each with a job:
+     --font-display  Instrument Serif — section and page titles. A serif at a heading size reads
+                     as an assertion; the same words in the UI sans read as a label.
+     --font-inter    everything a user reads as interface: labels, body, controls.
+     --font-mono     JetBrains Mono — every FIGURE. Proportional digits give 236 and 5 different
+                     advance widths, so columns of numbers stop aligning and magnitudes misread.
+   Headings are set here rather than per-page: the reason the dashboard looked assembled from
+   parts was that each page invented its own size, weight and tracking for the same level. */
+
+h1, h2, h3, h4 {
+  font-family: var(--font-display), Georgia, 'Times New Roman', serif;
+  font-weight: 400;
+  letter-spacing: -0.011em;
+  color: var(--color-text-primary);
+}
+
+h1 { font-size: 2rem;    line-height: 1.18; }
+h2 { font-size: 1.5rem;  line-height: 1.25; }
+h3 { font-size: 1.125rem; line-height: 1.35; }
+h4 { font-size: 1rem;    line-height: 1.4; }
+
+/* An opt-out for headings that are really labels — a card title inside a dense panel, where a
+   serif at 13px reads as decoration rather than hierarchy. */
+h1.ui-label, h2.ui-label, h3.ui-label, h4.ui-label,
+.ui-label {
+  font-family: var(--font-inter), system-ui, sans-serif;
+  font-weight: 600;
+  letter-spacing: 0;
+}
+
+/* Figures. Applied to any element showing a number that a reader will compare to another. */
+.num, .tabular, td.num, th.num {
+  font-family: var(--font-mono), ui-monospace, SFMono-Regular, monospace;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1;
+}
+
+/* Recharts axis and tooltip figures are compared column to column like any table. */
+.recharts-cartesian-axis-tick-value,
+.recharts-tooltip-item-value,
+.recharts-label {
+  font-variant-numeric: tabular-nums;
+}
+
+.eyebrow {
+  font-family: var(--font-inter), system-ui, sans-serif;
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--color-text-tertiary);
+}
+
 /* ─────────────── Animations ─────────────── */
 
 @keyframes fadeIn {
@@ -163,6 +275,28 @@ body {
 .stagger-children > *:nth-child(4) { animation-delay: 0.2s; }
 .stagger-children > *:nth-child(5) { animation-delay: 0.25s; }
 .stagger-children > *:nth-child(6) { animation-delay: 0.3s; }
+/* The cap was six, so a seventh card and beyond stayed at opacity 0 — invisible, permanently.
+   Anything past the sixth shares the last delay rather than never arriving. */
+.stagger-children > *:nth-child(n + 7) { animation-delay: 0.3s; }
+
+/* Reduced motion, applied once for the whole dashboard.
+   Only AgentConsole honoured this before, so every other animated surface kept moving for a user
+   who had asked the OS for stillness. Transforms are neutralised rather than durations merely
+   shortened: a 0.01ms slide is still a slide. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+  .stagger-children > *,
+  .animate-fade-in,
+  .animate-slide-in {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}
 
 /* ─────────────── Recharts Overrides ─────────────── */
 
@@ -197,6 +331,18 @@ body {
   outline: 2px solid var(--color-primary);
   outline-offset: 2px;
   border-radius: 4px;
+}
+
+/* Opt-out for a control whose CONTAINER draws the focus affordance.
+   The composer is one frame: focusing the textarea turns the whole rounded border indigo and adds
+   a ring. The global rule then drew a second, rectangular outline 2px outside the textarea and
+   inside that frame, so the panel appeared to have two borders. This is not a removal of focus
+   indication -- the frame still shows it, and it is more visible than the outline was, which is
+   why the control is allowed to suppress its own. Anything without the attribute keeps the ring. */
+[data-focus-frame]:focus-visible,
+[data-focus-frame]:focus {
+  outline: none;
+  box-shadow: none;
 }
 
 /* ─────────────── Selection ─────────────── */

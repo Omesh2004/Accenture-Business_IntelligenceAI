@@ -82,7 +82,7 @@ Changes no number; decides whether a two-hour demo stays up.
 |---|---|---|---|
 | **P3-1** | ClickHouse healthcheck; dependents wait on `service_healthy` | `docker-compose.yml` | done |
 | **P3-2** | Drop `--reload` from both FastAPI services (it drops WebSockets and kills the producer, and the services bind-mount nothing anyway) | `docker-compose.yml` | done |
-| **P3-3** | `requirements-dev.txt` with `pytest`; make the files in `tests/` runnable; add CI | `requirements-dev.txt`, `Dockerfile`, `.github/` | partial — harness done (`tests` and `e2e` compose services, 28 test files); `.github/` does not exist |
+| **P3-3** | `requirements-dev.txt` with `pytest`; make the files in `tests/` runnable; add CI | `requirements-dev.txt`, `Dockerfile`, `docker-compose.yml`, `.github/` | partial — harness complete: `nodejs` added under `INSTALL_DEV` and NexaBank source mounted, so the suite runs **481 passed / 0 skipped** (was 466/12). `.github/` still does not exist |
 | **P3-4** | Worker: `pause()`/`resume()` instead of skipping `poll()`; set `max.poll.interval.ms` and `session.timeout.ms` explicitly | `processing/worker.py` | done |
 | **P3-5** | Worker: `dirty` flag so a dead-letter also triggers the commit path | `processing/worker.py` | done |
 | **P3-6** | Key Kafka messages on `tenant_id`; raise the topic partition count | `ingestion/main.py`, `docker-compose.yml` | done |
@@ -93,11 +93,11 @@ Changes no number; decides whether a two-hour demo stays up.
 | **P3-11** | Replace `hash()` with `hashlib.blake2b` for on-prem anonymisation; salt `hashUserId` | `ingestion/main.py`, `NexaBank/backend/src/middleware/eventTracker.ts` | todo |
 | **P3-12** | Import `settings` in `ingestion/main.py` instead of a second ClickHouse client with different defaults | `ingestion/main.py` | todo — `settings` is imported and used for Kafka/tenant, but `_clickhouse_client()` still reads raw `os.environ` with its own defaults and no `CLICKHOUSE_DATABASE` |
 | **P3-13** | Fix `allow_origins=["*"]` + `allow_credentials=True` in both services | `ingestion/main.py`, `api/main.py` | done |
-| **P3-14** | Label every chart built on a fabricated field in the UI | `analytics-dashboard/src/components/` | partial — `KPICard`'s `simulated` badge now lights from `metadata._simulated` (P0-9); no other chart reads the marker |
+| **P3-14** | Label every chart built on a fabricated field in the UI | `analytics-dashboard/src/components/`, `api/main.py` | done — `ChartContainer` carries one shared badge fed by `GET /metrics/dimension_provenance`; `TopLocations` and `DeviceBreakdownChart` consume it, `KPICard` covers Avg Response Time. `channel` has no chart: its only reader was a dead fetch, now removed |
 | **P3-15** | Stop presenting `/tenants/compare`'s `conversion_rate` and `/predictive/adoption`'s projection as measurements | `api/main.py`, dashboard | todo |
 | **P3-16** | Either wire or delete `analytics-dashboard/src/lib/tracker.ts` + `useAutoTrack.ts`, and `NexaBank/frontend/lib/tracker.ts` — all three are unreferenced | those files | todo |
 | **P3-17** | Persist `schema_version` to a column, or drop the field | `core/models.py`, `storage/schema.sql` | todo |
-| **P3-18** | Repo hygiene: untrack `__pycache__`; move or delete the root scratch scripts | repo root, `.gitignore` | partial — the five root scratch files are deleted; `storage/__pycache__/client.cpython-31{3,4}.pyc` are still tracked |
+| **P3-18** | Repo hygiene: untrack `__pycache__`; move or delete the root scratch scripts | repo root, `.gitignore` | done — root scratch files deleted, three `_p*.ts` probes deleted, both `.pyc` untracked, no `.pyc` tracked anywhere |
 
 **Deliberately not scheduled:** secret rotation (flagged, Phase 2 per `CLAUDE.md`); the duplicate
 `/insights` route, which is resolved while writing the new `/ai_report` reader, not before.
@@ -334,8 +334,8 @@ Not deferred by oversight. Each has a reason and a home.
 | | P0 | P1 | P2 | P3 | Build | R1 | R2 | R3 | R4 | R5 | R6 | R7 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | New IDs | 11 | 9 | 6 | 18 | 11 | 3 | 6 | 3 | 4 | 1 | 0 | 2 |
-| Done | 11 | 8 | 3 | 9 | 9 | 0 | 0 | 0 | 0 | 0 | — | 0 |
-| Partial | 0 | 0 | 0 | 3 | 1 | 0 | 0 | 0 | 0 | 0 | — | 0 |
+| Done | 11 | 8 | 3 | 11 | 9 | 0 | 0 | 0 | 0 | 0 | — | 0 |
+| Partial | 0 | 0 | 0 | 1 | 1 | 0 | 0 | 0 | 0 | 0 | — | 0 |
 | Blocked on a decision | 0 | 0 | 0 | 1 | 0 | 1 | 0 | 0 | 0 | 0 | — | 0 |
 | Todo | 0 | 1 | 3 | 5 | 1 | 2 | 6 | 3 | 4 | 1 | — | 2 |
 | Carried in from Parts 1-2 | — | — | — | — | — | 1 | 0 | 0 | 0 | 2 | 4 | 8 |
@@ -345,7 +345,7 @@ restating it, so P1-6, P2-1/4/5, B-8, B-9 and the open P3 rows are counted once,
 R1-4 is the exception: it is a scheduling note on **P3-15**, not a new task, and carries no status
 of its own.
 
-Last re-derived from code on 2026-08-29, by the docs-vs-code audit. Statuses in this table are
+Last re-derived from code on 2026-08-30. Statuses in this table are
 only as good as the last run of each task's verification command — see `CLAUDE.md` rule 14.
 
 **Gate P0 is complete.** One definition of a day (`TZ=UTC`, zero `today()` calls, no IST offsets),
@@ -406,6 +406,28 @@ batch and telemetry rows rather than investigation output), all five scenario ga
 coverage is 100%, and `model_runs` contains **zero** rows with `engine_type = 'llm'` (breakdown:
 rule=32, stats=12).
 
+**Completed 2026-08-30, outside the numbered plan.** Recorded here because `docs/TASK.md` is the
+repo's memory across sessions and none of this had a row. Detail and the traps are
+`docs/FinInsights_Bug_Audit.md` L10-L19.
+
+- **The fabrication marker reaches the simulate console.** `metadata._simulated` now covers the
+  geo, device, channel and latency the console invents; a dimension the operator *forced* via a mix
+  override is deliberately excluded, because a planted segment carries intent. Closes the hole that
+  let Localize rank cells over a dice roll on the demo path, and reopened A4's honesty badge.
+- **One geography across all four producers.** `region` is a continent and `country` is a country,
+  both from the vocabulary the clickstream emits and the dashboard renders. Replaced four US
+  regions that appeared on no chart. `Branch.country` added end to end: Prisma, extract, six
+  ClickHouse tables, five contracts. `tests/test_geo_vocabulary_alignment.py` holds them together.
+- **Reference deletes and edits now propagate.** `load_market_ops` reconciles against its full
+  batch, and fingerprints the branch set so an edit resets the watermarks of every feed that
+  denormalises a branch attribute. Both were silent before.
+- **`fact_loans` and `fact_account_daily` removed**, with their extract routes, loaders and DDL.
+  Loaded every run, read by nothing.
+- **Migration ledger baselined.** `schema_migrations` had zero rows while eighteen migrations were
+  live, so the runner reported all of them pending against a database that already had them.
+- **Two dead fetches removed from the 15s dashboard batch** (`acquisitionChannels`, `retentionData`
+  — the latter is fetched per-tenant by the tenants page instead).
+
 **What is still open, and why.** Sequenced in Part 3; the summary below says why each remains.
 
 - **P1-6** (`event_id` mandatory at every writer) — `api/seed_safexbank.py` still writes directly
@@ -418,7 +440,11 @@ rule=32, stats=12).
   `e2e` service for Playwright), but there is no `.github/` and nothing runs either on a push.
 - **P3-11** (unsalted `hashUserId`, Python `hash()` in on-prem anonymisation), **P3-12**,
   **P3-15**, **P3-16**, **P3-17** — the remaining producer and hygiene items.
-- **P3-14** and **P3-18** are partial; **P3-10** stays blocked on **D5**.
+- **P3-10** stays blocked on **D5**.
+- **`scripts/verify_data_quality.py` cannot exit 0**, for a reason unrelated to data quality: its
+  `DIMS` check looks for every contract dimension as a metadata key in `events_raw`, and the seven
+  retail contracts declare fact-table columns. It needs to branch on `Contract.is_fact_based`.
+  Bug audit **L14**.
 - **B-9** — the read surface is complete; the write half of the feedback loop is not wired.
 - **B-8 Gate L** — the LLM narrator's own logic is now validated end to end against a scriptable
   OpenAI-compatible server (`tests/test_intelligence_llm_narrator.py`, 15 tests): model discovery,

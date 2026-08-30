@@ -1,7 +1,7 @@
 /**
  * Axios API client abstraction.
  * Provides a configured axios instance and typed API methods.
- * All data is fetched from the backend — no mock fallbacks.
+ * All data is fetched from the backend, no mock fallbacks.
  */
 
 import axios, { AxiosInstance, AxiosResponse, InternalAxiosRequestConfig } from 'axios';
@@ -18,7 +18,6 @@ import {
   PagesPerMinuteDataPoint,
   TopPage,
   DeviceBreakdown,
-  AcquisitionChannel,
   LocationData,
   AuditLog,
   FeatureConfig,
@@ -28,7 +27,14 @@ import {
   JourneyUser,
   JourneyEvent,
   AgentAnswer,
+  AgentDataset,
+  AgentGate,
+  AgentStep,
+  AgentVisual,
+  KpiSeries,
   PersonaChoices,
+  DimensionProvenance,
+  DimensionProvenanceResponse,
   IntelligenceInsight,
   IntelligenceRecommendation,
   RuntimeTelemetry,
@@ -120,41 +126,48 @@ async function getCachedSession(): Promise<SessionShape | null> {
   return inFlightSessionPromise;
 }
 
+/**
+ * The RBAC header set for the signed-in session.
+ *
+ * Extracted so the axios interceptor and the SSE stream below build it the SAME way. These headers
+ * and `RBACMiddleware` are a matched pair; a second, hand-rolled copy for the streaming route is
+ * exactly how the two sides drift and everything 403s.
+ */
+export async function rbacHeaders(): Promise<Record<string, string>> {
+  const out: Record<string, string> = {};
+  try {
+    const session = await getCachedSession();
+    if (!session?.user) return out;
+    const appAliasMap: Record<string, string> = { ...TENANT_TO_APP };
+    if (session.user.email) out['X-User-Email'] = session.user.email;
+    if (session.user.role) out['X-User-Role'] = session.user.role;
+    if (session.user.adminApps) {
+      const adminApps = session.user.adminApps as string[];
+      out['X-Admin-Apps'] = Array.from(
+        new Set(
+          adminApps.map((app) => appAliasMap[String(app).toLowerCase()] || String(app).toLowerCase())
+        )
+      ).join(',');
+
+      const routeAppId =
+        typeof window !== 'undefined'
+          ? resolveAppIdFromPathname(window.location.pathname)
+          : null;
+      const activeAppId = routeAppId || resolvePrimaryAppIdFromAdminApps(adminApps);
+      if (activeAppId) out['X-Active-App'] = activeAppId;
+    }
+  } catch {
+    // Ignore if called in non-browser context
+  }
+  return out;
+}
+
 // Request interceptor for auth tokens
 apiClient.interceptors.request.use(
   async (config: InternalAxiosRequestConfig) => {
-    try {
-      const session = await getCachedSession();
-      if (session?.user) {
-        const appAliasMap: Record<string, string> = { ...TENANT_TO_APP };
-        if (session.user.email) {
-          setRequestHeader(config, 'X-User-Email', session.user.email);
-        }
-        if (session.user.role) {
-          setRequestHeader(config, 'X-User-Role', session.user.role);
-        }
-        if (session.user.adminApps) {
-          const adminApps = session.user.adminApps as string[];
-          const normalizedApps = Array.from(
-            new Set(
-              adminApps
-                .map((app) => appAliasMap[String(app).toLowerCase()] || String(app).toLowerCase())
-            )
-          );
-          setRequestHeader(config, 'X-Admin-Apps', normalizedApps.join(','));
-
-          const routeAppId =
-            typeof window !== 'undefined'
-              ? resolveAppIdFromPathname(window.location.pathname)
-              : null;
-          const activeAppId = routeAppId || resolvePrimaryAppIdFromAdminApps(adminApps);
-          if (activeAppId) {
-            setRequestHeader(config, 'X-Active-App', activeAppId);
-          }
-        }
-      }
-    } catch {
-      // Ignore if called in non-browser context
+    const headers = await rbacHeaders();
+    for (const [key, value] of Object.entries(headers)) {
+      setRequestHeader(config, key, value);
     }
     return config;
   },
@@ -779,7 +792,7 @@ export const dashboardAPI = {
     }
   },
 
-  /** Fetch top pages data — returns page-grouped entries with nested features */
+  /** Fetch top pages data, returns page-grouped entries with nested features */
   async getTopPages(tenants: string[], range: string): Promise<TopPage[]> {
     try {
       const response = await apiClient.get<BackendTopPageRow[]>(`/metrics/top_pages?tenants=${tenants.join(',')}&range=${range}`);
@@ -812,64 +825,6 @@ export const dashboardAPI = {
   },
 
   /** Fetch user acquisition channel breakdown */
-  async getAcquisitionChannels(tenants: string[], range: string): Promise<AcquisitionChannel[]> {
-    try {
-      const response = await apiClient.get<BackendChannelRow[]>(`/metrics/channels?tenants=${tenants.join(',')}&range=${range}`);
-      return (response.data || []).map((row: BackendChannelRow) => ({
-        name: row.name,
-        value: row.value,
-        formattedValue: row.formattedValue || row.value.toLocaleString(),
-      }));
-    } catch (error) {
-      console.error('Failed to fetch acquisition channels', error);
-      return [];
-    }
-  },
-
-  /** Fetch top locations data from backend */
-  async getLocations(tenants: string[], range: string): Promise<LocationData[]> {
-    try {
-      const response = await apiClient.get<LocationData[]>(`/locations?tenants=${tenants.join(',')}&range=${range}`);
-      return response.data;
-    } catch (error) {
-      logFetchFailure('Locations', error);
-      return [];
-    }
-  },
-
-  /** Fetch audit logs from backend */
-  async getAuditLogs(tenants: string[], range: string): Promise<AuditLog[]> {
-    try {
-      const response = await apiClient.get<AuditLog[]>(`/audit_logs?tenants=${tenants.join(',')}&range=${range}`);
-      return response.data;
-    } catch (error) {
-      logFetchFailure('AuditLogs', error);
-      return [];
-    }
-  },
-
-  /** Fetch top feature configs using backend data */
-  async getFeatureConfigs(tenants: string[], range: string): Promise<FeatureConfig[]> {
-    try {
-      const response = await apiClient.get<FeatureConfig[]>(`/features/configs?tenants=${tenants.join(',')}&range=${range}`);
-      return response.data;
-    } catch (error) {
-      console.error('Failed to fetch feature configs', error);
-      return [];
-    }
-  },
-
-  /** Fetch retention data */
-  async getRetentionData(tenants: string[], range: string): Promise<RetentionData[]> {
-    try {
-      const response = await apiClient.get<RetentionData[]>(`/metrics/retention?tenants=${tenants.join(',')}&range=${range}`);
-      return response.data;
-    } catch {
-      return [];
-    }
-  },
-
-  /** ─────────────── Deployment & Admin APIs ─────────────── */
 
   async getDeploymentInfo(): Promise<DeploymentInfoResponse> {
     try {
@@ -1064,6 +1019,70 @@ export const dashboardAPI = {
     }
   },
 
+  /** Fetch top locations data from backend */
+  async getLocations(tenants: string[], range: string): Promise<LocationData[]> {
+    try {
+      const response = await apiClient.get<LocationData[]>(`/locations?tenants=${tenants.join(',')}&range=${range}`);
+      return response.data;
+    } catch (error) {
+      logFetchFailure('Locations', error);
+      return [];
+    }
+  },
+
+  /** Fetch audit logs from backend */
+  async getAuditLogs(tenants: string[], range: string): Promise<AuditLog[]> {
+    try {
+      const response = await apiClient.get<AuditLog[]>(`/audit_logs?tenants=${tenants.join(',')}&range=${range}`);
+      return response.data;
+    } catch (error) {
+      logFetchFailure('AuditLogs', error);
+      return [];
+    }
+  },
+
+  /** Fetch top feature configs using backend data */
+  async getFeatureConfigs(tenants: string[], range: string): Promise<FeatureConfig[]> {
+    try {
+      const response = await apiClient.get<FeatureConfig[]>(`/features/configs?tenants=${tenants.join(',')}&range=${range}`);
+      return response.data;
+    } catch (error) {
+      console.error('Failed to fetch feature configs', error);
+      return [];
+    }
+  },
+
+  /** Fetch retention data */
+  async getRetentionData(tenants: string[], range: string): Promise<RetentionData[]> {
+    try {
+      const response = await apiClient.get<RetentionData[]>(`/metrics/retention?tenants=${tenants.join(',')}&range=${range}`);
+      return response.data;
+    } catch {
+      return [];
+    }
+  },
+
+  /**
+   * Which metadata dimensions the producer invented rather than measured, for this tenant and
+   * range. Read from `metadata._simulated`. Charts built on a simulated dimension must say so --
+   * CLAUDE.md, "never fabricate a metric silently".
+   */
+  async getDimensionProvenance(
+    tenants: string[],
+    range: string,
+  ): Promise<Record<string, DimensionProvenance>> {
+    try {
+      const response = await apiClient.get<DimensionProvenanceResponse>(
+        `/metrics/dimension_provenance?tenants=${tenants.join(',')}&range=${range}`);
+      return response.data?.dimensions ?? {};
+    } catch (error) {
+      logFetchFailure('Dimension provenance', error);
+      // An empty map means "unknown", and the charts fall back to showing no badge. That is the
+      // right failure direction: a missing badge is a smaller lie than a badge we cannot justify.
+      return {};
+    }
+  },
+
   /* ─────────────── Intelligence Layer ─────────────── */
 
   /** Latest persona narrative with its evidence card. Persona is resolved server-side. */
@@ -1141,6 +1160,95 @@ export const dashboardAPI = {
     } catch (error) {
       console.error('Failed to ask the intelligence agent', error);
       return null;
+    }
+  },
+
+  /** A governed metric's real daily path, for the report's only time-series chart. */
+  async getKpiSeries(
+    tenants: string[], kpiId: string, days = 30,
+  ): Promise<KpiSeries | null> {
+    try {
+      const response = await apiClient.get<KpiSeries>(
+        `/intelligence/series?tenants=${encodeURIComponent(tenants.join(','))}` +
+        `&kpi_id=${encodeURIComponent(kpiId)}&days=${days}`);
+      return response.data;
+    } catch (error) {
+      console.warn('Failed to load the KPI series', error);
+      return null;
+    }
+  },
+
+  /**
+   * The same answer, delivered step by step as the agent reasons.
+   *
+   * `EventSource` cannot be used: it is GET-only and carries no custom headers, and the question
+   * is a POST body behind the RBAC header trio. So this reads the SSE frames off a fetch stream by
+   * hand. Falls back to nothing, the caller keeps the batch route for that.
+   */
+  async streamIntelligence(
+    tenants: string[],
+    question: string,
+    persona: string | undefined,
+    handlers: {
+      onRail?: (gates: AgentGate[]) => void;
+      onStep?: (step: AgentStep) => void;
+      /** Result tables and charts, published as each capability returns rather than at the end. */
+      onResult?: (payload: { datasets: AgentDataset[]; visuals: AgentVisual[] }) => void;
+      /** Capabilities about to run, announced before they are executed. */
+      onPending?: (payload: { tools: { tool: string; gate: string; label: string }[] }) => void;
+      onAnswer?: (answer: AgentAnswer) => void;
+      onError?: (detail: string) => void;
+    },
+    signal?: AbortSignal,
+  ): Promise<void> {
+    const headers = { 'Content-Type': 'application/json', ...(await rbacHeaders()) };
+    const url =
+      `${API_BASE_URL}/intelligence/ask/stream?tenants=${encodeURIComponent(tenants.join(','))}`;
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(persona ? { question, persona } : { question }),
+      signal,
+    });
+    if (!response.ok || !response.body) {
+      handlers.onError?.(`the agent could not be reached (${response.status})`);
+      return;
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      // SSE frames are separated by a blank line; a partial frame stays in the buffer.
+      const frames = buffer.split('\n\n');
+      buffer = frames.pop() ?? '';
+      for (const frame of frames) {
+        const kind = /^event: (.+)$/m.exec(frame)?.[1];
+        const raw = /^data: (.+)$/m.exec(frame)?.[1];
+        if (!kind || !raw) continue;
+        let payload: unknown;
+        try {
+          payload = JSON.parse(raw);
+        } catch {
+          continue;
+        }
+        if (kind === 'rail') {
+          handlers.onRail?.((payload as { gates: AgentGate[] }).gates);
+        } else if (kind === 'step') {
+          handlers.onStep?.(payload as AgentStep);
+        } else if (kind === 'result') {
+          handlers.onResult?.(payload as { datasets: AgentDataset[]; visuals: AgentVisual[] });
+        } else if (kind === 'pending') {
+          handlers.onPending?.(payload as { tools: { tool: string; gate: string; label: string }[] });
+        } else if (kind === 'answer') {
+          handlers.onAnswer?.(payload as AgentAnswer);
+        } else if (kind === 'error') {
+          handlers.onError?.((payload as { detail: string }).detail);
+        }
+      }
     }
   },
 

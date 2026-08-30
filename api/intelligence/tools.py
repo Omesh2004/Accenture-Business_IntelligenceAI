@@ -120,6 +120,45 @@ def _render_list(res: ToolResult, persona: str) -> str:
             % (res.claims[0]["value"], res.claims[1]["value"], res.facts["governed"] or "none"))
 
 
+def _band_claims(evidence: list[dict], kpi_id: str) -> list[dict]:
+    """The stored forecast band, but only when it is on the metric's own scale.
+
+    A ratio contract whose rate could not be scored is banded on its NUMERATOR, so
+    `kyc_completion_rate` carries a band of 6.19 to 17.81 while the rate itself lives in [0, 1].
+    Publishing that as "its expected range" would be a unit error stated with full confidence, and
+    the numeric verifier cannot catch it: every figure traces to a real row.
+    """
+    band = {c["claim_id"]: c for c in evidence
+            if c["claim_id"] in ("forecast_lower", "forecast_point", "forecast_upper")}
+    if len(band) < 3:
+        return []
+    try:
+        from api.intelligence.contracts import load_declared
+        contract = load_declared().get(kpi_id)
+    except Exception:                                               # noqa: BLE001
+        contract = None
+    if contract is not None and str(contract.raw.get("unit") or "") == "ratio":
+        if float(band["forecast_upper"]["value"]) > 1.0:
+            return []
+    return [band["forecast_lower"], band["forecast_point"], band["forecast_upper"]]
+
+
+def _current_reading(tenant_id: str, kpi_id: str) -> float | None:
+    """The metric's latest daily value, read through the Metric Layer.
+
+    A quiet metric still has a level, and "it is fine" is a weaker answer than "it is at X, inside
+    a band of L to U". Read through the same layer the pipeline scores with, never a hand-written
+    query, so the figure here and the figure in a narrative cannot diverge.
+    """
+    try:
+        from api.intelligence import series as series_reader
+        out = series_reader.kpi_series(tenant_id, kpi_id, days=14)
+        points = out.get("points") or []
+        return float(points[-1]["value"]) if points else None
+    except Exception:                                               # noqa: BLE001
+        return None
+
+
 def _get_insight(tenant_id: str, persona: str, kpi_id: str = "", **_) -> ToolResult:
     row = reader.latest_insight(tenant_id, persona, kpi_id or None)
     if not row:
@@ -136,6 +175,20 @@ def _get_insight(tenant_id: str, persona: str, kpi_id: str = "", **_) -> ToolRes
     if window:
         # Recorded as a fact so the dates in it are verifiable text, not unsupported figures.
         facts["window"] = window
+
+    if not moved:
+        # A quiet metric was returning NO claims at all: the filter above keeps only anomaly
+        # evidence, and a within-band insight has none. The answer was then a bare assertion with
+        # nothing behind it -- "it stayed in range" and not one figure -- which is what made a
+        # correct finding read as though nothing had been analysed. It also left the narrator
+        # unconstrained, because a claim set with no numbers verifies trivially.
+        #
+        # The band is what "within range" MEANS, so it is the evidence for the statement. The
+        # current reading comes from the Metric Layer, the same path the narrative is computed on.
+        claims = list(_band_claims(row.get("evidence") or [], row["kpi_id"]))
+        reading = _current_reading(tenant_id, row["kpi_id"])
+        if reading is not None:
+            claims.append(_claim("observed", reading, "count", "events_raw", "latest reading"))
     return ToolResult(
         True,
         summary="%s: %s" % (row["kpi_id"], "movement recorded" if moved else "within band"),
@@ -170,48 +223,60 @@ def _render_insight(res: ToolResult, persona: str) -> str:
     over = " over %s" % window if window else ""
 
     if not res.data["moved"]:
-        text = ("%s stayed inside its expected range%s, so there is no movement to explain."
-                % (name, over))
+        # "It stayed in range" with no figure is an assertion, not a finding. State the level and
+        # the range that makes the statement checkable; without them a reader cannot tell a metric
+        # sitting mid-band from one a hair inside its upper edge.
+        out = ["%s stayed inside its expected range%s." % (name, over)]
         if "observed" in by_id:
-            text += " It read %s." % phrasing.quantity(by_id["observed"], measure, cadence)
-        return text
+            out.append("It read %s." % phrasing.quantity(by_id["observed"], measure, cadence))
+        if "forecast_lower" in by_id and "forecast_upper" in by_id:
+            out.append("The band it was scored against runs %s to %s, centred on %s."
+                       % (phrasing.quantity(by_id["forecast_lower"], "", ""),
+                          phrasing.quantity(by_id["forecast_upper"], "", ""),
+                          phrasing.quantity(by_id.get("forecast_point", 0), "", "")))
+        out.append("There is no movement to explain.")
+        return " ".join(out)
 
     rose = int(anomaly.get("direction") or 1) >= 0
     # A percentage change against an expected zero is division guarded by an epsilon, not a
     # measurement: it rendered as "rose 19600.0%". State the move in units and say why there is
     # no percentage, rather than publishing a figure that only looks precise.
     from_nothing = "baseline" in by_id and abs(by_id["baseline"]) < 1e-9
+    # When the scored figure is a proxy count, the SENTENCE must name that count. Attaching its
+    # percentage to the KPI said "Digital Adoption Rate rose 3463.6%" of a rate that fell.
+    proxy = bool(res.data.get("proxy")) and bool(measure)
+    subject = measure[:1].upper() + measure[1:] if proxy else name
     out = []
     if from_nothing:
         out.append("%s moved outside its expected range%s: it was expected to be absent "
-                   "altogether, so there is no meaningful percentage to quote." % (name, over))
+                   "altogether, so there is no meaningful percentage to quote." % (subject, over))
         if "observed" in by_id:
             out.append("It read %s."
                        % phrasing.quantity(by_id["observed"], measure, cadence))
     elif "pct_change" in by_id:
-        out.append("%s %s %.1f%%%s." % (name, "rose" if rose else "fell",
+        out.append("%s %s %.1f%%%s." % (subject, "rose" if rose else "fell",
                                         by_id["pct_change"], over))
     else:
-        out.append("%s moved outside its expected range%s." % (name, over))
+        out.append("%s moved outside its expected range%s." % (subject, over))
 
     if not from_nothing and "observed" in by_id and "baseline" in by_id:
         reading = ("The reading was %s against an expected %s"
                    % (phrasing.quantity(by_id["observed"], measure, cadence),
                       phrasing.quantity(by_id["baseline"], "", "")))
         if "magnitude" in by_id:
-            reading += (" — %s of %s"
+            reading += (", %s of %s"
                         % ("a rise" if rose else "a fall",
                            phrasing.quantity(by_id["magnitude"], measure, cadence)))
         out.append(reading + ".")
 
     # Persona-invariant: WHICH number this is cannot depend on who is reading it. Only the length
     # of the explanation varies.
-    if res.data.get("proxy") and measure:
-        out.append("The figure scored is %s, not the rate itself." % measure
+    if proxy:
+        out.append("This is %s, not %s itself." % (measure, name)
                    if level == "summary" else
-                   "The figure scored is %s, the additive count %s is built from, not the rate "
-                   "itself — a ratio does not re-aggregate across segments, so it is never "
-                   "scored directly." % (measure, name))
+                   "This is %s, the additive count %s is built from, not the rate itself. The "
+                   "rate could not be scored here, so the count stands in for it."
+                   % (measure, name))
 
     if level != "summary":
         clause = phrasing.severity_clause(anomaly.get("severity", ""))
@@ -223,11 +288,46 @@ def _render_insight(res: ToolResult, persona: str) -> str:
     return " ".join(out)
 
 
+def _unsliceable_reason(kpi_id: str) -> str:
+    """Why Localize had nothing to search, when the contract already answers that statically.
+
+    "No segment was localized" reads as "we looked and found nothing". For the telemetry
+    contracts the truth is the opposite: every dimension they declare is generated by the
+    producer, `sliceable_dimensions` drops it, and no search is attempted at all. Stating that
+    as an absence of drivers is the failure CLAUDE.md rule 13 names -- confident, and wrong
+    about what the engine actually did.
+
+    Read from the contract's own `dimensions.availability.<key>.live_fabricated`, so this costs
+    no query and cannot disagree with what Localize decided.
+    """
+    if not kpi_id:
+        return ""
+    try:
+        from api.intelligence.contracts import load_declared
+        contract = load_declared().get(kpi_id)
+    except Exception:
+        return ""
+    if contract is None:
+        return ""
+    declared = list(contract.dimensions)
+    fabricated = contract.fabricated_dimensions()
+    if not declared or not fabricated:
+        return ""
+    blocked = sorted(d for d in declared if d in fabricated)
+    if len(blocked) < len(declared):
+        return ""
+    return ("no localization was attempted: every dimension %s declares (%s) is generated by "
+            "the producer rather than measured, so ranking cells over it would be arithmetic "
+            "over a dice roll" % (pretty_name(kpi_id), ", ".join(blocked)))
+
+
 def _get_causes(tenant_id: str, persona: str, kpi_id: str = "", **_) -> ToolResult:
     row = reader.latest_insight(tenant_id, persona, kpi_id or None)
     causes = (row or {}).get("causes") or []
     if not causes:
-        return ToolResult(False, reason="no segment was localized for this movement")
+        resolved = kpi_id or (row or {}).get("kpi_id", "")
+        return ToolResult(False, reason=(_unsliceable_reason(resolved)
+                                         or "no segment was localized for this movement"))
     level = personas.detail(persona)
     shown = causes[:1] if level == "summary" else causes[:config.MAX_CAUSES]
     kpi_id = (row or {}).get("kpi_id", "")
@@ -612,9 +712,47 @@ def _render_greet(res: ToolResult, persona: str) -> str:
     else:
         parts.append("Nothing is currently outside its expected band.")
     if profile.examples:
-        parts.append("Ask me anything about them — for example “%s”."
+        parts.append("Ask me anything about them. For example: “%s”."
                      % profile.examples[0])
     return " ".join(parts)
+
+
+def _identity(tenant_id: str, persona: str, **_) -> ToolResult:
+    """What this system IS. A separate capability from the greeting on purpose.
+
+    "hii" and "who are you" both sat in the greeting's cue list, so both returned the identical
+    canned line. They are not the same question: one is a salutation, the other asks what it is
+    talking to, and answering it with "Good to see you" is the system declining to say.
+    """
+    profile = personas.get(persona)
+    rows = reader.list_insights(tenant_id, persona, limit=config.MAX_KPIS_PER_SWEEP)
+    try:
+        from api.intelligence.contracts import load_declared
+        governed = set(load_declared())
+    except Exception:
+        governed = set()
+    visible = sorted({r["kpi_id"] for r in rows})
+    tier1 = [k for k in visible if k in governed]
+    return ToolResult(
+        True, summary="identity",
+        claims=[_claim("visible_count", len(visible), "count", "insights", "metrics in view", 0),
+                _claim("governed_count", len(tier1), "count", "insights", "governed contracts", 0)],
+        facts={"persona": profile.label, "remit": profile.remit},
+        data={"visible": visible, "governed": tier1}, citation="insights")
+
+
+def _render_identity(res: ToolResult, persona: str) -> str:
+    by_id = {c["claim_id"]: c["value"] for c in res.claims}
+    return (
+        "I am the analytics agent for this platform. I answer only from findings the pipeline has "
+        "already computed and stored: I read %.0f metrics for this tenant, of which %.0f are "
+        "governed contracts with a declared owner and lever list. Every figure I state traces to a "
+        "stored row and is re-checked before you see it, so where the evidence does not support an "
+        "answer I abstain rather than estimate. I compute nothing myself and I never write a query. "
+        "Right now I am answering as %s: %s"
+        % (by_id.get("visible_count", 0), by_id.get("governed_count", 0),
+           res.facts.get("persona", persona), res.facts.get("remit", ""))
+    )
 
 
 def _describe_capabilities(tenant_id: str, persona: str, **_) -> ToolResult:
@@ -648,10 +786,19 @@ REGISTRY: dict[str, ToolSpec] = {
                  "Greet the user and say which metrics are currently flagged. Use for a "
                  "salutation or thanks, never alongside an analytical tool.",
                  "greeting", dict(_TENANT), _greet,
+                 # Salutations only. "who are you" used to live here, so it returned the same
+                 # canned greeting as "hii" -- two different questions, one answer.
                  selectors=("hello", "hi", "hii", "hey", "yo", "hiya", "greetings", "morning",
-                            "afternoon", "evening", "thanks", "thank", "thanx", "cheers", "who are you",
-                            "what are you", "introduce yourself"),
+                            "afternoon", "evening", "thanks", "thank", "thanx", "cheers"),
                  render=_render_greet, priority=0),
+        ToolSpec("describe_identity",
+                 "Explain what this agent is, what it reads from, and what it refuses to do. Use "
+                 "when the user asks who or what they are talking to.",
+                 "greeting", dict(_TENANT), _identity,
+                 selectors=("who are you", "what are you", "introduce yourself", "who am i talking",
+                            "what is this", "who is this", "tell me about yourself",
+                            "how do you work"),
+                 render=_render_identity, priority=0),
         ToolSpec("describe_capabilities",
                  "Explain what this persona can ask about. Use when the user asks for help or "
                  "what the agent can do.",

@@ -3,7 +3,7 @@
 /**
  * AI Insights panel component.
  * Displays generated insights in a professional card-based layout.
- * Uses the blue/black/white design system — no colored gradients.
+ * Uses the blue/black/white design system, no colored gradients.
  */
 
 import React, { memo, useState, useEffect } from 'react';

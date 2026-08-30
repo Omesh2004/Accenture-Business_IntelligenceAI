@@ -191,19 +191,25 @@ Which service to exec into, and what `/app` contains there:
   OpenAI-compatible server works. Confirm it is really in play with
   `SELECT engine_type, count() FROM feature_intelligence.model_runs GROUP BY engine_type`.
 
-**The two commands that cannot be containerised, and why.** Both need `node` *and* NexaBank's
-source in one place, and no image has both — `NexaBank/` is excluded by `.dockerignore` from the
-Python image, and the repo-root `scripts/` is outside the Node images' build context. Run these on
-the host, with the stack up:
+**The two commands that used to need the host now run in the `tests` service** (2026-08-30). Both
+need `node` *and* NexaBank's source in one place. That was the gap: `NexaBank/` is excluded by
+`.dockerignore` from the Python image's build **context**, so it can never be baked in. Closed by
+installing `nodejs` under the existing `INSTALL_DEV` flag (dev-only, runtime images stay lean) and
+bind-mounting the two source subtrees the checks read:
 
 ```bash
-python scripts/verify_data_quality.py    # shells out to node + reads eventTracker.ts;
-                                         # talks to ClickHouse over HTTP :8123, no driver needed
-node scripts/taxonomy_probe.js NexaBank/backend/src/middleware/eventTracker.ts names.txt
+docker compose --profile test run --rm -e CLICKHOUSE_URL=http://clickhouse:8123   tests python scripts/verify_data_quality.py
+docker compose --profile test run --rm tests   node scripts/taxonomy_probe.js NexaBank/backend/src/middleware/eventTracker.ts names.txt
 ```
 
-Do not try to dockerise them by hand each time; if it matters, fix it once by adding `node` to the
-Python image or a small dedicated service, rather than rediscovering the gap.
+`CLICKHOUSE_URL` must be passed: the script defaults to `localhost:8123`, which inside a container
+is the container itself. It still runs on the host unchanged if you prefer.
+
+**Why this mattered more than convenience.** Twelve regression guards keyed on the same two
+prerequisites, and pytest reports an unmeetable prerequisite as a **skip** — which reads as green.
+Seven taxonomy and identity guards had been passing by not running at all, over source they were
+meant to police. The suite went 466 passed / 12 skipped → **478 passed / 0 skipped** with no test
+changed. Treat a skip in this repo as a failure until you have read its reason.
 
 ## Foundation: the four bugs stages 01-08 stand on — all four now land
 
@@ -413,6 +419,12 @@ edit has large, non-obvious blast radius.
 - Never assume a Python edit is live because the service runs `--reload`. The three Python
   services bind-mount nothing; their source is baked in at build time, so an edit does nothing
   until `docker compose up -d --build <service>`.
+- Never assume a **TypeScript** edit is live either. `analytics-dashboard/src` (Turbopack) and
+  `NexaBank/backend/src` (nodemon) do bind-mount, but neither watcher reliably sees a write
+  through a Windows bind mount, so the running process keeps serving the old code with no error
+  anywhere. `docker compose restart <service>` before judging the change. `tsc --noEmit` passing
+  proves the mount is current and proves nothing about the running process — that combination,
+  a clean type-check over code that is not running, is what makes this one hard to spot.
 - Never state a figure without the unit it was actually measured in. Detect scores an **additive
   fundamental**, never a rate, so `digital_adoption_rate`'s stored `observed` is a count of digital
   transactions — and it was narrated as the rate: "rose 79.6% … to 97.00". The real rate was 1.000

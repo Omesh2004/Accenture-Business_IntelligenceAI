@@ -1,26 +1,45 @@
 'use client';
 
 /**
- * Intelligence page — the read surface of the agentic investigation pipeline.
+ * Intelligence report, the read surface of the agentic investigation pipeline.
  *
- * Shows the persona narrative alongside everything needed to audit it: which cells moved, which
- * factor of the identity moved, which sources fed it, what the trust gate decided, and how much of
- * the work was done by an LLM versus a deterministic engine.
+ * Rebuilt around one decision: this page is a REPORT, not a monitoring surface. Everywhere else in
+ * the dashboard, panels display state and the reader draws the conclusion. Here the system draws
+ * the conclusion, so the page has to carry the weight of a claim, an editorial hero, one metric's
+ * real path, and the attribution behind it, and it has to keep the audit within reach without
+ * letting audit furniture outrank the finding.
+ *
+ * WHAT MOVED, AND WHY:
+ *
+ *   * A page-scoped ink/indigo palette (components/intel/theme.ts). The dashboard's blue means
+ *     "a chart"; here a single warm accent is reserved for movement, so colour carries meaning
+ *     rather than decoration.
+ *   * The metric's REAL 30-day path from /intelligence/series, read through the Metric Layer -
+ *     the same code that produced the narrative's numbers, so the line and the sentence cannot
+ *     disagree. Nothing else on this page showed the shape of a movement.
+ *   * Assurance, Recommended actions and Provenance moved into one "Audit trail" disclosure.
+ *     They are evidence for a reader who is checking the finding, not the finding itself, and as
+ *     four equal-weight stacked sections they buried it. Folded, not deleted: every figure they
+ *     carry is still one click away.
  */
 
 import React, { useMemo, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { AnimatePresence, motion } from 'framer-motion';
+import { ChevronDown, FileSearch } from 'lucide-react';
 import { dashboardAPI } from '@/lib/api';
 import { useDashboardData } from '@/hooks/useDashboard';
 import IntelligenceEvidence from '@/components/IntelligenceEvidence';
 import SourceHealthPanel from '@/components/SourceHealthPanel';
 import IntelligenceAsk from '@/components/IntelligenceAsk';
+import { BarGauge, Panel, SourceChip, TimeSeriesPanel } from '@/components/intel/panels';
+import { EASE, FONT, INK, RANK_SCALE, compact, step } from '@/components/intel/theme';
 import { ChartSkeleton } from '@/components/Skeletons';
 
-const VERDICT_TONE: Record<string, string> = {
-  pass: 'border-emerald-200 bg-emerald-50 text-emerald-700',
-  fail: 'border-red-200 bg-red-50 text-red-700',
-  ambiguous: 'border-amber-200 bg-amber-50 text-amber-700',
+const VERDICT_TONE: Record<string, { fg: string; bg: string }> = {
+  pass: { fg: INK.positive, bg: INK.positiveSoft },
+  fail: { fg: INK.danger, bg: INK.dangerSoft },
+  ambiguous: { fg: INK.caution, bg: INK.cautionSoft },
 };
 
 const FACTOR_HINT: Record<string, string> = {
@@ -34,27 +53,116 @@ function titleCase(id: string) {
   return id.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-/** Matches the section rhythm used across the dashboard: title, then a one-line rationale. */
+function Eyebrow({ children }: { children: React.ReactNode }) {
+  return (
+    <p
+      className="text-[10.5px] tracking-[0.22em] uppercase"
+      style={{ color: INK.textFaint, fontFamily: FONT.sans }}
+    >
+      {children}
+    </p>
+  );
+}
+
 function SectionHeader({ title, description }: { title: string; description: string }) {
   return (
-    <div className="flex flex-col gap-2 sm:flex-row sm:items-end sm:justify-between">
-      <div>
-        <h2 className="text-xl font-semibold tracking-tight text-slate-900">{title}</h2>
-        <p className="mt-1 max-w-3xl text-sm leading-6 text-slate-500">{description}</p>
-      </div>
+    <div className="max-w-3xl">
+      <h2 className="text-[24px] leading-tight" style={{ color: INK.text, fontFamily: FONT.display }}>
+        {title}
+      </h2>
+      <p className="mt-1.5 text-[13.5px] leading-[1.65]" style={{ color: INK.textSoft }}>
+        {description}
+      </p>
     </div>
   );
 }
 
-function Pill({ children, tone }: { children: React.ReactNode; tone?: string }) {
+function Pill({ children, tone }: { children: React.ReactNode; tone?: { fg: string; bg: string } }) {
   return (
     <span
-      className={`rounded-full border px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.18em] ${
-        tone || 'border-slate-200 bg-slate-50 text-slate-600'
-      }`}
+      className="rounded-full px-2.5 py-1 text-[10px] font-semibold tracking-[0.14em] uppercase"
+      style={{
+        color: tone?.fg || INK.textSoft,
+        background: tone?.bg || INK.sunken,
+        border: `1px solid ${tone ? 'transparent' : INK.hairline}`,
+      }}
     >
       {children}
     </span>
+  );
+}
+
+function Card({ children, className = '' }: { children: React.ReactNode; className?: string }) {
+  return (
+    <div
+      className={`rounded-2xl border ${className}`}
+      style={{ borderColor: INK.hairline, background: INK.surface }}
+    >
+      {children}
+    </div>
+  );
+}
+
+/** A ranked contribution row. One shared component so segments and factors read identically. */
+function ContributionRow({
+  label,
+  sub,
+  value,
+  index,
+}: {
+  label: string;
+  sub: string;
+  value: number;
+  index: number;
+}) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ delay: step(index, 70), duration: 0.4, ease: EASE }}
+      className="py-3"
+      style={{ borderTop: index === 0 ? 'none' : `1px solid ${INK.hairline}` }}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-[14px] font-medium" style={{ color: INK.text }}>
+            {label}
+          </p>
+          <p
+            className="mt-0.5 text-[10.5px] tracking-[0.14em] uppercase"
+            style={{ color: INK.textFaint }}
+          >
+            {sub}
+          </p>
+        </div>
+        <span
+          className="shrink-0 text-[17px]"
+          style={{ color: INK.text, fontFamily: FONT.mono, fontVariantNumeric: 'tabular-nums' }}
+        >
+          {(value * 100).toFixed(1)}%
+        </span>
+      </div>
+      <div className="mt-2 h-1.5 overflow-hidden rounded-full" style={{ background: INK.sunken }}>
+        <motion.div
+          className="h-full rounded-full"
+          style={{ background: RANK_SCALE[index % RANK_SCALE.length] }}
+          initial={{ width: 0 }}
+          animate={{ width: `${Math.min(Math.abs(value) * 100, 100)}%` }}
+          transition={{ delay: step(index, 70) + 0.1, duration: 0.7, ease: EASE }}
+        />
+      </div>
+    </motion.div>
+  );
+}
+
+function Empty({ children }: { children: React.ReactNode }) {
+  return (
+    <p
+      className="rounded-xl border border-dashed px-4 py-8 text-center text-[13px]"
+      style={{ borderColor: INK.hairline, color: INK.textFaint }}
+    >
+      {children}
+    </p>
   );
 }
 
@@ -62,11 +170,22 @@ export default function IntelligencePage() {
   const { tenantsParam } = useDashboardData();
   // Empty means "whatever the server resolves from my role"; a switch only ever narrows.
   const [persona, setPersona] = useState('');
+  const [auditOpen, setAuditOpen] = useState(false);
 
   const { data: insight, isLoading } = useQuery({
     queryKey: ['intelligenceInsight', tenantsParam, persona],
     queryFn: () => dashboardAPI.getIntelligenceInsight(tenantsParam, undefined, persona || undefined),
     staleTime: 30 * 1000,
+    retry: 1,
+  });
+
+  // The metric's real daily path. Keyed on the KPI so switching personas -- which can change which
+  // metric is on screen -- refetches rather than showing the previous metric's line.
+  const { data: series } = useQuery({
+    queryKey: ['intelligenceSeries', tenantsParam, insight?.kpi_id],
+    queryFn: () => dashboardAPI.getKpiSeries(tenantsParam, insight!.kpi_id, 30),
+    enabled: Boolean(insight?.kpi_id),
+    staleTime: 60 * 1000,
     retry: 1,
   });
 
@@ -118,308 +237,423 @@ export default function IntelligencePage() {
 
   if (!insight) {
     return (
-      <div className="space-y-8 animate-in fade-in duration-500">
-        <section className="rounded-4xl border border-slate-200 bg-white p-6 shadow-sm">
-          <p className="text-[11px] font-semibold uppercase tracking-[0.25em] text-slate-400">
-            Decision intelligence
-          </p>
-          <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">
-            Investigation Report
-          </h1>
-          <p className="mt-3 max-w-3xl text-sm leading-6 text-slate-500">
-            An investigation is opened only when a governed KPI moves beyond its forecast band. No
-            such movement has been recorded for the selected portfolio, which is itself a finding:
-            the monitored metrics are operating within expectation.
-          </p>
-        </section>
-        <IntelligenceAsk tenants={tenantsParam} persona={persona}
-                         onPersonaChange={setPersona} />
+      <div className="space-y-8" style={{ background: INK.canvas }}>
+        <motion.section {...{ initial: { opacity: 0, y: 10 }, animate: { opacity: 1, y: 0 } }}>
+          <Card className="p-7">
+            <Eyebrow>Decision intelligence</Eyebrow>
+            <h1
+              className="mt-2 text-[34px] leading-tight"
+              style={{ color: INK.text, fontFamily: FONT.display }}
+            >
+              Investigation Report
+            </h1>
+            <p className="mt-3 max-w-3xl text-[14px] leading-[1.7]" style={{ color: INK.textSoft }}>
+              An investigation is opened only when a governed KPI moves beyond its forecast band. No
+              such movement has been recorded for the selected portfolio, which is itself a finding:
+              the monitored metrics are operating within expectation.
+            </p>
+          </Card>
+        </motion.section>
+        <IntelligenceAsk tenants={tenantsParam} persona={persona} onPersonaChange={setPersona} />
       </div>
     );
   }
 
   const movementLabel = insight.anomaly_id ? 'Material movement detected' : 'Within expectation';
+  const personaLabel =
+    personaChoices?.personas.find((p) => p.id === insight.persona)?.label ||
+    titleCase(insight.persona);
 
   return (
-    <div className="space-y-8 animate-in fade-in duration-500">
-      {/* Executive summary */}
-      <section className="rounded-4xl border border-slate-200 bg-white p-6 shadow-sm">
-        <div className="flex flex-col gap-6 lg:flex-row lg:items-start lg:justify-between">
-          <div className="max-w-3xl">
-            <p className="text-[11px] font-semibold uppercase tracking-[0.25em] text-slate-400">
-              Decision intelligence ·{' '}
-              {personaChoices?.personas.find((p) => p.id === insight.persona)?.label ||
-                titleCase(insight.persona)}{' '}
-              view
-            </p>
-            <h1 className="mt-2 text-3xl font-semibold tracking-tight text-slate-900">
-              {insight.headline}
-            </h1>
-            <p className="mt-3 text-sm leading-6 text-slate-600">{insight.narrative}</p>
-            <div className="mt-4 flex flex-wrap items-center gap-2">
-              <Pill>{insight.kpi_id.replace(/_/g, ' ')}</Pill>
-              <Pill tone={VERDICT_TONE[insight.trust_verdict] || VERDICT_TONE.ambiguous}>
-                Trust {insight.trust_verdict}
-              </Pill>
-              <Pill
-                tone={
-                  insight.anomaly_id
-                    ? 'border-[#1a73e8]/30 bg-[#1a73e8]/5 text-[#1a73e8]'
-                    : undefined
-                }
+    <div className="space-y-10 pb-4" style={{ background: INK.canvas }}>
+      {/* ── Executive summary ─────────────────────────────────────────────────────────── */}
+      <motion.section
+        initial={{ opacity: 0, y: 12 }}
+        animate={{ opacity: 1, y: 0 }}
+        transition={{ duration: 0.5, ease: EASE }}
+      >
+        <Card className="overflow-hidden">
+          <div className="flex flex-col gap-7 p-7 lg:flex-row lg:items-start lg:justify-between">
+            <div className="max-w-3xl">
+              <Eyebrow>Decision intelligence · {personaLabel} view</Eyebrow>
+              <h1
+                className="mt-2.5 text-[34px] leading-[1.15]"
+                style={{ color: INK.text, fontFamily: FONT.display }}
               >
-                {movementLabel}
-              </Pill>
-              {insight.simulated === 1 && (
-                <Pill tone="border-amber-200 bg-amber-50 text-amber-700">Modelled metric</Pill>
-              )}
-              {insight.abstained === 1 && <Pill>Abstained</Pill>}
-            </div>
-          </div>
-
-          <div className="grid shrink-0 grid-cols-2 gap-3 lg:w-72 lg:grid-cols-1">
-            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
-                Confidence
+                {insight.headline}
+              </h1>
+              <p className="mt-3.5 text-[14.5px] leading-[1.75]" style={{ color: INK.textSoft }}>
+                {insight.narrative}
               </p>
-              <p className="mt-2 text-3xl font-semibold text-slate-900">
-                {(insight.confidence * 100).toFixed(0)}%
-              </p>
-              <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200">
-                <div
-                  className="h-full bg-[#1a73e8]"
-                  style={{ width: `${Math.min(insight.confidence * 100, 100)}%` }}
-                />
+              <div className="mt-5 flex flex-wrap items-center gap-2">
+                <Pill>{insight.kpi_id.replace(/_/g, ' ')}</Pill>
+                <Pill tone={VERDICT_TONE[insight.trust_verdict] || VERDICT_TONE.ambiguous}>
+                  Trust {insight.trust_verdict}
+                </Pill>
+                <Pill
+                  tone={
+                    insight.anomaly_id ? { fg: INK.signal, bg: INK.signalSoft } : undefined
+                  }
+                >
+                  {movementLabel}
+                </Pill>
+                {insight.simulated === 1 && (
+                  <Pill tone={{ fg: INK.caution, bg: INK.cautionSoft }}>Modelled metric</Pill>
+                )}
+                {insight.abstained === 1 && <Pill>Abstained</Pill>}
               </div>
             </div>
-            <div className="rounded-2xl border border-slate-200 bg-white p-4">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
-                Issued
-              </p>
-              <p className="mt-2 text-sm font-semibold text-slate-900">
-                {new Date(insight.generated_at).toLocaleString()}
-              </p>
-              <p className="mt-1 break-all text-[11px] text-slate-400">
-                Ref {insight.investigation_id}
-              </p>
+
+            <div className="grid shrink-0 grid-cols-2 gap-3 lg:w-64 lg:grid-cols-1">
+              <div
+                className="rounded-2xl p-4"
+                style={{ background: INK.sunken, border: `1px solid ${INK.hairline}` }}
+              >
+                <Eyebrow>Confidence</Eyebrow>
+                <p
+                  className="mt-2 text-[30px] leading-none"
+                  style={{ color: INK.text, fontFamily: FONT.mono, fontVariantNumeric: 'tabular-nums' }}
+                >
+                  {(insight.confidence * 100).toFixed(0)}%
+                </p>
+                <div
+                  className="mt-3 h-1.5 overflow-hidden rounded-full"
+                  style={{ background: INK.hairline }}
+                >
+                  <motion.div
+                    className="h-full rounded-full"
+                    style={{ background: INK.accent }}
+                    initial={{ width: 0 }}
+                    animate={{ width: `${Math.min(insight.confidence * 100, 100)}%` }}
+                    transition={{ duration: 0.85, ease: EASE, delay: 0.25 }}
+                  />
+                </div>
+              </div>
+              <div
+                className="rounded-2xl p-4"
+                style={{ background: INK.surface, border: `1px solid ${INK.hairline}` }}
+              >
+                <Eyebrow>Issued</Eyebrow>
+                <p className="mt-2 text-[13px] font-semibold" style={{ color: INK.text }}>
+                  {new Date(insight.generated_at).toLocaleString()}
+                </p>
+                <p
+                  className="mt-1 break-all text-[10.5px]"
+                  style={{ color: INK.textFaint, fontFamily: FONT.mono }}
+                >
+                  Ref {insight.investigation_id}
+                </p>
+              </div>
             </div>
           </div>
-        </div>
-      </section>
+        </Card>
+      </motion.section>
 
+      {/* ── Ask the analyst ───────────────────────────────────────────────────────────── */}
       <section className="space-y-4">
         <SectionHeader
           title="Ask the analyst"
-          description="Questions are answered from recorded findings only. Where the evidence does not support an answer, the response abstains rather than estimating."
+          description="The agent reads the question, chooses which pipeline stages to run, and answers only from recorded findings. Where the evidence does not support an answer, it abstains rather than estimating."
         />
-        <IntelligenceAsk tenants={tenantsParam} persona={persona}
-                         onPersonaChange={setPersona} />
+        <IntelligenceAsk tenants={tenantsParam} persona={persona} onPersonaChange={setPersona} />
       </section>
 
-      {/* Attribution */}
+      {/* ── Attribution ───────────────────────────────────────────────────────────────── */}
       <section className="space-y-4">
         <SectionHeader
           title="Attribution"
-          description="Where the movement concentrated, and which factor of the metric identity carried it. Contributions are computed on additive fundamentals, never on rates."
+          description="The metric's own path, then where the movement concentrated and which factor of the identity carried it. Contributions are computed on additive fundamentals, never on rates."
         />
+
+        {series && series.points?.length > 0 && (
+          <TimeSeriesPanel
+            title={series.name}
+            subtitle={`${series.days}-day path · ${
+              series.unit === 'ratio' ? 'rate' : `counting ${series.measure || 'events'}`
+            } · one point per UTC day`}
+            points={series.points}
+            isRate={series.unit === 'ratio'}
+            band={series.forecast}
+            bandWithheld={series.forecast_withheld}
+            source={series.source}
+            height={230}
+          />
+        )}
+
+        {/* Bar gauges on a shared scale rather than a percentage per card. Per-card bars made
+            rank 1 and rank 5 look equally important until the figure was read; one axis makes the
+            ordering visible first, and the threshold colour states the judgement outright. */}
         <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="flex items-center justify-between gap-3">
-              <h3 className="text-sm font-semibold text-slate-700">Segment concentration</h3>
-              <Pill>{insight.causes.length} ranked</Pill>
-            </div>
-            <div className="mt-4 space-y-3">
-              {insight.causes.map((cause) => (
-                <div
-                  key={`${cause.rank}-${cause.fundamental}-${JSON.stringify(cause.dimensions)}`}
-                  className="rounded-xl border border-slate-200 bg-slate-50 p-4"
-                >
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold text-slate-900">
-                        {Object.entries(cause.dimensions)
-                          .map(([k, v]) => `${titleCase(k)}: ${v}`)
-                          .join(' · ')}
-                      </p>
-                      <p className="mt-1 text-[11px] uppercase tracking-[0.18em] text-slate-400">
-                        {cause.fundamental.replace(/_/g, ' ')} · {cause.method}
-                      </p>
-                    </div>
-                    <span className="shrink-0 text-lg font-semibold text-slate-900">
-                      {(cause.contribution * 100).toFixed(1)}%
-                    </span>
-                  </div>
-                  <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-200">
-                    <div
-                      className="h-full bg-[#1a73e8]"
-                      style={{ width: `${Math.min(Math.abs(cause.contribution) * 100, 100)}%` }}
-                    />
-                  </div>
-                </div>
-              ))}
-              {insight.causes.length === 0 && (
-                <p className="rounded-xl border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-400">
+          <Panel
+            title="Segment concentration"
+            subtitle="share of the movement, ranked"
+            right={<Pill>{insight.causes.length} ranked</Pill>}
+            footer={<SourceChip source="root_causes" />}
+          >
+            {insight.causes.length > 0 ? (
+              <BarGauge
+                rows={insight.causes.map((cause) => ({
+                  label: Object.entries(cause.dimensions)
+                    .map(([k, v]) => `${titleCase(k)}: ${v}`)
+                    .join(' · '),
+                  sub: `${cause.fundamental.replace(/_/g, ' ')} · ${cause.method}`,
+                  value: cause.contribution * 100,
+                }))}
+              />
+            ) : (
+              <div className="p-4">
+                <Empty>
                   No single segment accounts for this result; the effect is distributed across the
                   cube.
-                </p>
-              )}
-            </div>
-          </div>
+                </Empty>
+              </div>
+            )}
+          </Panel>
 
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="flex items-center justify-between gap-3">
-              <h3 className="text-sm font-semibold text-slate-700">Factor decomposition</h3>
-              <Pill>{insight.factors.length} factors</Pill>
-            </div>
-            <div className="mt-4 space-y-3">
-              {insight.factors.map((factor) => (
-                <div key={factor.factor} className="rounded-xl border border-slate-200 bg-white p-4">
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold capitalize text-slate-900">
-                        {factor.factor.replace(/_/g, ' ')}
-                      </p>
-                      <p className="mt-1 text-[11px] text-slate-500">
-                        {FACTOR_HINT[factor.factor] || 'Declared factor'}
-                      </p>
-                    </div>
-                    <span className="shrink-0 text-lg font-semibold text-slate-900">
-                      {(factor.contribution * 100).toFixed(1)}%
-                    </span>
-                  </div>
-                  <div className="mt-3 h-2 overflow-hidden rounded-full bg-slate-100">
-                    <div
-                      className="h-full bg-[#1a73e8]"
-                      style={{ width: `${Math.min(Math.abs(factor.contribution) * 100, 100)}%` }}
-                    />
-                  </div>
-                </div>
-              ))}
-              {insight.factors.length === 0 && (
-                <p className="rounded-xl border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-400">
+          <Panel
+            title="Factor decomposition"
+            subtitle="price, volume, mix and entry/exit"
+            right={<Pill>{insight.factors.length} factors</Pill>}
+            footer={<SourceChip source="insights" />}
+          >
+            {insight.factors.length > 0 ? (
+              <BarGauge
+                rows={insight.factors.map((factor) => ({
+                  label: titleCase(factor.factor),
+                  sub: FACTOR_HINT[factor.factor] || 'Declared factor',
+                  value: factor.contribution * 100,
+                }))}
+              />
+            ) : (
+              <div className="p-4">
+                <Empty>
                   This metric declares no factor identity, so no decomposition is published.
-                </p>
-              )}
-            </div>
-          </div>
+                </Empty>
+              </div>
+            )}
+          </Panel>
         </div>
       </section>
 
-      {/* Assurance */}
-      <section className="space-y-4">
-        <SectionHeader
-          title="Assurance"
-          description="Every figure in the narrative traces to a stored claim, and every trust check is recorded whether it passed or failed."
-        />
-        <IntelligenceEvidence
-          evidence={insight.evidence}
-          trust={insight.trust}
-          engine={insight.engine_breakdown}
-          verifierPass={insight.verifier_pass}
-        />
-      </section>
+      {/* ── Audit trail ───────────────────────────────────────────────────────────────────
+          Assurance, recommendations and provenance are evidence FOR the finding, not the finding.
+          As four equal-weight stacked sections they outranked it, so they fold behind one
+          disclosure, reachable in a click, never competing for the first read. */}
+      <section>
+        <motion.button
+          onClick={() => setAuditOpen((v) => !v)}
+          whileHover={{ y: -1 }}
+          className="flex w-full cursor-pointer items-center gap-3 rounded-2xl border px-5 py-4 text-left"
+          style={{ borderColor: INK.hairline, background: INK.surface }}
+        >
+          <FileSearch className="h-4 w-4 shrink-0" style={{ color: INK.accent }} />
+          <div className="min-w-0">
+            <h2 className="text-[17px] leading-tight" style={{ color: INK.text, fontFamily: FONT.display }}>
+              Audit trail
+            </h2>
+            <p className="mt-0.5 text-[12.5px]" style={{ color: INK.textSoft }}>
+              Every figure traced to a stored claim, the levers proposed against it, and the sources
+              and runtime cost behind the whole investigation.
+            </p>
+          </div>
+          <span
+            className="ml-auto flex shrink-0 items-center gap-2 text-[11px]"
+            style={{ color: INK.textFaint, fontFamily: FONT.mono }}
+          >
+            {insight.evidence.length} claims · {relevantRecs.length} actions · {sources.length} sources
+            <ChevronDown
+              className={`h-4 w-4 transition-transform duration-300 ${auditOpen ? 'rotate-180' : ''}`}
+            />
+          </span>
+        </motion.button>
 
-      {/* Recommendations */}
-      <section className="space-y-4">
-        <SectionHeader
-          title="Recommended actions"
-          description="Drawn from the levers declared in the metric contract. Nothing is executed automatically; each item requires an accountable owner to authorise it."
-        />
-        <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-          <div className="space-y-3">
-            {relevantRecs.map((rec) => (
-              <div key={rec.rec_id} className="rounded-xl border border-slate-200 bg-slate-50 p-4">
-                <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                  <div className="min-w-0">
-                    <p className="text-sm font-semibold text-slate-900">{rec.action}</p>
-                    <p className="mt-1 text-[11px] uppercase tracking-[0.18em] text-slate-400">
-                      Lever {rec.lever.replace(/_/g, ' ')} · Owner{' '}
-                      {rec.owner_role.replace(/_/g, ' ')}
-                    </p>
-                  </div>
-                  <div className="flex shrink-0 items-center gap-2">
-                    <Pill>{rec.status.replace(/_/g, ' ')}</Pill>
-                    <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] font-semibold text-slate-700">
-                      Impact up to {rec.expected_impact.high.toLocaleString()}
-                    </span>
+        <AnimatePresence initial={false}>
+          {auditOpen && (
+            <motion.div
+              initial={{ opacity: 0, height: 0 }}
+              animate={{ opacity: 1, height: 'auto' }}
+              exit={{ opacity: 0, height: 0 }}
+              transition={{ duration: 0.4, ease: EASE }}
+              className="overflow-hidden"
+            >
+              <div className="space-y-8 pt-6">
+                <div className="space-y-3">
+                  <SectionHeader
+                    title="Assurance"
+                    description="Every figure in the narrative traces to a stored claim, and every trust check is recorded whether it passed or failed."
+                  />
+                  <IntelligenceEvidence
+                    evidence={insight.evidence}
+                    trust={insight.trust}
+                    engine={insight.engine_breakdown}
+                    verifierPass={insight.verifier_pass}
+                  />
+                </div>
+
+                <div className="space-y-3">
+                  <SectionHeader
+                    title="Recommended actions"
+                    description="Drawn from the levers declared in the metric contract. Nothing is executed automatically; each item requires an accountable owner to authorise it."
+                  />
+                  <Card>
+                    {relevantRecs.map((rec, i) => (
+                      <motion.div
+                        key={rec.rec_id}
+                        initial={{ opacity: 0, x: -6 }}
+                        animate={{ opacity: 1, x: 0 }}
+                        transition={{ delay: step(i, 60), duration: 0.36, ease: EASE }}
+                        className="flex flex-wrap items-start justify-between gap-3 p-5"
+                        style={{ borderTop: i === 0 ? 'none' : `1px solid ${INK.hairline}` }}
+                      >
+                        <div className="min-w-0">
+                          <p className="text-[14px] font-medium" style={{ color: INK.text }}>
+                            {rec.action}
+                          </p>
+                          <p
+                            className="mt-1 text-[10.5px] tracking-[0.14em] uppercase"
+                            style={{ color: INK.textFaint }}
+                          >
+                            Lever {rec.lever} · Owner {rec.owner_role}
+                          </p>
+                        </div>
+                        <div className="flex shrink-0 items-center gap-2">
+                          <Pill>{rec.status}</Pill>
+                          <span
+                            className="rounded-full px-2.5 py-1 text-[11px]"
+                            style={{
+                              background: INK.signalSoft,
+                              color: INK.signal,
+                              fontFamily: FONT.mono,
+                            }}
+                          >
+                            up to {compact(rec.expected_impact.high)}
+                          </span>
+                        </div>
+                      </motion.div>
+                    ))}
+                    {relevantRecs.length === 0 && (
+                      <div className="p-5">
+                        <Empty>
+                          No action is proposed. The contract&apos;s lever list offers nothing that
+                          applies to this result.
+                        </Empty>
+                      </div>
+                    )}
+                  </Card>
+                </div>
+
+                <div className="space-y-3">
+                  <SectionHeader
+                    title="Provenance and cost"
+                    description="The sources that fed this investigation, their delivery cadence against SLA, and the runtime cost of each pipeline stage."
+                  />
+                  <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+                    <SourceHealthPanel sources={sources.length ? sources : insight.sources} />
+                    <Card className="p-5">
+                      <div className="flex items-center justify-between gap-3">
+                        <h3
+                          className="text-[15px]"
+                          style={{ color: INK.text, fontFamily: FONT.display }}
+                        >
+                          Runtime by stage
+                        </h3>
+                        <Pill
+                          tone={
+                            (telemetry?.total_cost_usd ?? 0) === 0
+                              ? { fg: INK.positive, bg: INK.positiveSoft }
+                              : undefined
+                          }
+                        >
+                          {telemetry?.total_runs ?? 0} runs ·{' '}
+                          {(telemetry?.total_cost_usd ?? 0) === 0
+                            ? 'no model spend'
+                            : `$${(telemetry?.total_cost_usd ?? 0).toFixed(4)}`}
+                        </Pill>
+                      </div>
+                      <div className="mt-4 max-h-80 overflow-auto">
+                        <table className="w-full">
+                          <thead className="sticky top-0" style={{ background: INK.sunken }}>
+                            <tr>
+                              {['Stage', 'Engine', 'Runs', 'Latency', 'Tokens'].map((h, i) => (
+                                <th
+                                  key={h}
+                                  className={`px-3 py-2 text-[10px] tracking-[0.14em] uppercase ${
+                                    i > 1 ? 'text-right' : 'text-left'
+                                  }`}
+                                  style={{ color: INK.textFaint }}
+                                >
+                                  {h}
+                                </th>
+                              ))}
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {(telemetry?.by_stage ?? []).map((row) => (
+                              <tr key={row.stage} style={{ borderTop: `1px solid ${INK.hairline}` }}>
+                                <td className="px-3 py-2 text-[13px]" style={{ color: INK.text }}>
+                                  {titleCase(row.stage)}
+                                </td>
+                                <td className="px-3 py-2">
+                                  <Pill>{row.engine_type}</Pill>
+                                </td>
+                                {[row.runs, `${row.latency_ms} ms`].map((v, i) => (
+                                  <td
+                                    key={i}
+                                    className="px-3 py-2 text-right text-[13px]"
+                                    style={{
+                                      color: INK.textSoft,
+                                      fontFamily: FONT.mono,
+                                      fontVariantNumeric: 'tabular-nums',
+                                    }}
+                                  >
+                                    {v}
+                                  </td>
+                                ))}
+                                {/* A bare "0" in a Tokens column reads as a measurement that
+                                    failed. It is the opposite: this stage reached its answer
+                                    without a model, which is the guarantee the platform makes.
+                                    Say that instead of printing a zero. */}
+                                <td className="px-3 py-2 text-right">
+                                  {row.tokens_in + row.tokens_out > 0 ? (
+                                    <span
+                                      className="text-[13px]"
+                                      style={{
+                                        color: INK.textSoft,
+                                        fontFamily: FONT.mono,
+                                        fontVariantNumeric: 'tabular-nums',
+                                      }}
+                                    >
+                                      {(row.tokens_in + row.tokens_out).toLocaleString()}
+                                    </span>
+                                  ) : (
+                                    <span
+                                      title="This stage is deterministic. It produced its result from stored rows and arithmetic, with no language model in the path."
+                                      className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-medium whitespace-nowrap"
+                                      style={{ background: INK.positiveSoft, color: INK.positive }}
+                                    >
+                                      no LLM needed
+                                    </span>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                            {!(telemetry?.by_stage ?? []).length && (
+                              <tr>
+                                <td colSpan={5} className="px-3 py-8 text-center text-[13px]" style={{ color: INK.textFaint }}>
+                                  No stage has been executed for this portfolio yet.
+                                </td>
+                              </tr>
+                            )}
+                          </tbody>
+                        </table>
+                      </div>
+                    </Card>
                   </div>
                 </div>
               </div>
-            ))}
-            {relevantRecs.length === 0 && (
-              <p className="rounded-xl border border-dashed border-slate-200 px-4 py-8 text-center text-sm text-slate-400">
-                No action is proposed. The contract&apos;s lever list offers nothing that applies to
-                this result.
-              </p>
-            )}
-          </div>
-        </div>
-      </section>
-
-      {/* Provenance */}
-      <section className="space-y-4">
-        <SectionHeader
-          title="Provenance and cost"
-          description="The sources that fed this investigation, their delivery cadence against SLA, and the runtime cost of each pipeline stage."
-        />
-        <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-          <SourceHealthPanel sources={sources.length ? sources : insight.sources} />
-
-          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="flex items-center justify-between gap-3">
-              <h3 className="text-sm font-semibold text-slate-700">Runtime by stage</h3>
-              {telemetry && (
-                <Pill>
-                  {telemetry.total_runs} runs · ${telemetry.total_cost_usd.toFixed(4)}
-                </Pill>
-              )}
-            </div>
-            <div className="mt-4 max-h-80 overflow-y-auto">
-              <table className="w-full text-left">
-                <thead>
-                  <tr className="border-b border-slate-200 text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-400">
-                    <th className="pb-3 pr-4">Stage</th>
-                    <th className="pb-3 pr-4">Engine</th>
-                    <th className="pb-3 pr-4 text-right">Runs</th>
-                    <th className="pb-3 pr-4 text-right">Latency</th>
-                    <th className="pb-3 text-right">Tokens</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {(telemetry?.by_stage || []).map((stage) => (
-                    <tr
-                      key={`${stage.stage}-${stage.engine_type}`}
-                      className="border-b border-slate-100 last:border-0"
-                    >
-                      <td className="py-3 pr-4 text-sm capitalize text-slate-900">
-                        {stage.stage.replace(/_/g, ' ')}
-                      </td>
-                      <td className="py-3 pr-4">
-                        <span className="inline-flex rounded-full border border-slate-200 bg-slate-50 px-2.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-600">
-                          {stage.engine_type}
-                        </span>
-                      </td>
-                      <td className="py-3 pr-4 text-right text-sm text-slate-700">{stage.runs}</td>
-                      <td className="py-3 pr-4 text-right text-sm text-slate-700">
-                        {stage.latency_ms.toLocaleString()} ms
-                      </td>
-                      <td className="py-3 text-right text-sm text-slate-700">
-                        {(stage.tokens_in + stage.tokens_out).toLocaleString()}
-                      </td>
-                    </tr>
-                  ))}
-                  {!telemetry?.by_stage?.length && (
-                    <tr>
-                      <td colSpan={5} className="py-8 text-center text-sm text-slate-400">
-                        No stage has been executed for this portfolio yet.
-                      </td>
-                    </tr>
-                  )}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
+            </motion.div>
+          )}
+        </AnimatePresence>
       </section>
     </div>
   );

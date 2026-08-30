@@ -74,7 +74,7 @@ const dataCategories = [
     name: 'Aggregated KPI Metrics',
     icon: BarChart3,
     cloudVisible: true,
-    description: 'Total events, active features, response times — aggregated counts only.',
+    description: 'Total events, active features, response times, aggregated counts only.',
     sensitivity: 'low' as const,
     examples: 'Total Events: 14.2K, Active Features: 8',
   },
@@ -307,7 +307,7 @@ export default function TransparencyPage() {
             </div>
             <div className="flex-1">
               <h3 className="text-sm font-bold text-gray-900 flex items-center gap-2">
-                On-Premise Mode — Full Data Access
+                On-Premise Mode, Full Data Access
               </h3>
               <p className="text-xs text-gray-600 mt-1.5 leading-relaxed">
                 You are viewing the <strong>complete analytics dashboard</strong> as it exists on your infrastructure.
@@ -327,7 +327,7 @@ export default function TransparencyPage() {
             </div>
             <div className="flex-1">
               <h3 className="text-sm font-bold text-blue-900 flex items-center gap-2">
-                Cloud Mode — Super Admin&apos;s Exact View
+                Cloud Mode, Super Admin&apos;s Exact View
               </h3>
               <p className="text-xs text-blue-700 mt-1.5 leading-relaxed">
                 Below is <strong>exactly</strong> what the Super Admin sees when they log in.
@@ -507,8 +507,8 @@ export default function TransparencyPage() {
                   {viewMode === 'on-prem'
                     ? 'This is the complete data your on-premise installation holds'
                     : isAppAdmin
-                      ? `This is exactly what the Super Admin sees about your app — nothing more, nothing less`
-                      : 'This is exactly what the Super Admin sees — nothing more, nothing less'}
+                      ? `This is exactly what the Super Admin sees about your app, nothing more, nothing less`
+                      : 'This is exactly what the Super Admin sees, nothing more, nothing less'}
                 </p>
               </div>
             </div>
@@ -534,7 +534,7 @@ export default function TransparencyPage() {
                   <div className="flex items-center gap-2 px-3 py-2 bg-white rounded-xl border border-gray-200 shadow-sm w-fit">
                     <Lock className="w-3.5 h-3.5 text-[#1a73e8]" />
                     <span className="text-[11px] font-bold text-gray-700 uppercase tracking-wider">
-                      Private — Never leaves your infrastructure
+                      Private, Never leaves your infrastructure
                     </span>
                   </div>
 
@@ -590,13 +590,13 @@ export default function TransparencyPage() {
 
                   {/* Locations */}
                   <section>
-                    <TopLocations data={dashboardData.locations} />
+                    <TopLocations data={dashboardData.locations} provenance={dashboardData.dimensionProvenance} />
                   </section>
 
                   <section className="flex-col" id="detail-section" aria-label="Detailed Analytics">
                           <TopPages data={dashboardData.topPages} />
                           <div className="grid grid-cols-1 gap-10 mt-8">
-                            <DeviceBreakdownChart data={dashboardData.deviceBreakdown} />
+                            <DeviceBreakdownChart data={dashboardData.deviceBreakdown} provenance={dashboardData.dimensionProvenance} />
                           </div>
                         </section>
 
@@ -626,7 +626,7 @@ export default function TransparencyPage() {
                 <DashboardSkeleton />
               ) : (
                 <>
-                  {/* Aggregated KPIs — the only metrics super admin gets */}
+                  {/* Aggregated KPIs, the only metrics super admin gets */}
                   <section>
                     <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
                       <CheckCircle2 className="w-4 h-4 text-blue-500" />
@@ -646,8 +646,8 @@ export default function TransparencyPage() {
                           </p>
                           <h2 className="text-3xl font-bold text-gray-900">
                             {isAppAdmin
-                              ? (selectedTenants.length > 0 ? selectedTenants.map((t: string) => t.charAt(0).toUpperCase() + t.slice(1)).join(', ') : '—')
-                              : (adminSummary?.available === false ? '—' : (adminSummary?.total_tenants ?? '—'))}
+                              ? (selectedTenants.length > 0 ? selectedTenants.map((t: string) => t.charAt(0).toUpperCase() + t.slice(1)).join(', ') : '-')
+                              : (adminSummary?.available === false ? '-' : (adminSummary?.total_tenants ?? '-'))}
                           </h2>
                         </div>
                       </div>
@@ -657,11 +657,11 @@ export default function TransparencyPage() {
                         </div>
                         <div>
                           <p className="text-sm font-medium text-gray-500">
-                            {isAppAdmin ? `Events (${timeRange}) — ${selectedTenants.join(', ')}` : `Total Events (${adminSummary?.time_range ?? timeRange})`}
+                            {isAppAdmin ? `Events (${timeRange}), ${selectedTenants.join(', ')}` : `Total Events (${adminSummary?.time_range ?? timeRange})`}
                           </p>
                           <h2 className="text-3xl font-bold text-gray-900">
                             {adminSummary?.available === false
-                              ? '—'
+                              ? '-'
                               : (adminSummary?.total_events ?? 0).toLocaleString()}
                           </h2>
                         </div>
@@ -716,7 +716,7 @@ export default function TransparencyPage() {
                     </div>
                   </section>
 
-                  {/* AI Insights — also visible to super admin */}
+                  {/* AI Insights, also visible to super admin */}
                   <section>
                     <h3 className="text-sm font-semibold text-gray-700 mb-3 flex items-center gap-2">
                       <CheckCircle2 className="w-4 h-4 text-blue-500" />
@@ -735,7 +735,7 @@ export default function TransparencyPage() {
                     <div className="flex items-center gap-2 px-3 py-2 bg-red-50 rounded-xl border border-red-100 w-fit">
                       <EyeOff className="w-3.5 h-3.5 text-red-500" />
                       <span className="text-[11px] font-bold text-red-700 uppercase tracking-wider">
-                        Blocked — Hidden from Super Admin
+                        Blocked, Hidden from Super Admin
                       </span>
                     </div>
 

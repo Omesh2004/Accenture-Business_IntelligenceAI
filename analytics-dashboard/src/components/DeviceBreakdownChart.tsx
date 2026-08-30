@@ -9,7 +9,7 @@
 import React, { memo } from "react";
 import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip } from "recharts";
 import ChartContainer from "./ChartContainer";
-import { DeviceBreakdown } from "@/types";
+import { DeviceBreakdown, DimensionProvenance } from "@/types";
 
 const COLORS = ["#0022e4", "#1a73e8", "#6366f1", "#3b82f6", "#2563eb"];
 
@@ -17,6 +17,8 @@ interface DeviceBreakdownChartProps {
   data: DeviceBreakdown[];
   timeRangeLabel?: string;
   tenantLabel?: string;
+  /** Provenance of device_type, from GET /metrics/dimension_provenance. */
+  provenance?: Record<string, DimensionProvenance>;
 }
 
 interface PieLabelProps {
@@ -64,10 +66,14 @@ function DeviceBreakdownChart({
   data,
   timeRangeLabel,
   tenantLabel,
+  provenance,
 }: DeviceBreakdownChartProps) {
+  const deviceSimulated = provenance?.device_type?.simulated ?? false;
+  const devicePct = provenance?.device_type?.simulated_pct ?? 0;
+  const simulatedNote = `${devicePct}% of events carry a generated device_type. The producer picks one per session, so this split reflects the generator, not real devices.`;
   if (!data || data.length === 0) {
     return (
-      <ChartContainer title="Device Breakdown" id="device-breakdown">
+      <ChartContainer title="Device Breakdown" id="device-breakdown" simulated={deviceSimulated} simulatedNote={simulatedNote}>
         <div className="mt-3 rounded-lg border border-dashed border-gray-200 bg-gray-100 p-6 text-center">
           <p className="text-sm text-gray-600">
             No device fingerprint data found for this selection.
@@ -141,7 +147,7 @@ function DeviceBreakdownChart({
   };
 
   return (
-    <ChartContainer title="Device Breakdown" id="device-breakdown">
+    <ChartContainer title="Device Breakdown" id="device-breakdown" simulated={deviceSimulated} simulatedNote={simulatedNote}>
       <div className="flex flex-col md:flex-row items-center md:justify-between px-8 md:items-start gap-10 w-full">
         {/* Donut chart */}
         <div className="flex-1 min-w-[180px] max-w-[300px] aspect-square">
