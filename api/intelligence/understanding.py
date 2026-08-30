@@ -99,6 +99,7 @@ class Reading:
     chain: tuple[str, ...] = ()                  # tool intents that satisfy `wants`
     reason: str = ""                             # one sentence, for the reasoning trail
     cues: list[str] = field(default_factory=list)
+    metrics: tuple[str, ...] = ()                # the metrics the question's vocabulary reaches
 
     @property
     def is_investigation(self) -> bool:
@@ -112,11 +113,17 @@ def _hits(question: str, vocabulary: frozenset) -> list[str]:
                    if any(matching.token_matches(w, term) for w in words)})
 
 
-def read(question: str, names_metric: bool, conversational: bool) -> Reading:
+def read(question: str, names_metric: bool, conversational: bool,
+         matched: tuple[str, ...] | list[str] = ()) -> Reading:
     """Classify the question. Deterministic, dependency-free, and explainable.
 
-    `names_metric` and `conversational` are passed in rather than recomputed so this module stays
-    free of the tool registry -- the planner already knows both.
+    `names_metric`, `conversational` and `matched` are passed in rather than recomputed so this
+    module stays free of the tool registry -- the planner already knows all three.
+
+    `matched` is every metric whose vocabulary the question uses. More than one is NOT a failure to
+    understand: "what about loan data" names two loan KPIs, and a reader who does not know the
+    catalogue cannot be expected to disambiguate one they have never seen. Those questions are
+    answered across the whole matched group, which names the alternatives as a side effect.
     """
     if conversational:
         return Reading("conversational", reason="read as a salutation rather than a question "
@@ -150,7 +157,19 @@ def read(question: str, names_metric: bool, conversational: bool) -> Reading:
             "diagnostic", wants=tuple(wants), chain=DIAGNOSTIC_CHAIN,
             reason=("read as a diagnostic about a named metric, wanting %s"
                     % _describe(wants)),
-            cues=sorted(set(wants_why + wants_action)))
+            cues=sorted(set(wants_why + wants_action)), metrics=tuple(matched))
+
+    # Names business vocabulary that reaches SEVERAL metrics. Answer across all of them rather
+    # than refusing or picking one: the reader does not know the catalogue, so asking them to
+    # disambiguate a name they have never seen is a dead end, and guessing one silently drops the
+    # rest. Covering the group also shows them what the alternatives were.
+    if matched:
+        return Reading(
+            "briefing", wants=tuple(wants), chain=BRIEFING_CHAIN,
+            reason=("read as a question about %d related metrics (%s), so each is reported and "
+                    "the most material movement is investigated; wanting %s"
+                    % (len(matched), _listing(matched), _describe(wants))),
+            cues=sorted(set(business + wants_why + wants_action)), metrics=tuple(matched))
 
     if business:
         return Reading(
@@ -171,6 +190,14 @@ def read(question: str, names_metric: bool, conversational: bool) -> Reading:
 
     return Reading("unmatched", reason="the question names no metric and uses no vocabulary "
                                        "about this business")
+
+
+def _listing(metrics: tuple[str, ...] | list[str], limit: int = 6) -> str:
+    """Name the group without letting a broad word turn the reasoning trail into a wall of ids."""
+    metrics = list(metrics)
+    if len(metrics) <= limit:
+        return ", ".join(metrics)
+    return "%s and %d more" % (", ".join(metrics[:limit]), len(metrics) - limit)
 
 
 def _describe(wants: list[str]) -> str:

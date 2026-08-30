@@ -34,13 +34,23 @@ def test_forecast_precedes_detect_on_the_rail():
     assert order.index("verify") == len(order) - 1
 
 
-def test_restricted_gate_is_named_not_hidden():
-    """A CFO asking for an action must be told Decide is withheld, not handed something adjacent."""
-    ctx = _ctx("which metric moved most and what should I do?", "cfo")
-    assert not personas.allows("cfo", "action"), "fixture assumes the CFO cannot act"
-    blocked = planner.restricted_capabilities(ctx)
-    assert "get_recommendations" in [s.name for s in blocked]
+def test_no_persona_is_denied_an_analytical_capability():
+    """Policy: every persona may ask why something moved and what to do about it.
 
+    Denying the capability answered "what should we do" with nothing at all. Scope now comes from
+    `personas.owner_roles`, which decides whose lever it is, not from removing the tool.
+    """
+    for pid in personas.REGISTRY:
+        assert personas.allows(pid, "cause"), pid
+        assert personas.allows(pid, "action"), pid
+
+
+def test_the_restricted_state_still_works_when_something_is_withheld():
+    """The mechanism outlives the policy.
+
+    Nothing is withheld today, but if a capability ever is, the rail must SAY so rather than leave
+    a silent gap that reads as "there was nothing to report".
+    """
     rail = gates.rail_state({}, reached=False, restricted={"decide": "not available"})
     decide = next(g for g in rail if g["id"] == "decide")
     assert decide["status"] == "restricted"
@@ -49,9 +59,9 @@ def test_restricted_gate_is_named_not_hidden():
 
 def test_a_persona_that_may_act_has_nothing_restricted():
     """The guard must not fire on entitlement the persona actually holds."""
-    ctx = _ctx("which metric moved most and what should I do?", "ops_manager")
-    assert personas.allows("ops_manager", "action")
-    assert "get_recommendations" not in [s.name for s in planner.restricted_capabilities(ctx)]
+    for pid in ("ops_manager", "cfo", "analyst"):
+        ctx = _ctx("which metric moved most and what should I do?", pid)
+        assert "get_recommendations" not in [s.name for s in planner.restricted_capabilities(ctx)], pid
 
 
 def test_a_compound_question_is_not_complete_after_one_part():

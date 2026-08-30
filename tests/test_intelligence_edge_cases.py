@@ -396,10 +396,15 @@ def test_verifier_tolerance_is_bounded():
 # ===========================================================================
 # Entitlement
 # ===========================================================================
-def test_entitlement_denies_unknown_persona_when_restricted():
+def test_visibility_is_not_persona_scoped():
+    """Every persona sees every movement; only the ANSWER differs.
+
+    Hiding a KPI left an Operations Manager seeing 2 of 20 metrics and none of the 7 that had
+    moved, so the page reported "no movement recorded" while seven anomalies were running.
+    """
     c = contract(access_restriction={"visible_to": ["cfo"]})
-    _, restricted = narrate.apply_entitlement(claims(a=1.0), c, "intruder")
-    assert restricted
+    cs, restricted = narrate.apply_entitlement(claims(a=1.0), c, "intruder")
+    assert not restricted and cs.claims
 
 
 def test_entitlement_open_contract_allows_everyone():
@@ -409,11 +414,11 @@ def test_entitlement_open_contract_allows_everyone():
         assert not restricted
 
 
-def test_restricted_claim_set_is_structurally_empty():
-    """Absent, not redacted -- a restricted number must not be back-computable."""
+def test_a_contracts_visible_to_no_longer_withholds_figures():
+    """`visible_to` records intended readership; it does not gate what anyone may be told."""
     c = contract(access_restriction={"visible_to": ["cfo"]})
     cs, restricted = narrate.apply_entitlement(claims(secret=999.0), c, "ops_manager")
-    assert restricted and not cs.claims and not cs.facts
+    assert not restricted and cs.claims
 
 
 # ===========================================================================

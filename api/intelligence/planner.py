@@ -102,6 +102,15 @@ def resolve_metric(question: str, candidates: list[str], profile,
         if score > best_score or (score == best_score and score and len(kpi_id) < len(best)):
             best, best_score = kpi_id, score
     if best_score:
+        # When the question reaches several metrics, the shortest id is an arbitrary winner: "kyc"
+        # led on `loan.kyc.failure` while `kyc_completion_rate` sat outside its band, urgent, one
+        # line below. Prefer a governed metric, and among those prefer one that actually moved --
+        # the same materiality-over-alphabet rule the preference list below already follows.
+        reach = matching.metrics_named(question, list(candidates))
+        preferred = governed(reach) or reach
+        if best not in preferred and preferred:
+            moved_first = [k for k in preferred if k in (moved or [])]
+            return sorted(moved_first or preferred, key=len)[0]
         return best
     # A metric that MOVED outranks a persona preference -- materiality is the signal, and letting
     # a favourite metric win over an urgent one is how a CFO was answered about a quiet revenue
@@ -208,8 +217,34 @@ def comprehend(ctx: Context) -> understanding.Reading:
         top = scored[0] if scored else (0.0, None)
         conversational = bool(top[1]) and top[1].intent in ("greeting", "help") \
             and top[0] >= MIN_SELECT_SCORE
-        ctx.reading = understanding.read(ctx.question, _mentions_metric(ctx), conversational)
+        ctx.reading = understanding.read(
+            ctx.question, _mentions_metric(ctx), conversational,
+            matched=matched_metrics(ctx))
     return ctx.reading
+
+
+def governed(ids: list[str] | tuple[str, ...]) -> list[str]:
+    """The subset carrying a Tier 1 contract. Empty when the registry cannot be read."""
+    try:
+        from api.intelligence.contracts import load_declared
+        declared = set(load_declared())
+    except Exception:                                               # noqa: BLE001
+        return []
+    return [k for k in ids if k in declared]
+
+
+def matched_metrics(ctx: Context) -> tuple[str, ...]:
+    """Metrics the question's vocabulary reaches, GOVERNED ones preferred.
+
+    "loan" reaches both loan contracts and eight auto-discovered event series (`loan.page.view`,
+    `loan.kyc.failure`). Ranked together, a page-view counter led the answer while an urgent KYC
+    contract sat below it. The tier boundary is the same one `rank_movements` already draws:
+    a governed KPI is a thing the business decided to manage, a discovered series is not.
+
+    Tier 0 stays reachable -- when nothing governed matches, the discovered series are the answer.
+    """
+    hits = matching.metrics_named(ctx.question, ctx.metric_ids)
+    return tuple(governed(hits) or hits)
 
 
 def candidates(ctx: Context,
@@ -294,6 +329,20 @@ class RulePlanner:
         chosen = sorted((spec for _, spec in candidates[:width]),
                         key=lambda spec: (spec.priority, spec.name))
         reading = comprehend(ctx)
+        # A question this system has no business answering is refused rather than answered about
+        # the persona's favourite metric: "what about transaction record data" matched a capability
+        # on one word of its DESCRIPTION, named no metric, fell back to the preference list, and
+        # reported loan approval rate with full confidence.
+        #
+        # A direct SELECTOR hit still wins. Cue words are what a capability declares it answers to,
+        # so a question that names one is asking for it however little else it says -- and refusing
+        # those made a newly registered capability unreachable by its own cue.
+        if reading.shape == "unmatched":
+            named_cue = any(matching.score(ctx.question, spec.selectors) >= 1
+                            for _, spec in candidates)
+            if not named_cue:
+                return Plan(thought="Understood: %s. No capability answers it." % reading.reason,
+                            done=True, engine=self.engine)
         if not chosen:
             # Nothing matched. Reading the standing finding is a reasonable default for a question
             # that IS about the business ("give me the position") and a bad one for a question
@@ -361,6 +410,12 @@ class RulePlanner:
         if "kpi_ids" in spec.params:
             named = resolve_metrics(ctx.question, ctx.metric_ids)
             args["kpi_ids"] = ",".join(named or ctx.metric_ids[:2])
+        # An ambiguous mention narrows the ranking instead of being discarded: "what about loan
+        # data" reached two loan KPIs, and ranking the whole portfolio would answer about neither.
+        if "scope" in spec.params:
+            reading = comprehend(ctx)
+            if len(reading.metrics) > 1:
+                args["scope"] = ",".join(reading.metrics)
         return args
 
 

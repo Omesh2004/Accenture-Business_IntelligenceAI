@@ -589,7 +589,15 @@ export default function IntelligencePage() {
                           </thead>
                           <tbody>
                             {(telemetry?.by_stage ?? []).map((row) => (
-                              <tr key={row.stage} style={{ borderTop: `1px solid ${INK.hairline}` }}>
+                              // A stage appears ONCE PER ENGINE: `narrate` is listed for both
+                              // `rule` and `llm`, which is the LLM-vs-deterministic breakdown the
+                              // panel exists to show. Keying on the stage alone collided the
+                              // moment the model came online, and React may drop or duplicate a
+                              // row when two siblings share a key.
+                              <tr
+                                key={`${row.stage}-${row.engine_type}`}
+                                style={{ borderTop: `1px solid ${INK.hairline}` }}
+                              >
                                 <td className="px-3 py-2 text-[13px]" style={{ color: INK.text }}>
                                   {titleCase(row.stage)}
                                 </td>

@@ -52,9 +52,11 @@ def test_the_catalogue_is_persona_scoped():
     # how many and at what precision. Withholding the capability left the CFO with movement
     # summaries and no explanation of any of them.
     assert "get_causes" in cfo and "get_causes" in ops and "get_causes" in analyst
-    # Depth and decision rights still scope the catalogue.
+    # Nor is a recommendation. Withholding it answered "what should we do" with nothing at all;
+    # WHICH levers come back is scoped by personas.owner_roles, not by hiding the capability.
+    assert "get_recommendations" in cfo
+    # Depth still scopes the catalogue: method-level decomposition stays an analyst section.
     assert "get_factors" not in cfo, "method-level decomposition is an analyst section"
-    assert "get_recommendations" not in cfo, "the CFO does not own operational levers"
     assert cfo < analyst
 
 
@@ -350,10 +352,17 @@ def test_a_definition_question_still_works_when_the_metric_is_named():
 
 
 def test_an_abstention_names_the_reason_a_reader_can_act_on():
-    """"nothing attempted" is not a reason. A metric outside the persona's view is."""
+    """"nothing attempted" is not a reason a reader can do anything with.
+
+    The old assertion here was that an Operations Manager asking about fee revenue was refused for
+    being outside their view. Visibility is no longer persona-scoped -- hiding a movement from
+    someone who could act on it is the opposite of what this layer is for -- so that question is
+    now answered. What must still abstain is a question this system has no business answering, and
+    the reason it gives has to say why.
+    """
     res = loop.run("nexabank", "compare fee revenue and pro revenue", "ops_manager")
-    assert res.abstained
-    assert "outside the Operations Manager view" in res.answer
+    assert not res.abstained, "visibility is open; only the answer is persona-shaped"
 
     res = loop.run("nexabank", "tell me a joke", "ops_manager")
     assert res.abstained and "nothing attempted" not in res.answer
+    assert "no metric" in res.answer or "vocabulary" in res.answer, res.answer

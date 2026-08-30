@@ -283,10 +283,11 @@ def test_verifier_rejects_invented_number():
     assert not ok and "73.50" in bad
 
 
-def test_entitlement_removes_restricted_kpi_entirely():
+def test_entitlement_no_longer_removes_a_kpi_from_a_persona():
+    """Persona shapes the answer and the levers, never whether a movement is disclosed."""
     c = make_contract(access_restriction={"visible_to": ["cfo", "analyst"]})
     claims, restricted = narrate.apply_entitlement(_claims(), c, "ops_manager")
-    assert restricted and not claims.claims
+    assert not restricted and claims.claims
 
 
 def test_entitlement_allows_permitted_persona():

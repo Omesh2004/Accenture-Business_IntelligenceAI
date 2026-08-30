@@ -96,6 +96,28 @@ def score(question: str, terms: tuple[str, ...] | list[str]) -> int:
     return sum(1 for term in terms if matches_term(question_tokens, normalized, term))
 
 
+def metrics_named(question: str, ids: list[str] | tuple[str, ...]) -> list[str]:
+    """EVERY metric whose distinctive vocabulary this question uses, not only an unambiguous one.
+
+    "what about loan data?" hits `loan_approval_rate` and `loan_approval_volume`. `names_distinctly`
+    reports that as no match, and the caller then read the whole question as being about nothing --
+    the same verdict it gives "what is the capital of France". Two metrics matching is the opposite
+    of no metric matching: the question is clearly about this business and merely needs narrowing.
+    """
+    words = tokens(question)
+    if not words:
+        return []
+    # Every id one of the question's words reaches. Unlike `names_distinctly` there is no
+    # uniqueness test: a word shared by several ids -- even by all of them -- names that whole
+    # group, and answering about the group is what the reader asked for.
+    hits = []
+    for kpi_id in ids:
+        bits = {p for p in re.split(r"[_.\-]", (kpi_id or "").lower()) if len(p) > 2}
+        if any(any(token_matches(w, bit) for w in words) for bit in bits):
+            hits.append(kpi_id)
+    return sorted(hits)
+
+
 def names_distinctly(question: str, ids: list[str] | tuple[str, ...]) -> str:
     """The one metric a partial name can only mean, or '' when it is ambiguous.
 

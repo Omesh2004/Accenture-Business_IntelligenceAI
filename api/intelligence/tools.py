@@ -143,6 +143,26 @@ def _band_claims(evidence: list[dict], kpi_id: str) -> list[dict]:
     return [band["forecast_lower"], band["forecast_point"], band["forecast_upper"]]
 
 
+def _band_contradicts(claims: list[dict], reading: float | None) -> bool:
+    """Would stating this band next to this reading contradict the 'within range' verdict?
+
+    The insight records the band its decision was made against. When the data moves on and the
+    insight has not been re-scored, that snapshot can disagree with the reading now being shown --
+    which is how "it read 0.48, the band runs 0 to 0.01" reached a reader alongside "no movement
+    to explain". The verdict and the band are both from the stored row, so neither is wrong on its
+    own; together with a current reading they cannot all three hold.
+    """
+    if reading is None:
+        return False
+    by_id = {c["claim_id"]: c["value"] for c in claims}
+    lower, upper = by_id.get("forecast_lower"), by_id.get("forecast_upper")
+    if lower is None or upper is None:
+        return False
+    # A hair outside is ordinary rounding at the write boundary, not a contradiction.
+    slack = max((upper - lower) * 0.05, 1e-6)
+    return reading < lower - slack or reading > upper + slack
+
+
 def _current_reading(tenant_id: str, kpi_id: str) -> float | None:
     """The metric's latest daily value, read through the Metric Layer.
 
@@ -189,6 +209,14 @@ def _get_insight(tenant_id: str, persona: str, kpi_id: str = "", **_) -> ToolRes
         reading = _current_reading(tenant_id, row["kpi_id"])
         if reading is not None:
             claims.append(_claim("observed", reading, "count", "events_raw", "latest reading"))
+        # A verdict of "inside its range" beside a band the reading is plainly outside is the
+        # finding disagreeing with itself, and it happens whenever the stored insight predates the
+        # data now being read. Drop the band and say the finding is behind, rather than printing a
+        # sentence that cannot be true.
+        stale = _band_contradicts(claims, reading)
+        if stale:
+            claims = [c for c in claims if not c["claim_id"].startswith("forecast_")]
+            facts["stale_band"] = "yes"
     return ToolResult(
         True,
         summary="%s: %s" % (row["kpi_id"], "movement recorded" if moved else "within band"),
@@ -234,6 +262,13 @@ def _render_insight(res: ToolResult, persona: str) -> str:
                        % (phrasing.quantity(by_id["forecast_lower"], "", ""),
                           phrasing.quantity(by_id["forecast_upper"], "", ""),
                           phrasing.quantity(by_id.get("forecast_point", 0), "", "")))
+        if res.facts.get("stale_band") == "yes":
+            # Naming the staleness is the answer here. Silently dropping the band would leave a
+            # confident "no movement" over a reading that no longer sits where it was scored.
+            out.append("This finding was scored before the reading above, so the range it was "
+                       "judged against no longer holds and the verdict is behind the data. "
+                       "The next sweep will re-score it.")
+            return " ".join(out)
         out.append("There is no movement to explain.")
         return " ".join(out)
 
@@ -572,21 +607,30 @@ def _render_runtime_cost(res: ToolResult, persona: str) -> str:
             % (by_id["total_runs"], by_id["llm_share"], by_id["latency_ms"], by_id["tokens"]))
 
 
-def _rank_movements(tenant_id: str, persona: str, **_) -> ToolResult:
+def _rank_movements(tenant_id: str, persona: str, scope: str = "", **_) -> ToolResult:
     """Priority order over GOVERNED metrics only.
 
     Materiality on a governed KPI means "does this warrant a decision"; on an auto-discovered
     series it can only mean "is this statistically unusual". Those are not the same score, and
     ranking them together put page-view series at the top of the analyst's default view.
     Auto-discovered series stay answerable on request through `get_insight`.
+
+    `scope` narrows this to the metrics a question's vocabulary reached ("loan" reaches both loan
+    KPIs). A scoped run reports EVERY metric in scope, quiet ones included: the reader named that
+    part of the business, so "nothing moved there" is the answer to their question, whereas the
+    unscoped "no governed metric is outside its band" reads as a failure to understand it.
     """
+    wanted = [k.strip() for k in (scope or "").split(",") if k.strip()]
     try:
         rows = reader.top_movements(tenant_id, persona, limit=config.MAX_CAUSES,
                                     governed_only=True)
     except reader.RegistryUnavailable as exc:
         return ToolResult(False, reason="I cannot tell which metrics are governed right now (%s), "
                                         "so I will not present a priority order" % exc)
-    if not rows:
+    if wanted:
+        moved = {r["kpi_id"]: r for r in rows if r.get("kpi_id") in wanted}
+        rows = [moved[k] for k in wanted if k in moved]
+    elif not rows:
         return ToolResult(False,
                           reason="no governed metric is currently outside its expected band")
     claims, facts = [], {}
@@ -595,17 +639,57 @@ def _rank_movements(tenant_id: str, persona: str, **_) -> ToolResult:
                              "percent", "anomalies", "%s materiality" % row["kpi_id"], 1))
         facts["kpi_%d" % i] = pretty_name(row["kpi_id"])
         facts["severity_%d" % i] = str(row.get("severity") or "info")
-    return ToolResult(True, summary="%d metric(s) outside band" % len(rows), claims=claims,
-                      facts=facts, data={"rows": rows}, citation="anomalies")
+
+    # Every scoped metric that did NOT move still gets a line, carrying its level so the answer is
+    # "it is at X and steady" rather than a bare reassurance.
+    quiet = [k for k in wanted if k not in {r["kpi_id"] for r in rows}]
+    for j, kpi_id in enumerate(quiet, start=1):
+        facts["quiet_%d" % j] = pretty_name(kpi_id)
+        level = _current_reading(tenant_id, kpi_id)
+        if level is not None:
+            claims.append(_claim("quiet_level_%d" % j, level, "count", "events_raw",
+                                 "%s latest reading" % kpi_id))
+    if wanted:
+        facts["scope"] = ", ".join(pretty_name(k) for k in wanted)
+    if not rows and not quiet:
+        return ToolResult(False,
+                          reason="no governed metric is currently outside its expected band")
+    return ToolResult(True,
+                      summary="%d moving, %d steady" % (len(rows), len(quiet)) if wanted
+                              else "%d metric(s) outside band" % len(rows),
+                      claims=claims, facts=facts,
+                      data={"rows": rows, "quiet": quiet}, citation="anomalies")
 
 
 def _render_rank(res: ToolResult, persona: str) -> str:
     lines = ["%s (%s, materiality %.1f%%)"
              % (res.facts["kpi_%d" % i], res.facts["severity_%d" % i], c["value"])
-             for i, c in enumerate(res.claims, start=1)]
+             for i, c in enumerate(
+                 [c for c in res.claims if c["claim_id"].startswith("materiality_")], start=1)]
+    quiet = []
+    for j in range(1, 1 + sum(1 for k in res.facts if k.startswith("quiet_")
+                              and not k.startswith("quiet_level"))):
+        name = res.facts.get("quiet_%d" % j)
+        if not name:
+            continue
+        level = next((c["value"] for c in res.claims
+                      if c["claim_id"] == "quiet_level_%d" % j), None)
+        quiet.append("%s (steady%s)" % (name, "" if level is None else ", at %g" % level))
+
     # Naming the scope is not decoration: the reader needs to know an auto-discovered series that
     # also moved is deliberately absent, not overlooked.
-    return "Among governed metrics: %s." % "; ".join(lines)
+    if not res.facts.get("scope"):
+        return "Among governed metrics: %s." % "; ".join(lines)
+    # A scoped answer names what it covered, because the reader did not choose from a catalogue
+    # they have seen and needs to know which metrics their words were taken to mean.
+    parts = []
+    if lines:
+        parts.append("outside their expected range: %s" % "; ".join(lines))
+    if quiet:
+        parts.append("within range: %s" % "; ".join(quiet))
+    if not parts:
+        return "Covering %s." % res.facts["scope"]
+    return "Covering %s. Of these, %s." % (res.facts["scope"], "; and ".join(parts))
 
 
 def _get_metric_contract(tenant_id: str, persona: str, kpi_id: str = "", **_) -> ToolResult:
@@ -865,7 +949,12 @@ REGISTRY: dict[str, ToolSpec] = {
         ToolSpec("rank_movements",
                  "The metrics currently outside their band, ordered by recorded materiality. "
                  "Use when the question asks what to look at rather than about one metric.",
-                 "ranking", dict(_TENANT), _rank_movements,
+                 "ranking",
+                 {**_TENANT,
+                  "scope": {"type": "string", "required": False,
+                            "description": "comma-separated metric ids to restrict the ranking "
+                                           "to; omit to rank the whole governed portfolio"}},
+                 _rank_movements,
                  selectors=("moved most", "biggest", "worst", "top", "most material",
                             "most severe", "look at", "priorit", "rank"),
                  render=_render_rank, priority=1),

@@ -503,9 +503,14 @@ def run(tenant_id: str, question: str, persona: str, engine: str = "auto", emit=
             reason = "; ".join(validation.issues[:2]) or (
                 "no recorded evidence answers that question")
         trace.add("Abstain", "planner.validate", reason, status="abstained", kind="synthesize")
+        # Report no metric when the question reached none. `resolve_metric` falls back to the
+        # persona's priorities so a vague-but-real question still has something to open on, but on
+        # an abstention that fallback surfaces as a metric chip beside "this names no metric" --
+        # the reader sees the system name a KPI and disclaim it in the same breath.
+        focus = "" if reading.shape == "unmatched" else ctx.focus_metric
         return Result(
             answer=_abstention_text(profile, reason), persona=persona,
-            persona_label=profile.label, kpi_id=ctx.focus_metric, tools_used=used,
+            persona_label=profile.label, kpi_id=focus, tools_used=used,
             citations=citations, trace=trace.as_list(), abstained=True, reason=reason,
             escalate=validation.escalate, issues=validation.issues, engine_type=brain.engine,
             rounds=rounds, tokens_in=tokens_in, tokens_out=tokens_out,
