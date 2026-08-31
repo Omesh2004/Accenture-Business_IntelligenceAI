@@ -136,39 +136,19 @@ export function useDashboardData() {
         kpiMetrics,
         secondaryKpiMetrics,
         trafficData,
-        featureUsageData,
         topFeatures,
         funnelData,
-        featureActivity,
         tenants,
         realTimeUsersData,
-        pagesPerMinute,
-        topPages,
-        deviceBreakdown,
-        locations,
-        auditLogs,
-        featureConfigs,
         dimensionProvenance,
       ] = await Promise.all([
         dashboardAPI.getKPIMetrics(tenantsParam, rangeParam),
         dashboardAPI.getSecondaryKPIMetrics(tenantsParam, rangeParam),
         dashboardAPI.getTrafficData(tenantsParam, rangeParam),
-        dashboardAPI.getFeatureUsageData(tenantsParam, rangeParam),
         dashboardAPI.getTopFeatures(tenantsParam, rangeParam),
         dashboardAPI.getFunnelData(tenantsParam, rangeParam),
-        dashboardAPI.getFeatureActivity(tenantsParam, rangeParam),
         dashboardAPI.getTenants(tenantsParam, rangeParam),
         dashboardAPI.getRealTimeUsers(tenantsParam),
-        dashboardAPI.getPagesPerMinute(tenantsParam),
-        dashboardAPI.getTopPages(tenantsParam, rangeParam),
-        dashboardAPI.getDeviceBreakdown(tenantsParam, rangeParam),
-        mayReadDetailedAnalytics
-          ? dashboardAPI.getLocations(tenantsParam, rangeParam)
-          : Promise.resolve([] as LocationData[]),
-        mayReadDetailedAnalytics
-          ? dashboardAPI.getAuditLogs(tenantsParam, rangeParam)
-          : Promise.resolve([] as AuditLog[]),
-        dashboardAPI.getFeatureConfigs(tenantsParam, rangeParam),
         // Same gate as locations/devices: it describes those charts, so it must not be
         // reachable where they are not.
         mayReadDetailedAnalytics
@@ -180,19 +160,11 @@ export function useDashboardData() {
         kpiMetrics,
         secondaryKpiMetrics,
         trafficData,
-        featureUsageData,
         topFeatures,
         funnelData,
-        featureActivity,
         tenants,
         realTimeUsers: realTimeUsersData.count,
         realTimeUsersTimestampIST: realTimeUsersData.timestampIST ?? null,
-        pagesPerMinute,
-        topPages,
-        deviceBreakdown,
-        locations,
-        auditLogs,
-        featureConfigs,
         dimensionProvenance,
       };
     },
@@ -277,20 +249,12 @@ export function useDashboardData() {
     kpiMetrics: dashboardData?.kpiMetrics || [],
     secondaryKpiMetrics: dashboardData?.secondaryKpiMetrics || [],
     trafficData: dashboardData?.trafficData || [],
-    featureUsageData: dashboardData?.featureUsageData || [],
     topFeatures: dashboardData?.topFeatures || [],
     funnelData: dashboardData?.funnelData || [],
-    featureActivity: dashboardData?.featureActivity || [],
     tenants: dashboardData?.tenants || [],
     realTimeUsers: dashboardData?.realTimeUsers || 0,
     realTimeUsersTimestampIST: dashboardData?.realTimeUsersTimestampIST || null,
-    pagesPerMinute: dashboardData?.pagesPerMinute || [],
-    topPages: dashboardData?.topPages || [],
-    deviceBreakdown: dashboardData?.deviceBreakdown || [],
-    locations: dashboardData?.locations || [],
     dimensionProvenance: dashboardData?.dimensionProvenance || {},
-    auditLogs: dashboardData?.auditLogs || [],
-    featureConfigs: dashboardData?.featureConfigs || [],
     aiInsights: aiInsightsData || [],
     isLoading,
     isFetching,
@@ -301,7 +265,7 @@ export function useDashboardData() {
 }
 
 export function useAIInsights() {
-  const { funnelData = [], featureActivity = [], topFeatures = [] } = useDashboardData();
+  const { funnelData = [], topFeatures = [] } = useDashboardData();
 
   const generateInsights = useCallback(() => {
     const insights: string[] = [];
@@ -312,19 +276,13 @@ export function useAIInsights() {
       }
     });
 
-    featureActivity.forEach((row) => {
-      if (row.level === 'High') {
-        insights.push(`${row.feature} has high activity - consider scaling resources`);
-      }
-    });
-
     if (topFeatures.length > 0) {
       const topFeature = topFeatures[0];
       insights.push(`${topFeature.name} leads with ${topFeature.value.toLocaleString()} events`);
     }
 
     return insights;
-  }, [funnelData, featureActivity, topFeatures]);
+  }, [funnelData, topFeatures]);
 
   return { generateInsights };
 }

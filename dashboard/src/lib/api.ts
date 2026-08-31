@@ -436,26 +436,6 @@ export const dashboardAPI = {
     }
   },
 
-  /** Fetch feature usage over time data */
-  async getFeatureUsageData(tenants: string[], range: string): Promise<FeatureUsageDataPoint[]> {
-    try {
-      const response = await apiClient.get<Record<string, string | number>[]>(`/metrics/feature_usage_series?tenants=${tenants.join(',')}&range=${range}`);
-      return response.data.map((r: Record<string, string | number>) => {
-        const point: Record<string, string | number> = { date: String(r.date) };
-        for (const key of Object.keys(r)) {
-          if (key !== 'date') {
-            point[key] = Number(r[key]) || 0;
-          }
-        }
-        return point as unknown as FeatureUsageDataPoint;
-      });
-    } catch (error) {
-      console.error('Failed to fetch feature usage', error);
-      return [];
-    }
-  },
-
-  /** Fetch top features ranking using backend /features/usage endpoint */
   async getTopFeatures(tenants: string[], range: string): Promise<BarDataPoint[]> {
     try {
       const response = await apiClient.get<{ usage: BackendFeatureUsageItem[] }>(`/features/usage?tenants=${tenants.join(',')}&range=${range}`);
@@ -537,35 +517,6 @@ export const dashboardAPI = {
     }
   },
 
-  /** Fetch feature activity heatmap data */
-  async getFeatureActivity(tenants: string[], range: string): Promise<FeatureActivityRow[]> {
-    try {
-      const response = await apiClient.get<BackendActivityRow[]>(`/features/activity?tenants=${tenants.join(',')}&range=${range}`);
-      return response.data.map((row: BackendActivityRow) => ({
-        feature: row.feature,
-        segments: row.segments,
-        level: row.level as 'High' | 'Med' | 'Low',
-      }));
-    } catch {
-      return [];
-    }
-  },
-
-  /** Fetch grid-based heatmap matrix for multi-tenant or time-based single tenant */
-  async getFeatureHeatmap(tenants: string[], range: string): Promise<{ is_compare: boolean; groups: string[]; group_labels?: string[]; activities: unknown[] }> {
-    try {
-      const response = await apiClient.get(`/features/heatmap?tenants=${tenants.join(',')}&range=${range}`);
-      return response.data;
-    } catch {
-      return {
-        is_compare: false,
-        groups: ['Error'],
-        activities: []
-      };
-    }
-  },
-
-  /** Fetch tenant comparison data */
   async getTenants(tenants?: string[], range: string = '7d'): Promise<Tenant[]> {
     try {
       const params = tenants && tenants.length > 0 ? `?tenants=${tenants.join(',')}&range=${range}` : `?range=${range}`;
@@ -782,50 +733,6 @@ export const dashboardAPI = {
     }
   },
 
-  /** Fetch pages per minute data */
-  async getPagesPerMinute(tenants: string[]): Promise<PagesPerMinuteDataPoint[]> {
-    try {
-      const response = await apiClient.get<BackendPPMRow[]>(`/metrics/pages_per_minute?tenants=${tenants.join(',')}`);
-      return response.data;
-    } catch {
-      return [];
-    }
-  },
-
-  /** Fetch top pages data, returns page-grouped entries with nested features */
-  async getTopPages(tenants: string[], range: string): Promise<TopPage[]> {
-    try {
-      const response = await apiClient.get<BackendTopPageRow[]>(`/metrics/top_pages?tenants=${tenants.join(',')}&range=${range}`);
-      return response.data.map((row: BackendTopPageRow) => ({
-        pageUrl: row.pageUrl,
-        totalEvents: row.totalEvents,
-        comparisonPct: row.comparisonPct ?? 0,
-        rank: row.rank ?? 0,
-        features: (row.features || []).map(f => ({
-          feature: f.feature,
-          displayName: f.displayName || f.feature,
-          count: f.count,
-          inPagePct: f.inPagePct ?? 0,
-        })),
-      }));
-    } catch {
-      return [];
-    }
-  },
-
-  /** Fetch device breakdown data */
-  async getDeviceBreakdown(tenants: string[], range: string): Promise<DeviceBreakdown[]> {
-    try {
-      const response = await apiClient.get<DeviceBreakdown[]>(`/metrics/devices?tenants=${tenants.join(',')}&range=${range}`);
-      return response.data;
-    } catch (error) {
-      console.error('Failed to fetch device breakdown', error);
-      return [];
-    }
-  },
-
-  /** Fetch user acquisition channel breakdown */
-
   async getDeploymentInfo(): Promise<DeploymentInfoResponse> {
     try {
       const response = await apiClient.get<DeploymentInfoResponse>('/deployment/info');
@@ -868,20 +775,7 @@ export const dashboardAPI = {
     }
   },
 
-  /** Fetch transparency info showing what data goes to the cloud */
-  async getTransparencyInfo(tenants: string[] | string): Promise<TransparencyResponse | null> {
-    try {
-      const tenantsStr = Array.isArray(tenants) ? tenants.join(',') : tenants;
-      const response = await apiClient.get<TransparencyResponse>(`/transparency/cloud-data?tenants=${tenantsStr}`);
-      return response.data;
-    } catch (error) {
-      console.warn('Failed to fetch transparency info', error);
-      return null;
-    }
-  },
-
-  /* ─────────────── Pro Users Metrics ─────────────── */
-
+  /** Pro-feature adoption. Pro unlocks are a revenue line, so this stays. */
   async getProUsers(tenants: string[], range: string): Promise<{ pro_users: number; total_users: number; pro_adoption_pct: number }> {
     try {
       const response = await apiClient.get<{ pro_users: number; total_users: number; pro_adoption_pct: number }>(`/metrics/pro_users?tenants=${tenants.join(',')}&range=${range}`);
@@ -891,8 +785,6 @@ export const dashboardAPI = {
       return { pro_users: 0, total_users: 0, pro_adoption_pct: 0 };
     }
   },
-
-  /* ─────────────── License vs Usage ─────────────── */
 
   async getLicenseUsage(tenants: string[], range: string): Promise<LicenseUsageResponse> {
     try {
@@ -915,158 +807,6 @@ export const dashboardAPI = {
   },
 
   /* ─────────────── Tracking Toggles ─────────────── */
-
-  async getTrackingToggles(
-    tenants: string[],
-    auth?: { role?: string; email?: string }
-  ): Promise<TrackingToggleResponse> {
-    try {
-      const headers: Record<string, string> = {};
-      if (auth?.role) headers['X-User-Role'] = auth.role;
-      if (auth?.email) headers['X-User-Email'] = auth.email;
-      const response = await apiClient.get<TrackingToggleResponse>(`/tracking/toggles?tenants=${tenants.join(',')}`, {
-        headers,
-      });
-      return response.data;
-    } catch (error) {
-      console.warn('Failed to fetch tracking toggles', error);
-      return { toggles: [] };
-    }
-  },
-
-  async setTrackingToggle(
-    tenants: string[],
-    featureName: string,
-    isEnabled: boolean,
-    actorEmail: string,
-    auth?: { role?: string; email?: string }
-  ): Promise<{ status: string; feature_name?: string; is_enabled?: boolean; changed_by?: string; changed_at?: string }> {
-    try {
-      const headers: Record<string, string> = {};
-      if (auth?.role) headers['X-User-Role'] = auth.role;
-      if (auth?.email) headers['X-User-Email'] = auth.email;
-      const tenantParam = encodeURIComponent(tenants.join(','));
-      const response = await apiClient.post<{ status: string; feature_name?: string; is_enabled?: boolean; changed_by?: string; changed_at?: string }>(`/tracking/toggles?tenants=${tenantParam}`, {
-        tenant_id: tenants.join(','),
-        feature_name: featureName,
-        is_enabled: isEnabled,
-        actor_email: actorEmail,
-      }, {
-        headers,
-      });
-      return response.data;
-    } catch (error) {
-      console.error('Failed to set tracking toggle', error);
-      return { status: 'error' };
-    }
-  },
-
-  /* ─────────────── User Journey ─────────────── */
-
-  async getUserJourney(tenants: string[], userId: string, range: string): Promise<UserJourneyResponse> {
-    try {
-      const response = await apiClient.get<UserJourneyResponse>(`/journey/user?tenants=${encodeURIComponent(tenants.join(','))}&user_id=${encodeURIComponent(userId)}&range=${range}`);
-      return response.data;
-    } catch (error) {
-      console.error('Failed to fetch user journey', error);
-      return { tenant_id: '', user_id: userId, total_events: 0, total_sessions: 0, events: [], sessions: [], last_event: null };
-    }
-  },
-
-  async getJourneyUsers(tenants: string[], range: string): Promise<JourneyUsersResponse> {
-    try {
-      const response = await apiClient.get<JourneyUsersResponse>(`/journey/users?tenants=${encodeURIComponent(tenants.join(','))}&range=${range}`);
-      return response.data;
-    } catch (error) {
-      console.error('Failed to fetch journey users', error);
-      return { users: [] };
-    }
-  },
-
-  /* ─────────────── Segmentation ─────────────── */
-
-  async getSegmentationComparison(tenants: string[]): Promise<SegmentationResponse> {
-    try {
-      const response = await apiClient.get<SegmentationResponse>(`/segmentation/compare?tenants=${tenants.join(',')}`);
-      return response.data;
-    } catch (error) {
-      console.error('Failed to fetch segmentation', error);
-      return { segments: [] };
-    }
-  },
-
-  /* ─────────────── Predictive Adoption ─────────────── */
-
-  async getPredictiveAdoption(tenants: string[], range: string): Promise<PredictiveResponse> {
-    try {
-      const response = await apiClient.get<PredictiveResponse>(`/predictive/adoption?tenants=${tenants.join(',')}&range=${range}`);
-      return response.data;
-    } catch (error) {
-      console.error('Failed to fetch predictive adoption', error);
-      return { predictions: [], total_users: 0 };
-    }
-  },
-
-  /* ─────────────── Tenant Comparison ─────────────── */
-
-  async getTenantComparison(tenants: string[], range: string): Promise<{ tenants: Array<{ id: string; name: string; total_events: number; unique_users: number; active_features: number; growth_rate: number; conversion_rate: number; trend: Array<{ date: string; events: number }> }> }> {
-    try {
-      const response = await apiClient.get(`/tenants/compare?tenants=${tenants.join(',')}&range=${range}`);
-      return response.data;
-    } catch (error) {
-      console.error('Failed to fetch tenant comparison', error);
-      return { tenants: [] };
-    }
-  },
-
-  /** Fetch top locations data from backend */
-  async getLocations(tenants: string[], range: string): Promise<LocationData[]> {
-    try {
-      const response = await apiClient.get<LocationData[]>(`/locations?tenants=${tenants.join(',')}&range=${range}`);
-      return response.data;
-    } catch (error) {
-      logFetchFailure('Locations', error);
-      return [];
-    }
-  },
-
-  /** Fetch audit logs from backend */
-  async getAuditLogs(tenants: string[], range: string): Promise<AuditLog[]> {
-    try {
-      const response = await apiClient.get<AuditLog[]>(`/audit_logs?tenants=${tenants.join(',')}&range=${range}`);
-      return response.data;
-    } catch (error) {
-      logFetchFailure('AuditLogs', error);
-      return [];
-    }
-  },
-
-  /** Fetch top feature configs using backend data */
-  async getFeatureConfigs(tenants: string[], range: string): Promise<FeatureConfig[]> {
-    try {
-      const response = await apiClient.get<FeatureConfig[]>(`/features/configs?tenants=${tenants.join(',')}&range=${range}`);
-      return response.data;
-    } catch (error) {
-      console.error('Failed to fetch feature configs', error);
-      return [];
-    }
-  },
-
-  /** Fetch retention data */
-  async getRetentionData(tenants: string[], range: string): Promise<RetentionData[]> {
-    try {
-      const response = await apiClient.get<RetentionData[]>(`/metrics/retention?tenants=${tenants.join(',')}&range=${range}`);
-      return response.data;
-    } catch {
-      return [];
-    }
-  },
-
-  /**
-   * Which metadata dimensions the producer invented rather than measured, for this tenant and
-   * range. Read from `metadata._simulated`. Charts built on a simulated dimension must say so --
-   * CLAUDE.md, "never fabricate a metric silently".
-   */
   async getDimensionProvenance(
     tenants: string[],
     range: string,

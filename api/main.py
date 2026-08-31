@@ -1378,6 +1378,86 @@ def get_admin_app_summary(tenants: str = Query(..., description="Comma-separated
 
 from api.schemas import LicenseSyncRequest, TrackingToggleRequest
 
+@app.get("/metrics/pro_users")
+def get_pro_users(
+    tenants: str = Query(..., description="Comma-separated list of tenants"), 
+    range: str = Query("7d", description="Time range like 7d, 30d")
+):
+    """
+    Returns count of users who have used any pro/enterprise feature in the given time range.
+    Dynamically respects the global time range selector.
+    """
+    days = parse_range(range)
+    tenant_list = [t.strip() for t in tenants.split(",") if t.strip()]
+    cond = "tenant_id = %(tenant_id)s" if len(tenant_list) == 1 else "tenant_id IN %(tenant_ids)s"
+    params = {"tenant_id": tenant_list[0], "days": days} if len(tenant_list) == 1 else {"tenant_ids": tuple(tenant_list), "days": days}
+
+    try:
+        # Pro/Enterprise features from the catalog
+        pro_features = {
+            "crypto-trading.trade_execution.success",
+            "crypto-trading.trade_execution.failure",
+            "crypto-trading.price_feeds.view",
+            "crypto-trading.portfolio.view",
+            "wealth-management-pro.rebalance.success",
+            "wealth-management-pro.rebalance.failure",
+            "wealth-management-pro.insights.view",
+            "bulk-payroll-processing.batch.success",
+            "bulk-payroll-processing.batch.failure",
+            "bulk-payroll-processing.payees.view",
+            "bulk-payroll-processing.search.success",
+            "bulk-payroll-processing.search.failure",
+            "ai-insights.book.access",
+            "ai-insights.book.success",
+            "ai-insights.stats.view",
+        }
+        
+        # Also include raw feature names that map to pro features
+        pro_raw_features = {
+            alias for alias, canonical in CANONICAL_EVENT_ALIASES.items()
+            if canonical in pro_features and alias
+        }
+        pro_raw_features.update(pro_features)
+        
+        # Query unique users who have used any pro feature
+        pro_str = ", ".join([f"'{f}'" for f in sorted(pro_raw_features)])
+        sql = f"""
+            SELECT uniqExact(user_id) as pro_users
+            FROM feature_intelligence.events_raw
+            WHERE {cond} AND event_name IN ({pro_str}) AND timestamp >= toDate(now('UTC')) - %(days)s AND timestamp < toDate(now('UTC')) AND timestamp < toDate(now('UTC'))
+        """
+        
+        result = ch_client.query(sql, params)
+        pro_user_count = int(result[0]["pro_users"]) if result and result[0].get("pro_users") else 0
+        
+        # Also get total users for comparison
+        sql_total = f"""
+            SELECT uniqExact(user_id) as total_users
+            FROM feature_intelligence.events_raw
+            WHERE {cond} AND timestamp >= toDate(now('UTC')) - %(days)s AND timestamp < toDate(now('UTC')) AND timestamp < toDate(now('UTC'))
+        """
+        total_result = ch_client.query(sql_total, params)
+        total_users = max(int(total_result[0]["total_users"]) if total_result else 0, 1)
+        
+        pro_adoption_pct = round((pro_user_count / total_users) * 100, 1) if total_users > 0 else 0
+        
+        return {
+            "tenant_id": tenants,
+            "range": range,
+            "period_days": days,
+            "pro_users": pro_user_count,
+            "total_users": total_users,
+            "pro_adoption_pct": pro_adoption_pct,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ═══════════════════════════════════════════════════════════
+# LICENSE VS USAGE
+# ═══════════════════════════════════════════════════════════
+
+
 @app.get("/license/usage")
 def get_license_usage(tenants: str = Query(..., description="Comma-separated list of tenants"), range: str = Query("30d", description="Time range like 7d, 30d")):
     """Compare licensed features vs actual usage — multi-tenant aware with proper IN clause."""
