@@ -447,6 +447,9 @@ class LLMPlanner:
         if round_n == 0 and reading.shape == "unmatched":
             return Plan(thought="Understood: %s. No capability answers it." % reading.reason,
                         done=True, engine=self.engine)
+                        
+        if reading.shape == "conversational":
+            return self._fallback.plan(ctx, observations, round_n)
 
         prompt = self._prompt(ctx, observations, round_n)
         obj, t_in, t_out = llm_client.complete_json(prompt)

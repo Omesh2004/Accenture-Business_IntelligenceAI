@@ -1,5 +1,6 @@
 import NextAuth from "next-auth"
 import GoogleProvider from "next-auth/providers/google"
+import CredentialsProvider from "next-auth/providers/credentials"
 import { getUserRole, getAdminApps } from "@/lib/rbac-server"
 
 import { NextAuthOptions } from 'next-auth';
@@ -10,6 +11,22 @@ export const authOptions: NextAuthOptions = {
       clientId: process.env.GOOGLE_CLIENT_ID ?? '',
       clientSecret: process.env.GOOGLE_CLIENT_SECRET ?? '',
     }),
+    CredentialsProvider({
+      name: "Development Login",
+      credentials: {
+        email: { label: "Email", type: "email", placeholder: "admin@example.com" }
+      },
+      async authorize(credentials) {
+        if (!credentials?.email) return null;
+        
+        // Return a mock user object with the provided email
+        return {
+          id: credentials.email,
+          email: credentials.email,
+          name: credentials.email.split('@')[0]
+        };
+      }
+    })
   ],
   secret: process.env.NEXTAUTH_SECRET,
   session: { strategy: "jwt" },

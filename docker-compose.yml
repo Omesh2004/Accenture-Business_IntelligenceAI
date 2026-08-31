@@ -116,8 +116,6 @@ services:
     command: python processing/worker.py
     restart: unless-stopped
 
-  # D3: the intelligence layer gets its own container -- same image, different command, so it
-  # has an isolated process and scheduler without a second Dockerfile.
   intelligence:
     build:
       context: .
@@ -134,10 +132,10 @@ services:
       - INTELLIGENCE_DATASET=seeded
       - EXTRACT_API_URL=http://nexabank-backend:5000/api
       - EXTRACT_API_TOKEN=${EXTRACT_API_TOKEN:-local-dev-extract-token}
-      # Narration is deterministic unless this is 1. The narrator discovers the model from the
-      # server, so no model name is pinned here.
       - INTELLIGENCE_LLM=${INTELLIGENCE_LLM:-0}
-      - VLLM_URL=http://vllm-server:8000/v1
+      - VLLM_URL=http://host.docker.internal:11434/v1
+    volumes:
+      - ./api:/app/api
     command: python api/intelligence/service.py
     restart: unless-stopped
 
@@ -155,7 +153,7 @@ services:
       - CLICKHOUSE_HOST=clickhouse
       - CLICKHOUSE_USER=default
       - CLICKHOUSE_PASSWORD=clickhouse
-      - VLLM_URL=http://vllm-server:8000/v1
+      - VLLM_URL=http://host.docker.internal:11434/v1
       - INTELLIGENCE_LLM=${INTELLIGENCE_LLM:-0}
     command: uvicorn api.main:app --host 0.0.0.0 --port 8001
     restart: unless-stopped

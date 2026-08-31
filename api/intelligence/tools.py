@@ -22,6 +22,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from typing import Any, Callable
+from datetime import datetime, timedelta
 
 from api.intelligence import config, personas, phrasing, reader
 
@@ -801,6 +802,86 @@ def _render_greet(res: ToolResult, persona: str) -> str:
     return " ".join(parts)
 
 
+def _run_localized_search(tenant_id: str, persona: str, kpi_id: str = "", **_) -> ToolResult:
+    """Agentic Tool: Execute Stage 03 localization unconditionally to find high-variance segments."""
+    if not kpi_id:
+        return ToolResult(False, reason="localized search requires a specific metric to analyze")
+    
+    from api.intelligence.metrics import ClickHouseMetricLayer, Window
+    from api.intelligence.orchestrator import Ctx
+    from api.intelligence.contracts import load_all, sliceable_dimensions
+    from api.intelligence.stages import localize
+    from api.intelligence.ids import investigation_id
+    from datetime import datetime, timedelta
+    
+    metrics = ClickHouseMetricLayer()
+    try:
+        watermark = metrics.watermark(tenant_id)
+    except Exception:
+        watermark = datetime.utcnow()
+        
+    end = watermark or datetime.utcnow()
+    end = end.replace(hour=0, minute=0, second=0, microsecond=0)
+    
+    window = Window(end - timedelta(days=config.WINDOW_DAYS), end)
+    span = window.end - window.start
+    baseline_window = Window(window.start - span, window.start)
+    
+    try:
+        contracts = load_all(metrics, tenant_id, window)
+    except Exception:
+        contracts = {}
+        
+    contract = contracts.get(kpi_id)
+    if not contract:
+        # Fallback to dot-separated id if underscore is passed
+        contract = contracts.get(kpi_id.replace('_', '.'))
+        
+    if not contract:
+        return ToolResult(False, reason="contract not found for %s" % kpi_id)
+    
+    inv_id = investigation_id(tenant_id, kpi_id, window.start, "agentic")
+    ctx = Ctx(inv_id, tenant_id, kpi_id, contract, window, end)
+    
+    # Fake anomaly to bypass direction filter (direction 0 allows all deltas)
+    anomaly = {
+        "anomaly_id": inv_id,
+        "direction": 0,
+        "window_start": window.start.isoformat(),
+        "window_end": window.end.isoformat(),
+    }
+    
+    dims = sliceable_dimensions(contract, metrics, tenant_id, window, "seeded")
+    loc = localize.run(ctx, metrics, anomaly, dims, baseline_window)
+    
+    if loc.inconclusive:
+        return ToolResult(False, reason=loc.note or "no significant concentration found in segments")
+        
+    claims, facts = [], {}
+    for cause in loc.causes[:config.MAX_CAUSES]:
+        facts["cell_%d" % cause["rank"]] = phrasing.cell_phrase(cause["dimensions"])
+        claims.append(_claim("cell_%d_share" % cause["rank"], cause["contribution"] * 100.0,
+                             "percent", "agentic_search", "rank %d share" % cause["rank"], 1))
+                             
+    return ToolResult(True, summary="localized search found %d segments" % len(loc.causes),
+                      claims=claims, facts=facts,
+                      data={"causes": loc.causes, "kpi_id": kpi_id}, citation="dynamic_search")
+
+def _render_localized_search(res: ToolResult, persona: str) -> str:
+    shown = res.data["causes"]
+    subject = "Dynamic localized search for %s" % pretty_name(res.data["kpi_id"])
+    
+    def label(i: int) -> str:
+        return res.facts["cell_%d" % shown[i]["rank"]]
+        
+    text = ("%s found the highest variance in %s, accounting for %.1f%% of the absolute movement."
+            % (subject, label(0), res.claims[0]["value"]))
+    rest = ["%s (%.1f%%)" % (label(i), res.claims[i]["value"]) for i in range(1, min(len(shown), len(res.claims)))]
+    if rest:
+        text += " Also notable: %s." % phrasing.join(rest)
+    return text
+
+
 def _identity(tenant_id: str, persona: str, **_) -> ToolResult:
     """What this system IS. A separate capability from the greeting on purpose.
 
@@ -972,6 +1053,11 @@ REGISTRY: dict[str, ToolSpec] = {
                  _compare_metrics,
                  selectors=("compare", "versus", " vs ", "against each other", "side by side"),
                  render=_render_compare, priority=1, needs_named_metric=True),
+        ToolSpec("run_localized_search",
+                 "Dynamically run the localization engine on a specific metric to find high-variance segments. Use when asked to dig deeper into segments or find localized anomalies that might not be visible at the global level.",
+                 "cause", {**_TENANT, **_KPI}, _run_localized_search,
+                 selectors=("search segments", "find anomalies in segments", "deep dive", "dynamic search", "run localize"),
+                 needs_metric=True, render=_render_localized_search, priority=2),
     ]
 }
 

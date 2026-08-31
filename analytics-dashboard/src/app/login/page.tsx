@@ -133,6 +133,26 @@ export default function LoginPage() {
           </button>
 
           <div className="mt-10 pt-8 border-t border-gray-100">
+            {process.env.NEXT_PUBLIC_API_URL?.includes('localhost') || process.env.NODE_ENV === 'development' ? (
+              <div className="mb-8">
+                <p className="text-xs text-gray-500 font-semibold mb-3">DEV MODE QUICK LOGIN</p>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    onClick={() => signIn('credentials', { email: 'omeshmehta70@gmail.com', callbackUrl: '/login' })}
+                    className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 py-2 rounded-lg font-medium transition-colors"
+                  >
+                    As Super Admin
+                  </button>
+                  <button
+                    onClick={() => signIn('credentials', { email: 'omeshmehta03@gmail.com', callbackUrl: '/login' })}
+                    className="text-xs bg-gray-100 hover:bg-gray-200 text-gray-700 py-2 rounded-lg font-medium transition-colors"
+                  >
+                    As App Admin
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
             <p className="text-xs text-gray-400 text-center mb-4">
               Access is restricted to authorized administrators only.
             </p>
