@@ -25,6 +25,9 @@ interface Batch {
   count: number;
   days: number;
   behavior?: Record<string, unknown>;
+  // Baseline batches create the population; the recent cohorts act on customers it made.
+  createAccounts?: boolean;
+  phase?: 1 | 2;
 }
 
 /**
@@ -53,14 +56,14 @@ const HIGH_VOLUME = {
 };
 
 const PLAN: Batch[] = [
-  { label: "nexabank baseline a", tenantId: "bank_a", count: 70, days: 55,
+  { createAccounts: true, phase: 1, label: "nexabank baseline a", tenantId: "bank_a", count: 70, days: 55,
     behavior: { windowDays: 55, ...HIGH_VOLUME } },
-  { label: "nexabank baseline b", tenantId: "bank_a", count: 70, days: 55,
+  { createAccounts: true, phase: 1, label: "nexabank baseline b", tenantId: "bank_a", count: 70, days: 55,
     behavior: { windowDays: 55, ...HIGH_VOLUME } },
-  { label: "nexabank baseline c", tenantId: "bank_a", count: 60, days: 55,
+  { createAccounts: true, phase: 1, label: "nexabank baseline c", tenantId: "bank_a", count: 60, days: 55,
     behavior: { windowDays: 55, ...HIGH_VOLUME } },
   {
-    label: "nexabank recent: approvals fall, skewed to mobile",
+    phase: 2, label: "nexabank recent: approvals fall, skewed to mobile",
     tenantId: "bank_a", count: 45, days: 12,
     behavior: { windowDays: 7,
                 kyc: { startRate: 0.9, progressMultiplier: 3.0, successRate: 0.85 },
@@ -68,26 +71,26 @@ const PLAN: Batch[] = [
                 mix: { deviceWeights: { mobile: 4 } } },
   },
   {
-    label: "nexabank recent: second degraded cohort",
+    phase: 2, label: "nexabank recent: second degraded cohort",
     tenantId: "bank_a", count: 45, days: 12,
     behavior: { windowDays: 7,
                 kyc: { startRate: 0.9, progressMultiplier: 3.0, successRate: 0.85 },
                 loans: { applicationMultiplier: 3.5, approvalRate: 0.24 },
                 mix: { deviceWeights: { mobile: 4 } } },
   },
-  { label: "safexbank baseline a", tenantId: "bank_b", count: 75, days: 55,
+  { createAccounts: true, phase: 1, label: "safexbank baseline a", tenantId: "bank_b", count: 75, days: 55,
     behavior: { windowDays: 55, ...HIGH_VOLUME } },
-  { label: "safexbank baseline b", tenantId: "bank_b", count: 75, days: 55,
+  { createAccounts: true, phase: 1, label: "safexbank baseline b", tenantId: "bank_b", count: 75, days: 55,
     behavior: { windowDays: 55, ...HIGH_VOLUME } },
   {
-    label: "safexbank recent: KYC drop-off rises",
+    phase: 2, label: "safexbank recent: KYC drop-off rises",
     tenantId: "bank_b", count: 30, days: 12,
     behavior: { windowDays: 7,
                 kyc: { startRate: 0.9, progressMultiplier: 3.0, successRate: 0.35 },
                 loans: { applicationMultiplier: 3.5, approvalRate: 0.72 } },
   },
   {
-    label: "safexbank recent: second degraded cohort",
+    phase: 2, label: "safexbank recent: second degraded cohort",
     tenantId: "bank_b", count: 30, days: 12,
     behavior: { windowDays: 7,
                 kyc: { startRate: 0.9, progressMultiplier: 3.0, successRate: 0.30 },
@@ -170,6 +173,7 @@ async function run(): Promise<void> {
       headers: { "Content-Type": "application/json", "User-Agent": UA, Cookie: cookie },
       body: JSON.stringify({
         count: batch.count, days: batch.days, tenantId: batch.tenantId,
+        ...(batch.createAccounts ? { createAccounts: true } : {}),
         ...(batch.behavior ? { behavior: batch.behavior } : {}),
       }),
     });
@@ -191,14 +195,21 @@ async function run(): Promise<void> {
     );
   }
 
-  console.log(`running ${PLAN.length} batches concurrently...`);
-  // A slow batch outlives the client's header timeout. Losing the response loses the per-batch
-  // summary, not the data, so a timeout is reported and the run still waits for the writes.
-  await Promise.all(PLAN.map((b) => runBatch(b).catch(() => {
-    console.warn(`  ${b.label}: response lost; the request is still generating`);
-  })));
-  console.log("waiting for writes to settle...");
-  await waitUntilQuiet();
+  // Phase 1 builds the population, phase 2 acts on it. Run concurrently within a phase but
+  // never across: a phase-2 batch against an empty tenant is refused with 409.
+  for (const phase of [1, 2] as const) {
+    const batches = PLAN.filter((b) => (b.phase ?? 1) === phase);
+    if (!batches.length) continue;
+    console.log(`
+phase ${phase}: ${batches.length} batches concurrently...`);
+    // A slow batch outlives the client's header timeout. Losing the response loses the per-batch
+    // summary, not the data, so a timeout is reported and the run still waits for the writes.
+    await Promise.all(batches.map((b) => runBatch(b).catch(() => {
+      console.warn(`  ${b.label}: response lost; the request is still generating`);
+    })));
+    console.log("waiting for writes to settle...");
+    await waitUntilQuiet();
+  }
 
   console.log(`\ntotals: ${JSON.stringify(totals)}`);
   console.log("db:", JSON.stringify({
