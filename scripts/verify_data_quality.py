@@ -91,7 +91,7 @@ def collect_emitted_names() -> tuple[set[str], set[str]]:
     import glob
     import re
 
-    backend = os.path.join(REPO, "NexaBank", "backend", "src")
+    backend = os.path.join(REPO, "nexabank", "backend", "src")
     raw: set[str] = set()
     for path in glob.glob(os.path.join(backend, "**", "*.ts"), recursive=True):
         text = open(path, encoding="utf-8").read()
@@ -115,7 +115,7 @@ def collect_emitted_names() -> tuple[set[str], set[str]]:
     live = {canonical(line.split("\t")[1]) for line in out.splitlines() if "\t" in line}
 
     # The browser tracker posts straight to ingestion, skipping enforceTaxonomy.
-    frontend = os.path.join(REPO, "NexaBank", "frontend")
+    frontend = os.path.join(REPO, "nexabank", "frontend")
     for path in glob.glob(os.path.join(frontend, "**", "*.ts*"), recursive=True):
         if "node_modules" in path or ".next" in path:
             continue

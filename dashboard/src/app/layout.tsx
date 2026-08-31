@@ -65,7 +65,7 @@ export default function RootLayout({
           {/*
             Pre-existing build defect, unrelated to the telemetry audit -- fixed only to
             unblock verifying `npm run build`. Same NavigationLoader/useSearchParams pattern
-            (and the same fix) as NexaBank/frontend/app/layout.tsx.
+            (and the same fix) as nexabank/frontend/app/layout.tsx.
           */}
           <Suspense fallback={null}>
             <NavigationLoader />

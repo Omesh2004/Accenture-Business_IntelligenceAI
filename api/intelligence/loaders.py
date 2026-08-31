@@ -181,6 +181,9 @@ def _insert(table: str, columns: list[str], rows: list[list]) -> int:
     client = _client()
     try:
         client.insert(f"{DB}.{table}", rows, column_names=columns)
+        # Collapse duplicates now. ReplacingMergeTree merges asynchronously and may never run,
+        # so a re-read leaves every count doubled until it does.
+        client.command(f"OPTIMIZE TABLE {DB}.{table} FINAL")
         return len(rows)
     finally:
         try:
@@ -609,12 +612,17 @@ def seed_reference_data(tenants: list[str], days_back: int = 400, days_forward: 
     fee_rows, cal_rows = [], []
     for tenant in tenants:
         # Price side of fee revenue. Without it there is no price factor to decompose.
+        # One row per (txn_type, channel) the bank actually transacts on. A channel with no row
+        # earns no fee, so a missing row silently removes it from revenue.
         for txn_type, channel, flat, pct in [
             ("TRANSFER", "WEB", "2.50", "0.0010"), ("TRANSFER", "MOBILE", "1.50", "0.0008"),
-            ("TRANSFER", "API", "0.50", "0.0005"), ("WITHDRAWAL", "WEB", "5.00", "0.0000"),
-            ("WITHDRAWAL", "MOBILE", "4.00", "0.0000"), ("DEPOSIT", "WEB", "0.00", "0.0000"),
-            ("DEPOSIT", "MOBILE", "0.00", "0.0000"), ("PAYMENT", "WEB", "3.00", "0.0012"),
-            ("PAYMENT", "MOBILE", "2.00", "0.0010"), ("PAYMENT", "API", "1.00", "0.0006"),
+            ("WITHDRAWAL", "WEB", "5.00", "0.0000"), ("WITHDRAWAL", "MOBILE", "4.00", "0.0000"),
+            ("WITHDRAWAL", "ATM", "2.00", "0.0000"), ("WITHDRAWAL", "POS", "1.00", "0.0000"),
+            ("DEPOSIT", "WEB", "0.00", "0.0000"), ("DEPOSIT", "MOBILE", "0.00", "0.0000"),
+            ("DEPOSIT", "ATM", "0.00", "0.0000"),
+            ("PAYMENT", "WEB", "3.00", "0.0012"), ("PAYMENT", "MOBILE", "2.00", "0.0010"),
+            # Card-present interchange: no flat fee, a percentage of the ticket.
+            ("PAYMENT", "POS", "0.00", "0.0150"),
         ]:
             fee_rows.append([tenant, txn_type, channel, Decimal(flat), Decimal(pct),
                              today - timedelta(days=days_back), date(2099, 12, 31), now])

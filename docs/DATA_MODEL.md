@@ -113,6 +113,53 @@ not catch this, because a per-session fabrication passes an invariance test clea
 The fix in the source is P3 work: derive geography from the branch, and device from the real user
 agent. Until then the declaration is the gate.
 
+## The five KPIs, and where each number comes from
+
+Every KPI value is produced from the **daily banking snapshot**, not the clickstream. That is a
+correctness decision, not a convenience one: the batch facts carry dimensions the bank actually
+recorded, while the clickstream carries dimensions the producer invented.
+
+| # | KPI | Shape | Source of truth | Stored fundamentals | Localizable dimensions |
+|---|---|---|---|---|---|
+| 1 | New account signups | count | `silver.fact_account_openings` | `accounts_opened` by day of `opened_at` | account_type, branch_code, region, country |
+| 2 | KYC completion rate | rate | `silver.fact_loan_applications.kyc_step` | `kyc_started`, `kyc_completed` | loan_type, risk_segment, region, branch_code |
+| 3 | Loan approval volume | count | `silver.fact_loan_applications`, `status = APPROVED`, by `decided_at` | `loans_approved`, `principal_approved` | loan_type, risk_segment, region, term bucket |
+| 4 | Revenue | money | modelled from measured inputs | `fee_revenue`, `interest_accrued`, `pro_revenue` | channel, txn_type, mcc, region, branch_code |
+| 5 | Transaction failure rate | rate | `silver.fact_transactions.status` | `txn_total`, `txn_failed` | channel, txn_type, mcc, region, branch_code |
+
+Notes that are easy to get wrong:
+
+- **Loan approval volume counts on `decided_at`, not `created_at`.** An application created in one
+  window and approved in the next belongs to the window it was approved in.
+- **Both rates store their two counts, never the ratio.** A rate is derived at read time. Storing
+  it makes it non-additive, and a non-additive quantity cannot be localized or summed across
+  segments without being wrong.
+- **Revenue is modelled, but grounded.** `fee_revenue` is `fee_flat + amount * fee_pct` from
+  `dim_fee_schedule` applied to real transaction amounts -- a real schedule against real money,
+  not an invented figure. `interest_accrued` is approved principal times rate over 365.
+  `pro_revenue` is the one line with no measured money behind it, so it carries a `simulated:`
+  block. A channel with no fee-schedule row earns no fee, so a missing row silently deletes it
+  from revenue.
+- **The chain is what makes one story out of five.** Signups feed KYC starts, KYC completions gate
+  approvals, approvals drive interest revenue, and the failure rate suppresses fee revenue and can
+  depress KYC completion at the same time. A movement in revenue is explained by walking back up
+  that chain, not by a revenue model.
+
+### Which source does which job
+
+The brief requires two sources at two cadences. They differ by *job*, not only by speed.
+
+| | Daily banking snapshot | Real-time clickstream |
+|---|---|---|
+| Produces | the KPI value | behavioural context |
+| Grain | transaction, application, account | event, session |
+| Dimensions | measured: region, branch, channel, mcc, loan_type, risk_segment | fabricated: location, city, continent, device_type |
+| Used by | Detect, Localize, Forecast, Decide | funnel stage detail, journey reconstruction |
+| Never used for | screen-level abandonment | any number a reader sees as a KPI |
+
+Localize runs on the snapshot. The clickstream answers "which step did they abandon", never "how
+much did revenue fall". This is the single change that stops the engine ranking dice rolls.
+
 ## Gold — serving
 
 Gold holds two different kinds of thing that happen to share a layer: pre-aggregated KPI rollups,
