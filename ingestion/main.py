@@ -16,9 +16,9 @@ from aiokafka import AIOKafkaProducer
 # Add project root to path so we can import 'core'
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.models import FeatureEvent
-from core.config import settings, DeploymentMode
-from core.security import sanitize_metadata
+from ingestion.envelope import FeatureEvent
+from warehouse.config import settings, DeploymentMode
+from ingestion.masking import sanitize_metadata
 from api.page_map import canonicalize_event_name
 
 logging.basicConfig(level=logging.INFO)
@@ -35,7 +35,7 @@ producer: AIOKafkaProducer = None
 # The process never crashed, so `restart: unless-stopped` never kicked in either.
 #
 # Observed before this fix: feature-events LOG-END-OFFSET = 0, worker had consumed nothing,
-# and processing/worker.py -- batching, manual offset commits, at-least-once delivery -- had
+# and pipeline/worker.py -- batching, manual offset commits, at-least-once delivery -- had
 # never executed at all.
 _producer_lock = asyncio.Lock()
 _next_producer_attempt = 0.0
@@ -128,10 +128,10 @@ async def drop_producer() -> None:
 
 # --------------- ClickHouse helpers ---------------
 def _clickhouse_client():
-    """Same timeout fix as storage/client.py's _get_client() (Phase G follow-up) -- this module
-    builds its own separate clickhouse_connect client rather than importing storage.client's, so
+    """Same timeout fix as warehouse/client.py's _get_client() (Phase G follow-up) -- this module
+    builds its own separate clickhouse_connect client rather than importing warehouse.client's, so
     the fix has to be threaded through here too or this path keeps the same 300s hang-on-outage
-    gap. See storage/client.py's docstring for the full reasoning."""
+    gap. See warehouse/client.py's docstring for the full reasoning."""
     import clickhouse_connect
     return clickhouse_connect.get_client(
         host=os.environ.get("CLICKHOUSE_HOST", "localhost"),
@@ -202,7 +202,7 @@ def is_tracking_disabled(tenant_id: str, event_name: str) -> bool:
 # Phase G follow-up: this path previously made exactly one attempt -- ClickHouse was already
 # unavailable enough that Kafka's own fallback triggered (or on-prem mode, which always uses
 # this path), so a single transient hiccup here (as opposed to a sustained outage) meant losing
-# the event outright with no second chance, unlike processing/worker.py's flush_batch() which
+# the event outright with no second chance, unlike pipeline/worker.py's flush_batch() which
 # already had retry/backoff. Small and bounded, not flush_batch()'s shape: this runs on the
 # synchronous request path (the caller is waiting for an HTTP response), so it retries briefly
 # and then still raises -- the existing caller-side 500 behavior is unchanged, just given a
@@ -306,7 +306,7 @@ def _insert_direct_to_clickhouse_once(event_dict: dict, ingest_path: str):
 # Phase 1 item 3 (docs/audits/clickhouse_pipeline_audit_phase1_findings.md): a payload that
 # fails FeatureEvent validation never reaches Kafka or the worker, so it never reached
 # events_dead_letter either -- only a log line existed, with no persisted, replayable record.
-# That's an asymmetry against processing/worker.py's poison-row path, which properly dead-letters
+# That's an asymmetry against pipeline/worker.py's poison-row path, which properly dead-letters
 # with the full payload. Reuses events_dead_letter rather than a parallel table (Phase 3 proposal
 # 4c) -- same replayable-verbatim-payload property, `stage` distinguishes the two writers instead
 # of a second schema that could drift from the first.
@@ -329,7 +329,7 @@ def _dead_letter_validation_failure(payload: dict, error_details: list) -> None:
             column_names=["event_id", "tenant_id", "event_name", "payload", "error", "stage"],
         )
     except Exception as exc:
-        # Same philosophy as processing/worker.py's _dead_letter(): losing this write is bad
+        # Same philosophy as pipeline/worker.py's _dead_letter(): losing this write is bad
         # but must not block returning the 422 the caller is already waiting on.
         logger.critical("Dead-letter insert FAILED for a validation failure: %s", exc)
 
@@ -370,7 +370,7 @@ app.add_middleware(
 # rejects only genuine abuse, never real traffic.
 #
 # Deliberately a Content-Length check at the ASGI/middleware layer, scoped to /events only, not
-# a Pydantic field constraint on core/models.py's FeatureEvent: by the time a Pydantic validator
+# a Pydantic field constraint on ingestion/envelope.py's FeatureEvent: by the time a Pydantic validator
 # runs, FastAPI has already read the full body into memory, which doesn't address "unbounded
 # memory use per request" at all -- only rejecting BEFORE the body is read does. This is also why
 # FeatureEvent (CLAUDE.md coupling point 1, "contract between 3 producers") doesn't need to

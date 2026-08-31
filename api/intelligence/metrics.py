@@ -112,7 +112,7 @@ class ClickHouseMetricLayer:
     def __init__(self, client=None):
         # Lazy import so the stub -- and every stage test built on it -- needs no driver.
         if client is None:
-            from storage.client import ch_client
+            from warehouse.client import ch_client
             client = ch_client
         self.client = client
         self._name_cache: dict[tuple[str, str], list[str]] = {}

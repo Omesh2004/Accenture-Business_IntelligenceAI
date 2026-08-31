@@ -12,7 +12,7 @@ DB = "feature_intelligence"
 
 
 def _ch():
-    from storage.client import ch_client
+    from warehouse.client import ch_client
     return ch_client
 
 

@@ -33,7 +33,7 @@ from typing import Optional
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from storage.client import ch_client  # noqa: E402
+from warehouse.client import ch_client  # noqa: E402
 
 RED, GREEN, RESET = "\033[31m", "\033[32m", "\033[0m"
 

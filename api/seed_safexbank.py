@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from storage.client import ch_client
+from warehouse.client import ch_client
 
 TENANTS = ["safexbank", "nexabank"]
 USERS_PER_TENANT = 50

@@ -6,13 +6,13 @@ docs/audits/clickhouse_pipeline_implementation_prompt.md Phase B.
 
 Not a new always-on service (CLAUDE.md rule 2 -- "do not add infrastructure"): a standalone
 script, run periodically or on demand, reusing the confluent-kafka client and
-storage/client.py's ClickHouseClient -- the same two things processing/worker.py already
+warehouse/client.py's ClickHouseClient -- the same two things pipeline/worker.py already
 depends on, not a new dependency.
 
 What it checks, per partition of the topic, for the given consumer group:
 
   committed offset       the offset the group has actually committed (i.e. "durably accounted
-                          for", per processing/worker.py's commit-after-insert design)
+                          for", per pipeline/worker.py's commit-after-insert design)
   log-end-offset          the newest offset the broker currently holds (committed lag = log-end -
                           committed; a growing lag on its own is backlog, not loss)
   max ClickHouse offset   MAX(kafka_offset) actually present in events_raw for that partition,
@@ -23,7 +23,7 @@ What it checks, per partition of the topic, for the given consumer group:
 A partition whose committed offset outruns its max-observed-in-ClickHouse offset by more than
 --tolerance is a candidate for "something between consume and commit didn't land". Before
 concluding loss, this script cross-references events_dead_letter (stage='worker_poison') for
-that partition, best-effort: processing/worker.py now attaches kafka_partition/kafka_offset to
+that partition, best-effort: pipeline/worker.py now attaches kafka_partition/kafka_offset to
 every consumed message (Phase B), so a row dead-lettered after this change carries them in its
 payload; a poison row from before this change won't be found this way.
 
@@ -56,8 +56,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from confluent_kafka import Consumer, TopicPartition  # noqa: E402
 
-from core.config import settings  # noqa: E402
-from storage.client import ch_client  # noqa: E402
+from warehouse.config import settings  # noqa: E402
+from warehouse.client import ch_client  # noqa: E402
 
 GREEN, RED, YELLOW, RESET = "\033[32m", "\033[31m", "\033[33m", "\033[0m"
 
@@ -132,7 +132,7 @@ def get_max_clickhouse_offset(topic: str, tenants: Optional[list]) -> dict:
 
 def find_dead_lettered_offsets(partition: int, topic: str) -> list:
     """Best-effort: offsets for this partition visible in events_dead_letter's payload, for rows
-    dead-lettered after processing/worker.py started attaching kafka_partition/kafka_offset."""
+    dead-lettered after pipeline/worker.py started attaching kafka_partition/kafka_offset."""
     sql = "SELECT payload FROM feature_intelligence.events_dead_letter WHERE stage = 'worker_poison'"
     try:
         rows = ch_client.query(sql)

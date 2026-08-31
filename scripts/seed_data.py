@@ -287,7 +287,7 @@ class Simulator:
     def close_recent_sessions(self, tenant: str, lookback_minutes: int = 5) -> tuple[int, int]:
         """Force-close sessions active in the lookback window by emitting logout events."""
         try:
-            from storage.client import ch_client
+            from warehouse.client import ch_client
             import ast
             import json
         except Exception:

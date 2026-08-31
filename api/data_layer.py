@@ -6,14 +6,14 @@ from datetime import datetime, timezone
 from typing import Dict, Any
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from storage.client import ch_client
+from warehouse.client import ch_client
 
 # In-memory store for precomputed analytics metrics
 PRECOMPUTED_LAYER: Dict[str, Dict[str, Any]] = {}
 
 # Phase E (item 8, docs/audits/clickhouse_pipeline_audit_phase1_findings.md). Byte-for-byte the
 # same expression as api/main.py's DEDUP_EVENT_KEY and mv_daily_feature_usage's SQL
-# (storage/schema.sql) -- duplicated here, not imported, because api/main.py imports FROM this
+# (warehouse/clickhouse/schema.sql) -- duplicated here, not imported, because api/main.py imports FROM this
 # module (start_data_layer_refresh), so importing the other way would be circular. Keep all
 # three identical if this ever changes.
 DEDUP_EVENT_KEY = (
