@@ -86,13 +86,17 @@ router.get("/extract/loan_applications", async (req: Request, res: Response): Pr
       where: keysetWhere("updatedOn", since, sinceId),
       orderBy: [{ updatedOn: "asc" }, { id: "asc" }],
       take: limit,
-      include: { customer: true },
+      include: { customer: { include: { branch: true } } },
     });
     const decided = new Set(["APPROVED", "REJECTED"]);
     const records = rows.map((a) => ({
       application_id: a.id,
       tenant_id: analyticsTenant(a.customer?.tenantId || "bank_a"),
       customer_id: a.customerId,
+      branch_code: a.customer?.branchCode || "",
+      region: a.customer?.branch?.region || "",
+      country: a.customer?.branch?.country || "",
+      risk_segment: a.customer?.riskSegment || "",
       loan_type: a.loanType,
       status: a.status,
       principal_amount: a.principalAmount,

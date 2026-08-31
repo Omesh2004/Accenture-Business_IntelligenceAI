@@ -257,9 +257,10 @@ TXN_COLUMNS = ["txn_id", "tenant_id", "customer_id", "account_no", "counterparty
                "merchant_name", "reference_number", "channel", "status", "amount",
                "occurred_at", "loaded_at", "_version"]
 
-APP_COLUMNS = ["application_id", "tenant_id", "customer_id", "loan_type", "status",
-               "principal_amount", "interest_rate", "term_months", "kyc_step", "created_at",
-               "decided_at", "loaded_at", "_version"]
+APP_COLUMNS = ["application_id", "tenant_id", "customer_id", "branch_code", "region",
+               "country", "risk_segment", "loan_type", "status", "principal_amount",
+               "interest_rate", "term_months", "kyc_step", "created_at", "decided_at",
+               "loaded_at", "_version"]
 
 
 
@@ -312,7 +313,9 @@ def load_loan_applications(full: bool = False) -> int:
         for r in records:
             updated = _dt(r["updated_at"])
             max_ts = max(max_ts, updated)
-            rows.append([r["application_id"], r["tenant_id"], r["customer_id"], r["loan_type"],
+            rows.append([r["application_id"], r["tenant_id"], r["customer_id"],
+                         r.get("branch_code") or "", r.get("region") or "",
+                         r.get("country") or "", r.get("risk_segment") or "", r["loan_type"],
                          r["status"], _money(r["principal_amount"]), _rate(r["interest_rate"]),
                          int(r["term_months"] or 0), int(r["kyc_step"] or 0),
                          _dt(r["created_at"]), _dt(r.get("decided_at")), now,
