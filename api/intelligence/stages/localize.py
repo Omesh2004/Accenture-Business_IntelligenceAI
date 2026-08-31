@@ -117,11 +117,17 @@ def run(ctx, metric_layer, anomaly: dict, dims: list[str], baseline_window) -> L
         seen_deltas.add(key)
         deduped.append((combo, cell, delta, base_v))
 
+    # Coverage may only be summed WITHIN one dimension combination, where the cells partition
+    # the population. Across combinations they overlap -- region "North America" and country
+    # "USA" are the same rows -- and summing them reported 289% of the movement explained.
+    per_combo: dict[tuple, float] = {}
+    for combo, _cell, delta, _base_v in deduped[:config.MAX_CAUSES]:
+        per_combo[combo] = per_combo.get(combo, 0.0) + abs(delta) / total_move
+    covered = min(1.0, max(per_combo.values())) if per_combo else 0.0
+
     causes: list[dict] = []
-    covered = 0.0
     for rank, (combo, cell, delta, _base_v) in enumerate(deduped[:config.MAX_CAUSES], start=1):
         share = abs(delta) / total_move
-        covered += share
         causes.append({
             "cause_id": cause_id(anomaly["anomaly_id"], rank),
             "investigation_id": ctx.investigation_id,
