@@ -539,8 +539,22 @@ const LAST_NAMES_POOL: Record<string, string[]> = {
 };
 
 const SPEND_CATEGORIES = ["FOOD", "SHOPPING", "ENTERTAINMENT", "HOUSING", "OTHERS", "TRANSPORT", "UTILITIES", "HEALTHCARE"];
+// Session channel: how the customer is browsing. A login cannot happen at an ATM or a POS.
 const CHANNELS: ("WEB" | "MOBILE")[] = ["WEB", "MOBILE"];
-const CHANNEL_WEIGHTS = [45, 55]; // Mobile-first, no ATM/POS simulation noise
+const CHANNEL_WEIGHTS = [45, 55];
+
+type TxnChannel = "WEB" | "MOBILE" | "ATM" | "POS";
+// Transaction channel follows the transaction, not the session: a card purchase happens at a
+// POS, cash comes out of an ATM. Without this, `channel` has two values and explains nothing.
+const TXN_CHANNEL_MIX: Record<string, [TxnChannel[], number[]]> = {
+  purchase: [["POS", "WEB", "MOBILE"], [45, 25, 30]],
+  cash: [["ATM", "POS", "WEB", "MOBILE"], [72, 14, 6, 8]],
+  transfer: [["WEB", "MOBILE"], [45, 55]],
+};
+function pickTxnChannel(kind: keyof typeof TXN_CHANNEL_MIX): TxnChannel {
+  const [opts, weights] = TXN_CHANNEL_MIX[kind];
+  return weightedPick(opts, weights);
+}
 const LOAN_TYPES = ["HOME", "AUTO", "PERSONAL", "STUDENT"] as ("HOME" | "AUTO" | "PERSONAL" | "STUDENT")[];
 const PRO_FEATURES = ["pro-feature?id=crypto-trading", "wealth_rebalance", "pro-feature?id=bulk-payroll-processing", "ai_insight_download"];
 const DEVICE_TYPES = ["desktop", "mobile", "tablet"];
@@ -1282,7 +1296,7 @@ router.post(
             const clampedAmount = Math.min(spendAmount, currentBalance * 0.3); // Don't spend more than 30% of balance
             if (clampedAmount >= 100) {
               const category = pick(SPEND_CATEGORIES);
-              const txChannel = weightedPick(CHANNELS, CHANNEL_WEIGHTS);
+              const txChannel = pickTxnChannel("purchase");
               const success = !simFail("payment.failed.action", persona.failureRate, inScope);
 
               const mcc = pick(MCC_TABLE);
@@ -1325,7 +1339,7 @@ router.post(
                   transactionType: "WITHDRAWAL",
                   senderAccNo: accNo, receiverAccNo: "EXTERNAL-BANK",
                   amount: outflow, status: "SUCCESS",
-                  category: "External Transfer", channel: pick(CHANNELS),
+                  category: "External Transfer", channel: pickTxnChannel("transfer"),
                   description: "Transfer to external institution",
                   referenceNumber: referenceNumber(),
                   timestamp: new Date((dayTs + 6400) * 1000),
@@ -1359,7 +1373,7 @@ router.post(
                     transactionType: "PAYMENT",
                     senderAccNo: accNo, receiverAccNo: "MERCHANT-ID",
                     amount: clamped2, status: "SUCCESS", category: cat2,
-                    channel: pick(CHANNELS),
+                    channel: pickTxnChannel("purchase"),
                     merchantCategoryCode: mcc2.mcc,
                     merchantName: mcc2.merchant,
                     referenceNumber: referenceNumber(),
@@ -1418,12 +1432,12 @@ router.post(
             await simEmit("ai_insights.book.success", 0.09, { title: pick(["The Intelligent Investor", "The Psychology of Money", "Rich Dad Poor Dad", "A Random Walk Down Wall Street"]), ...lMeta, tier: "enterprise" }, proTimelineBase + 104, ent);
           }
 
-          // ── Cash/Card Withdrawal (digital channels only for cleaner distribution) ────────────────
+          // ── Cash/Card Withdrawal ──────────────────────────────────────────────────
           if (Math.random() < 0.08 && currentBalance > 5000) {
             const withdrawalAmounts = [500, 1000, 2000, 5000, 10000];
             const withdrawalAmount = pick(withdrawalAmounts.filter(a => a < currentBalance * 0.3));
             if (withdrawalAmount) {
-              const withdrawalChannel = Math.random() < 0.6 ? "MOBILE" : "WEB";
+              const withdrawalChannel = pickTxnChannel("cash");
               await prisma.transaction.create({
                 data: {
                   transactionType: "WITHDRAWAL",
@@ -1559,7 +1573,7 @@ router.post(
                     transactionType: "PRO_LICENSE_FEE",
                     senderAccNo: accNo, receiverAccNo: "NEXABANK-SYSTEM",
                     amount: 2000, status: "SUCCESS",
-                    category: "Subscription", channel: "WEB",
+                    category: "Subscription", channel: persona.preferredChannel,
                     timestamp: new Date((dayTs + 4500) * 1000),
                   }
                 });
@@ -1786,7 +1800,7 @@ router.post(
                   amount: transferAmount,
                   status: "SUCCESS",
                   category: "PAYEE_TRANSFER",
-                  channel: "WEB",
+                  channel: pickTxnChannel("transfer"),
                   description: `Transfer to ${payee.name}`,
                 }
               });
