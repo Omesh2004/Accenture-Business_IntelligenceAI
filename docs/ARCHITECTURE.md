@@ -168,6 +168,13 @@ keeps serving old code with no error anywhere. `tsc --noEmit` passing proves the
 and proves nothing about the running process — that combination, a clean type-check over code that
 is not running, is what makes this one hard to spot. Restart the service.
 
+**A mounted Python directory can serve stale bytecode.** The `intelligence` service bind-mounts
+`./api`, and the container writes `__pycache__` back into it. Python invalidates a `.pyc` by
+comparing source mtime, and mtimes through a Windows bind mount are not reliable -- so an edited
+module can keep executing the previous version through a restart and a full container recreate,
+with the source on both sides identical to `grep`. Delete `__pycache__` under `api/` when a change
+appears not to take effect.
+
 **`today()` is server-local.** One `today()` in ClickHouse splits the KPI card, the traffic chart
 and the daily rollup into different days. The container is pinned to `TZ=UTC`; use
 `toDate(now('UTC'))`. Never `today()`.
