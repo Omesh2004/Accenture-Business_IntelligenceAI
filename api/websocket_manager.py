@@ -104,33 +104,29 @@ async def consume_kafka_events():
         await consumer.stop()
 
 async def poll_dashboard_metrics():
-    """Polls ClickHouse every 10 seconds and pushes metrics (Option A)."""
-    # Import needed metrics query functions
-    from api.main import get_kpi_metrics, get_realtime_users
-    
+    """Pushes a KPI snapshot every 10s (D6: cosmetic pulse). Reads through the Metric API's
+    named reads, not a hand-written query."""
+    from datetime import date, datetime, timedelta
+    from api.metric_api import reads
+    from api.contracts_loader import all_kpi_ids
+
     while True:
         await asyncio.sleep(10)
         loop = asyncio.get_event_loop()
-        
-        tenants_to_update = list(manager.active_connections.keys())
-        for tenant_id in tenants_to_update:
+        end = date.today() + timedelta(days=1)
+        start = end - timedelta(days=7)
+        for tenant_id in list(manager.active_connections.keys()):
             try:
-                # Wrap sync database calls in executor to avoid blocking the event loop
-                # IMPORTANT: pass "7d" explicitly as string
-                kpi = await loop.run_in_executor(None, get_kpi_metrics, tenant_id, "7d")
-                rt_data = await loop.run_in_executor(None, get_realtime_users, tenant_id)
-                # get_realtime_users now returns {count, timestamp_ist, timezone}
-                rt_count = rt_data.get("count", 0) if isinstance(rt_data, dict) else rt_data
-                
-                payload = {
+                def _snapshot(t=tenant_id):
+                    return {k: reads.kpi_total(t, k, start, end)["fundamentals"]
+                            for k in all_kpi_ids()}
+                kpi = await loop.run_in_executor(None, _snapshot)
+                rt = await loop.run_in_executor(
+                    None, lambda t=tenant_id: reads.watermark(t))
+                await manager.broadcast_to_tenant(tenant_id, {
                     "type": "METRICS_UPDATE",
-                    "payload": {
-                        "kpiMetrics": kpi,
-                        "realtimeUsers": rt_count
-                    }
-                }
-                await manager.broadcast_to_tenant(tenant_id, payload)
-                
+                    "payload": {"kpiMetrics": kpi, "watermarks": rt.get("watermarks", {})},
+                })
             except Exception as e:
                 logger.error(f"Error polling metrics for tenant {tenant_id}: {e}")
 

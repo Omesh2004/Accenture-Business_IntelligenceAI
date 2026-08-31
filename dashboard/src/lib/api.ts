@@ -584,7 +584,6 @@ export const dashboardAPI = {
       console.error('Failed to fetch available tenants', error);
       return [
         { id: "nexabank", name: "NexaBank", eventCount: 0, uniqueUsers: 0 },
-        { id: "safexbank", name: "SafexBank", eventCount: 0, uniqueUsers: 0 },
       ];
     }
   },

@@ -85,7 +85,7 @@ const OpenAccountModal = ({ isOpen, onClose, userId, onSuccess }: OpenAccountMod
             <Input
               value={ifsc}
               onChange={(e) => setIfsc(e.target.value.toUpperCase())}
-              placeholder="e.g. NEXA0001 / SAFX0001"
+              placeholder="e.g. NEXA0001"
               className="rounded-lg font-mono uppercase"
             />
           </div>

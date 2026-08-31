@@ -22,12 +22,10 @@ import axios from "axios";
 const router = express.Router();
 
 const ANALYTICS_API_URL = process.env.ANALYTICS_API_URL || "http://analytics-api:8001";
-const TENANT_ALIAS_MAP: Record<string, string> = {
-  bank_a: "nexabank",
-  bank_b: "safexbank",
-};
-const GLOBAL_ANALYTICS_TENANTS = "nexabank,safexbank";
-const GLOBAL_LOCAL_TENANTS = ["bank_a", "bank_b"];
+// Round 2 is one bank. The Prisma tenant id is `bank_a`; analytics calls it `nexabank`.
+const TENANT_ALIAS_MAP: Record<string, string> = { bank_a: "nexabank" };
+const GLOBAL_ANALYTICS_TENANTS = "nexabank";
+const GLOBAL_LOCAL_TENANTS = ["bank_a"];
 
 function normalizeToggleKey(rawKey: string): string {
   const key = String(rawKey || "").trim().toLowerCase();
@@ -675,10 +673,7 @@ router.post(
   isLoggedIn,
   isAdmin,
   async (req: Request, res: Response): Promise<void> => {
-    const tenantAliasMap: Record<string, string> = {
-      nexabank: "bank_a",
-      safexbank: "bank_b",
-    };
+    const tenantAliasMap: Record<string, string> = { nexabank: "bank_a" };
 
     const rawCount = Number((req.body as { count?: unknown })?.count);
     const rawDays = Number((req.body as { days?: unknown })?.days);

@@ -295,7 +295,7 @@ class Simulator:
 
         sql = """
             SELECT user_id, event_name, timestamp, metadata
-            FROM feature_intelligence.events_raw
+            FROM bronze.events
             WHERE tenant_id = %(tenant_id)s
                             AND timestamp >= now('UTC') - INTERVAL %(mins)s MINUTE
             ORDER BY timestamp DESC
@@ -569,7 +569,7 @@ def query_realtime_users(tenant: str) -> int:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Realistic telemetry simulator for ingestion + realtime session lifecycle")
     parser.add_argument("--ingest-url", default=INGEST_URL)
-    parser.add_argument("--tenants", default="nexabank,safexbank")
+    parser.add_argument("--tenants", default="nexabank")
     parser.add_argument("--users-per-tenant", type=int, default=120)
     parser.add_argument("--days", type=int, default=30)
     parser.add_argument("--sessions-per-tenant", type=int, default=220)

@@ -62,61 +62,32 @@ class ClickHouseClient:
         events: List[Dict[str, Any]],
         insert_deduplication_token: Optional[str] = None,
     ):
-        """Bulk insert raw events into ClickHouse.
+        """Bulk insert raw events into `bronze.events` -- verbatim, uncanonicalised.
 
-        Callers: pipeline/worker.py (the Kafka-consumed path -- attaches real
-        kafka_partition/kafka_offset/kafka_topic and ingest_path='kafka' per event, see
-        run_worker()) and api/seed_safexbank.py (a direct-to-ClickHouse seeding script that
-        bypasses Kafka and the ingestion API entirely, and sets none of these fields).
+        `bronze.events` is a plain MergeTree (never Replacing): a duplicate arriving twice is
+        the evidence the Trust Gate reads. Silver deduplicates by event_id and canonicalises the
+        name; this writer does neither.
 
-        `insert_deduplication_token` (Phase F item 6 bullet 2,
-        docs/audits/clickhouse_pipeline_implementation_phases_defg_prompt.md): an optional,
-        caller-supplied deterministic token for ClickHouse's own insert-level block dedup, so a
-        retried insert of the exact same logical batch (network ack lost, insert already
-        landed) is caught by ClickHouse itself, not just by the caller's own retry-identity
-        discipline. Only pipeline/worker.py's flush_batch() passes one today (see its own
-        docstring for a load-bearing caveat: this token is currently a NO-OP on the live
-        events_raw table). Left unset (None) for every other caller -- api/seed_safexbank.py's
-        writes are not part of any retry loop this token would help with, so no token shape was
-        invented for it.
+        Per-event keys read from the wire dict:
+          - `_raw`            the exact request body ingestion received, verbatim JSON. '' if a
+                              caller genuinely had no body.
+          - `kafka_partition` / `kafka_offset` / `kafka_topic` / `ingest_path`
+                              set by pipeline/worker.py's _attach_kafka_metadata for the
+                              Kafka-consumed path; sentinels (-1 / '' ) otherwise. This function
+                              never assumes 'kafka' for a caller that did not say so.
 
-        This function deliberately does NOT assume 'kafka' for a caller that doesn't say so --
-        Phase 1's own audit documented a real incident where the ingestion API silently ran on
-        the direct-ClickHouse fallback for its entire process lifetime with no crash and no
-        signal (docs/audits/clickhouse_pipeline_audit_phase1_findings.md), so guessing the
-        common case here would have been actively wrong for that period, and is wrong today for
-        api/seed_safexbank.py's writes. An unset ingest_path is written as '' -- honestly
-        "not reported by this caller" -- rather than mislabeled.
-
-        `_inserted_at` (Phase 3 proposal 1 Option A) is the ReplacingMergeTree version column on
-        the post-Phase-C events_raw schema, set explicitly for the same self-documenting reason
-        every other column here is explicit rather than relying on the column's own DEFAULT.
-
-        DEPLOYMENT WARNING: `_inserted_at` does not exist on events_raw until the Phase C
-        rename-swap actually runs (docs/audits/clickhouse_pipeline_implementation_phase_c_report.md).
-        Deploying this function to a live service before that swap completes will break every
-        insert through this path with an unknown-column error -- this happened once already in
-        this implementation sequence, for the Phase B columns immediately above, before their
-        DDL had been approved. Do not hot-reload this change into a running container ahead of
-        the swap.
+        `insert_deduplication_token`: an optional deterministic token for ClickHouse's own
+        insert-level block dedup, so a retried insert of the same logical batch (network ack
+        lost, insert already landed) is caught by ClickHouse. Only pipeline/worker.py passes one.
         """
         client = self._get_client()
 
         if not events:
             return
 
-        # ingested_at/_inserted_at are insert time, not event time -- one "now" for this batch,
-        # not derived from each event's own (possibly backdated, see scripts/seed_data.py)
-        # timestamp. Both columns currently coexist deliberately: `ingested_at` (Phase 3
-        # proposal 2) is a plain audit column; `_inserted_at` (Phase 3 proposal 1 Option A) is
-        # specifically the ReplacingMergeTree version column and must be present for merges to
-        # have deterministic "latest wins" semantics -- they are not the same column reused
-        # twice, even though they hold the same value.
+        # _ingested_at is insert time, not event time -- one "now" for this batch, not derived
+        # from each event's own (possibly backdated) timestamp.
         now = datetime.now(timezone.utc).replace(tzinfo=None)
-
-        # Prepare column data
-        # P0-6: canonicalised ONCE here, so no reader has to do it afterwards.
-        from api.page_map import canonicalize_event_name
 
         data = [
             [
@@ -126,17 +97,16 @@ class ClickHouseClient:
                 e['event_name'],
                 e['user_id'],
                 e['channel'],
-                # Naive UTC to match the DateTime column. utcfromtimestamp is deprecated
-                # and returns a naive value anyway; this is the same instant, spelled out.
+                # Naive UTC to match the DateTime column.
                 datetime.fromtimestamp(e['timestamp'], timezone.utc).replace(tzinfo=None),
-                json.dumps(e.get('metadata', {}), ensure_ascii=True), # Encode as valid JSON
+                json.dumps(e.get('metadata', {}), ensure_ascii=True),
+                str(e.get('_raw', '') or ''),
+                str(e.get('_source_id', 'clickstream') or 'clickstream'),
                 int(e.get('kafka_partition', -1)),
                 int(e.get('kafka_offset', -1)),
                 str(e.get('kafka_topic', '') or ''),
-                now,        # ingested_at
                 str(e.get('ingest_path', '') or ''),
-                now,        # _inserted_at
-                canonicalize_event_name(e['event_name']) or e['event_name'],
+                now,        # _ingested_at
             ]
             for e in events
         ]
@@ -146,16 +116,16 @@ class ClickHouseClient:
             insert_kwargs["settings"] = {"insert_deduplication_token": insert_deduplication_token}
 
         client.insert(
-            'feature_intelligence.events_raw',
+            'bronze.events',
             data,
             column_names=[
                 'event_id', 'session_id', 'tenant_id', 'event_name', 'user_id', 'channel',
-                'timestamp', 'metadata', 'kafka_partition', 'kafka_offset', 'kafka_topic',
-                'ingested_at', 'ingest_path', '_inserted_at', 'event_name_canonical',
+                'timestamp', 'metadata', '_raw', '_source_id', '_kafka_partition',
+                '_kafka_offset', '_kafka_topic', '_ingest_path', '_ingested_at',
             ],
             **insert_kwargs,
         )
-        logger.debug(f"Inserted {len(events)} events into ClickHouse.")
+        logger.debug(f"Inserted {len(events)} events into bronze.events.")
 
     def query(self, sql: str, parameters: dict = None) -> List[Dict[str, Any]]:
         """Execute a query and return dicts. Fresh client per call for thread safety.

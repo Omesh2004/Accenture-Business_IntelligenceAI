@@ -8,17 +8,12 @@ export const TenantIndicator = () => {
 
   if (!tenantId) return null;
 
-  const getBankName = () => {
-    if (tenantId === 'bank_a') return 'NexaBank';
-    if (tenantId === 'bank_b') return 'SafeX Bank';
-    return 'Demo Bank';
-  };
+  const getBankName = () => (tenantId === 'bank_a' ? 'NexaBank' : 'Demo Bank');
 
-  const getBankColor = () => {
-    if (tenantId === 'bank_a') return 'bg-violet-100 text-violet-700 border-violet-200';
-    if (tenantId === 'bank_b') return 'bg-emerald-100 text-emerald-700 border-emerald-200';
-    return 'bg-blue-100 text-blue-700 border-blue-200';
-  };
+  const getBankColor = () =>
+    tenantId === 'bank_a'
+      ? 'bg-violet-100 text-violet-700 border-violet-200'
+      : 'bg-blue-100 text-blue-700 border-blue-200';
 
   return (
     <div className="flex items-center gap-2">

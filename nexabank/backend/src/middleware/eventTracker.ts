@@ -40,13 +40,10 @@ export function hashUserId(userId: string): string {
 }
 
 /**
- * Maps Prisma tenant IDs to analytics-dashboard tenant IDs.
- * Prisma DB uses bank_a/bank_b; analytics dashboard uses nexabank/safexbank.
+ * Maps the Prisma tenant id (`bank_a`) to the analytics tenant id (`nexabank`).
+ * Round 2 is one bank.
  */
-const TENANT_ANALYTICS_MAP: Record<string, string> = {
-  bank_a: "nexabank",
-  bank_b: "safexbank",
-};
+const TENANT_ANALYTICS_MAP: Record<string, string> = { bank_a: "nexabank" };
 
 function resolveAnalyticsTenantId(prismaId: string): string {
   return TENANT_ANALYTICS_MAP[prismaId] || prismaId;
@@ -394,7 +391,7 @@ function enforceTaxonomy(eventName: string): string {
 
 /**
  * Derive metadata.path from the mapped event name.
- * Covers all NexaBank and SafexBank pages.
+ * Covers all NexaBank pages.
  */
 function derivePathFromEvent(eventName: string): string {
   const normalized = String(eventName || "").trim().toLowerCase();

@@ -1,4 +1,4 @@
-"""Read side: what the dashboard AI panel and /ai_report consume.
+"""Read side: what the dashboard AI panel consumes.
 
 The narrator may state only what the Signal Store contains, so the reader returns stored rows --
 it never recomputes a number.
@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-DB = "feature_intelligence"
+DB = "gold"
 
 
 def _ch():

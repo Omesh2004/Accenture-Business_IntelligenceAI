@@ -11,7 +11,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 
 from api.intelligence.ids import round6  # noqa: E402
 
-DB = "feature_intelligence"
+DB = "gold"
 
 
 # Imported lazily so the stages are importable without the ClickHouse driver.

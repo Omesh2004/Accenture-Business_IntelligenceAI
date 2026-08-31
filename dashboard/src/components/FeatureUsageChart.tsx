@@ -64,7 +64,7 @@ function formatYAxis(value: number): string {
 const MULTI_TENANT_COLORS = ['#1a73e8', '#10b981', '#f59e0b', '#ef4444', '#8b5cf6', '#ec4899'];
 
 function FeatureUsageChart({ data }: FeatureUsageChartProps) {
-  // Dynamically detect data keys (single-tenant: 'usage', multi-tenant: 'nexabank_usage', 'safexbank_usage')
+  // Dynamically detect data keys (single-tenant: 'usage')
   const allKeys = Array.from(
     new Set(data.flatMap((d) => Object.keys(d).filter((k) => k !== 'date')))
   );

@@ -69,7 +69,7 @@ export interface KPIMetric {
 /**
  * Data point for time-series line/area charts.
  * Supports both single-tenant (visitors, pageViews)
- * and multi-tenant pivoted keys (nexabank_visitors, safexbank_pageViews, …).
+ * (single tenant).
  */
 export type TimeSeriesDataPoint = {
   date: string;

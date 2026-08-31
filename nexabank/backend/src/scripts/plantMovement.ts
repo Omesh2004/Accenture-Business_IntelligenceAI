@@ -28,15 +28,6 @@ const PLAN = [
       mix: { deviceWeights: { mobile: 6 } },
     },
   },
-  {
-    label: "safexbank: sharp KYC drop",
-    tenantId: "bank_b", count: 30, days: 12,
-    behavior: {
-      windowDays: 6,
-      kyc: { startRate: 0.95, progressMultiplier: 3.5, successRate: 0.25 },
-      loans: { applicationMultiplier: 4.0, approvalRate: 0.30 },
-    },
-  },
 ];
 
 async function waitForApi(attempts = 30): Promise<void> {

@@ -191,14 +191,18 @@ two personas. That still satisfies every minimum expectation.
 
 ## 6. The two data sources (different cadences, as the brief requires)
 
-- Real-time clickstream: user events, streamed through Kafka, per-event grain. Drives signups, KYC
-  completion, transaction failures.
-- Daily banking snapshot: loan, account, and ledger state, extracted once a day from NexaBank's
-  Postgres, daily grain. Drives loan approval volume and revenue.
+- Daily banking snapshot: loan, account, transaction and ledger state, extracted once a day from
+  NexaBank's Postgres, daily grain. **Produces every KPI value** (`docs/DATA_MODEL.md` §"The five
+  KPIs, and where each number comes from", commit `d5c8ff1`) — signups, KYC completion, loan
+  approval volume, revenue, transaction failure rate.
+- Real-time clickstream: user events, streamed through Kafka, per-event grain. **Behavioural
+  context only** — funnel stage detail (`gold.funnel_daily`) and journey reconstruction. Never a
+  figure a reader sees as a KPI. The clickstream carries dimensions the producer invented; the
+  snapshot carries dimensions the bank recorded.
 
-The two cadences are the point. The Trust Gate and the freshness rule must reconcile them: when a
-KPI combines a real-time number and a daily number, we compute against the oldest common data time,
-and if they are too far apart we say so or abstain.
+The two cadences are still the point. The Trust Gate and the freshness rule reconcile them per
+source: each source has its own SLA, and a KPI is not narrated until its snapshot source is fresh
+enough, else the engine says so or abstains.
 
 ## 7. The personas (same chain, different lens)
 
@@ -323,20 +327,27 @@ FinInsights/
       events/                event tracking and the taxonomy, in one place
       simulate/              the simulate engine and anomaly templates
   ingestion/                 FastAPI service on 8000
-  pipeline/                  kafka consumer and the bronze to silver to gold transforms
+  pipeline/                  kafka consumer, the bronze to silver to gold transforms, the extract
+    worker.py                kafka consumer -> bronze.events
+    extract/                 core_banking.py reference.py freshness.py  -> bronze.core_banking
+    transforms/              silver_facts.py silver_events.py silver_sessions.py gold_kpi.py gold_funnel.py
+    taxonomy/                the ONE canonicalisation vocabulary (aliases.yaml), rejects
+    dev/                     seed.py  (fast-mode mock data, gated POST /dev/seed)
+    service.py               the batch scheduler
   warehouse/
+    migrate.py               applies the layered DDL in bronze -> silver -> gold order
     clickhouse/
-      bronze/                raw table DDL
-      silver/                cleaned table DDL and materialized views
-      gold/                  KPI rollups and the signal store DDL
-  api/                       FastAPI service on 8001 (the Metric API and endpoints)
-    intelligence/            the agent, tools, narrator, signal store, personas
+      bronze/ silver/ gold/  the authoritative layered DDL
+      migrations/            post-baseline numbered deltas (starts 0002)
+  api/                       FastAPI service on 8001
+    metric_api/              the ONLY doorway: reads.py (named reads), main.py (router), client.py
+    dashboard_api/           the KPI / funnel / persona / evidence endpoints
+    contracts_loader.py      loads contracts/*.yaml; resolves kpi_id -> gold fundamentals
+    middleware.py            persona resolution + the Ops-hides-revenue filter
+    intelligence/            the agent, tools, narrator, signal store, personas (Track C)
       orchestrator.py
-      tools/                 trust_gate.py detect.py localize.py forecast.py materiality.py decide.py
-      narrator.py
-      verifier.py
-      signal_store.py
-      personas.py
+      tools.py               trust_gate detect localize forecast materiality decide
+      narrator.py  verifier.py  signal_store.py  personas.py
   dashboard/                 Next.js app
 ```
 

@@ -56,11 +56,12 @@ services:
       - "8123:8123"
       - "9000:9000"
     volumes:
-      - ./warehouse/clickhouse/schema.sql:/docker-entrypoint-initdb.d/init.sql
+      # No docker-entrypoint-initdb.d mount: schema is applied by the one-shot
+      # `migrate` service (warehouse/migrate.py), so there is one code path that
+      # builds the schema, not two that can drift.
       - clickhouse_data:/var/lib/clickhouse
       - clickhouse_logs:/var/log/clickhouse-server
     environment:
-      CLICKHOUSE_DB: feature_intelligence
       CLICKHOUSE_USER: default
       CLICKHOUSE_PASSWORD: clickhouse
       # P0-1: today() is server-local. Unpinned, the KPI card, the traffic chart and the rollup
@@ -72,6 +73,24 @@ services:
       timeout: 5s
       retries: 12
       start_period: 20s
+
+  # ═══════════════════════════════════════════════════════════
+  # SCHEMA MIGRATION — one-shot, runs to completion before any service reads/writes
+  # ═══════════════════════════════════════════════════════════
+
+  migrate:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+    environment:
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=clickhouse
+    command: python warehouse/migrate.py
+    restart: "no"
 
   # ═══════════════════════════════════════════════════════════
   # NUCLEUS PYTHON BACKEND SERVICES
@@ -86,14 +105,16 @@ services:
         condition: service_healthy
       clickhouse:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     ports:
       - "8000:8000"
     environment:
-      - DEPLOYMENT_MODE=CLOUD
       - KAFKA_BROKER_URL=broker:29092
       - CLICKHOUSE_HOST=clickhouse
       - CLICKHOUSE_USER=default
       - CLICKHOUSE_PASSWORD=clickhouse
+      - PIPELINE_URL=http://pipeline:8003
     command: uvicorn ingestion.main:app --host 0.0.0.0 --port 8000
     restart: unless-stopped
 
@@ -108,12 +129,39 @@ services:
         condition: service_healthy
       clickhouse:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     environment:
       - KAFKA_BROKER_URL=broker:29092
       - CLICKHOUSE_HOST=clickhouse
       - CLICKHOUSE_USER=default
       - CLICKHOUSE_PASSWORD=clickhouse
     command: python pipeline/worker.py
+    restart: unless-stopped
+
+  pipeline:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      clickhouse:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    ports:
+      - "8003:8003"
+    environment:
+      - CLICKHOUSE_HOST=clickhouse
+      - CLICKHOUSE_USER=default
+      - CLICKHOUSE_PASSWORD=clickhouse
+      - PIPELINE_TENANTS=nexabank
+      - EXTRACT_API_URL=http://nexabank-backend:5000/api
+      - EXTRACT_API_TOKEN=${EXTRACT_API_TOKEN:-local-dev-extract-token}
+      - ENABLE_DEV_SEED=${ENABLE_DEV_SEED:-1}
+      - PIPELINE_RUN_ON_START=${PIPELINE_RUN_ON_START:-0}
+      - PIPELINE_EXTRACT_INTERVAL_S=${PIPELINE_EXTRACT_INTERVAL_S:-600}
+      - PIPELINE_TRANSFORM_INTERVAL_S=${PIPELINE_TRANSFORM_INTERVAL_S:-600}
+    command: uvicorn pipeline.service:app --host 0.0.0.0 --port 8003
     restart: unless-stopped
 
   intelligence:
@@ -123,11 +171,13 @@ services:
     depends_on:
       clickhouse:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     environment:
       - CLICKHOUSE_HOST=clickhouse
       - CLICKHOUSE_USER=default
       - CLICKHOUSE_PASSWORD=clickhouse
-      - INTELLIGENCE_TENANTS=nexabank,safexbank
+      - INTELLIGENCE_TENANTS=nexabank
       - INTELLIGENCE_WINDOW_DAYS=7
       - INTELLIGENCE_DATASET=seeded
       - EXTRACT_API_URL=http://nexabank-backend:5000/api
@@ -146,16 +196,20 @@ services:
     depends_on:
       clickhouse:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     ports:
       - "8001:8001"
     environment:
-      - DEPLOYMENT_MODE=CLOUD
       - CLICKHOUSE_HOST=clickhouse
       - CLICKHOUSE_USER=default
       - CLICKHOUSE_PASSWORD=clickhouse
       - VLLM_URL=http://host.docker.internal:11434/v1
       - INTELLIGENCE_LLM=${INTELLIGENCE_LLM:-0}
-    command: uvicorn api.main:app --host 0.0.0.0 --port 8001
+      - METRIC_API_TENANTS=${METRIC_API_TENANTS:-nexabank}
+    # Phase 4: the Metric API is the doorway. Phase 5 folds the dashboard + /intelligence/*
+    # read endpoints onto this same app; api/main.py is deleted then.
+    command: uvicorn api.dashboard_api.main:app --host 0.0.0.0 --port 8001
     restart: unless-stopped
 
   # ═══════════════════════════════════════════════════════════
@@ -293,7 +347,6 @@ services:
       clickhouse:
         condition: service_healthy
     environment:
-      - DEPLOYMENT_MODE=CLOUD
       - CLICKHOUSE_HOST=clickhouse
       - CLICKHOUSE_USER=default
       - CLICKHOUSE_PASSWORD=clickhouse

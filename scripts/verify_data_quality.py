@@ -1,4 +1,12 @@
 """
+ROUND-1 SCRIPT — NOT YET REBUILT FOR bronze/silver/gold.
+
+This checks `feature_intelligence.events_raw` / `daily_feature_usage`, which no longer exist.
+The Round-2 pipeline verification lives in `docs/execution/PHASE_7_REPORT.md` (the four §10
+scenarios + the full-`down -v` determinism diff). A Round-2 rewrite of this operator tool would
+check: bronze.core_banking -> silver.fact_* row-collapse, gold.kpi_daily fundamentals present per
+KPI, and pipeline/taxonomy rejects. Left in place, not deleted, so the intent survives.
+
 Verifies that the telemetry reaching ClickHouse is fit for the intelligence layer.
 
 This asserts the Foundation guarantees the pipeline is built on. It does NOT test the
@@ -37,8 +45,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import requests  # noqa: E402
 
-from api.page_map import canonicalize_event_name  # noqa: E402
-from ingestion.event_names import normalize_ingest_event_name  # noqa: E402
+from pipeline.taxonomy import canonicalize as canonicalize_event_name  # noqa: E402
+try:
+    from ingestion.event_names import normalize_ingest_event_name  # noqa: E402
+except ImportError:  # event_names.py removed in the Round-2 rebuild
+    normalize_ingest_event_name = lambda s: s  # noqa: E731
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TENANT = os.environ.get("VERIFY_TENANT", "nexabank")
