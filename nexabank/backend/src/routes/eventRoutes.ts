@@ -331,6 +331,11 @@ function pick<T>(arr: T[]): T {
 }
 
 /** The newly launched product. Its whole point is that it has almost no history. */
+// A customer may apply more than once over a long window -- a personal loan now,
+// an auto loan later. One-per-customer capped applications at the user count.
+const MAX_LOANS_PER_USER = 3;
+const LOAN_COOLDOWN_DAYS = 12;
+
 const NEW_CARD_PRODUCT = "Student Travel Credit Card";
 const NEW_PRODUCT_DAYS = 10;
 
@@ -1137,7 +1142,8 @@ router.post(
         // ─── 7. State Machine: 30-Day Journey ──────────────
         let kycState: "NOT_STARTED" | "PENDING" | "VERIFIED" | "REJECTED" = "NOT_STARTED";
         let isPro = false;
-        let hasAppliedLoan = false;
+        let loanApplicationCount = 0;
+        let lastLoanDay = -99;
         let unlockedFeature = "";
 
         for (let day = 0; day <= joinDaysAgo; day++) {
@@ -1462,7 +1468,9 @@ router.post(
           }, dayTs + 2600, { inScope });
 
           // ── Loan Application ──────────────────────────────
-          if (!hasAppliedLoan && kycState === "VERIFIED" && day > 5 &&
+          if (loanApplicationCount < MAX_LOANS_PER_USER
+              && day - lastLoanDay >= LOAN_COOLDOWN_DAYS
+              && kycState === "VERIFIED" && day > 5 &&
               simGate("loan.applied.success", persona.loanInterest * behavior.loans.applicationMultiplier, inScope)) {
             const loanType = pick(LOAN_TYPES);
             const loanAmounts: Record<string, [number, number]> = {
@@ -1493,7 +1501,8 @@ router.post(
                 kycStep: kycComplete ? 3 : Math.floor(Math.random() * 2) + 1,
               },
             });
-            hasAppliedLoan = true;
+            loanApplicationCount++;
+            lastLoanDay = day;
             applicationsCreated++;
 
             await simEmit("lending.loan.applied", 1, { loanType, amount: principalAmount, term, ...lMeta }, dayTs + 3000, { inScope, applyTraffic: false });
