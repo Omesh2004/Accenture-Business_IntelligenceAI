@@ -53,12 +53,12 @@ const HIGH_VOLUME = {
 };
 
 const PLAN: Batch[] = [
-  { label: "nexabank baseline a", tenantId: "bank_a", count: 30, days: 50,
-    behavior: { windowDays: 50, ...HIGH_VOLUME } },
-  { label: "nexabank baseline b", tenantId: "bank_a", count: 30, days: 50,
-    behavior: { windowDays: 50, ...HIGH_VOLUME } },
-  { label: "nexabank baseline c", tenantId: "bank_a", count: 30, days: 50,
-    behavior: { windowDays: 50, ...HIGH_VOLUME } },
+  { label: "nexabank baseline a", tenantId: "bank_a", count: 70, days: 55,
+    behavior: { windowDays: 55, ...HIGH_VOLUME } },
+  { label: "nexabank baseline b", tenantId: "bank_a", count: 70, days: 55,
+    behavior: { windowDays: 55, ...HIGH_VOLUME } },
+  { label: "nexabank baseline c", tenantId: "bank_a", count: 60, days: 55,
+    behavior: { windowDays: 55, ...HIGH_VOLUME } },
   {
     label: "nexabank recent: approvals fall, skewed to mobile",
     tenantId: "bank_a", count: 45, days: 12,
@@ -75,10 +75,10 @@ const PLAN: Batch[] = [
                 loans: { applicationMultiplier: 3.5, approvalRate: 0.24 },
                 mix: { deviceWeights: { mobile: 4 } } },
   },
-  { label: "safexbank baseline a", tenantId: "bank_b", count: 35, days: 50,
-    behavior: { windowDays: 50, ...HIGH_VOLUME } },
-  { label: "safexbank baseline b", tenantId: "bank_b", count: 35, days: 50,
-    behavior: { windowDays: 50, ...HIGH_VOLUME } },
+  { label: "safexbank baseline a", tenantId: "bank_b", count: 75, days: 55,
+    behavior: { windowDays: 55, ...HIGH_VOLUME } },
+  { label: "safexbank baseline b", tenantId: "bank_b", count: 75, days: 55,
+    behavior: { windowDays: 55, ...HIGH_VOLUME } },
   {
     label: "safexbank recent: KYC drop-off rises",
     tenantId: "bank_b", count: 30, days: 12,
