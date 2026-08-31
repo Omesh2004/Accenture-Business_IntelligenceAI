@@ -181,15 +181,33 @@ def _insert(table: str, columns: list[str], rows: list[list]) -> int:
     client = _client()
     try:
         client.insert(f"{DB}.{table}", rows, column_names=columns)
-        # Collapse duplicates now. ReplacingMergeTree merges asynchronously and may never run,
-        # so a re-read leaves every count doubled until it does.
-        client.command(f"OPTIMIZE TABLE {DB}.{table} FINAL")
         return len(rows)
     finally:
         try:
             client.close()
         except Exception:
             pass
+
+
+def _collapse(table: str, written: int) -> int:
+    """Merge duplicates once a load finishes.
+
+    ReplacingMergeTree merges asynchronously and may never run, so a re-read leaves every count
+    doubled until it does. Called once per load, not per page: it rewrites the whole table.
+    """
+    if not written:
+        return written
+    client = _client()
+    try:
+        client.command(f"OPTIMIZE TABLE {DB}.{table} FINAL")
+    except Exception:
+        logger.warning("could not collapse duplicates in %s", table, exc_info=True)
+    finally:
+        try:
+            client.close()
+        except Exception:
+            pass
+    return written
 
 
 def _reconcile(table: str, key_col: str, present: list[str]) -> int:
@@ -294,6 +312,7 @@ def load_transactions(full: bool = False) -> int:
         if not page.get("has_more"):
             break
     write_watermark(source, entity, max_ts, total, cursor_id=cursor_id)
+    _collapse("fact_transactions", total)
     return total
 
 
@@ -328,6 +347,7 @@ def load_loan_applications(full: bool = False) -> int:
         if not page.get("has_more"):
             break
     write_watermark(source, entity, max_ts, total, cursor_id=cursor_id)
+    _collapse("fact_loan_applications", total)
     return total
 
 
@@ -361,6 +381,7 @@ def load_account_openings(full: bool = False) -> int:
         if not page.get("has_more"):
             break
     write_watermark(source, entity, max_ts, total, cursor_id=cursor_id)
+    _collapse("fact_account_openings", total)
     return total
 
 
@@ -391,6 +412,7 @@ def load_cards(full: bool = False) -> int:
         if not page.get("has_more"):
             break
     write_watermark(source, entity, max_ts, total, cursor_id=cursor_id)
+    _collapse("fact_cards", total)
     return total
 
 
@@ -417,6 +439,7 @@ def load_customers() -> int:
         if not page.get("has_more"):
             break
     write_watermark(source, entity, now, total)
+    _collapse("dim_customer", total)
     return total
 
 
@@ -446,6 +469,7 @@ def load_campaigns(full: bool = False) -> int:
         if not page.get("has_more"):
             break
     write_watermark(source, entity, max_ts, total, cursor_id=cursor_id)
+    _collapse("dim_campaign", total)
     return total
 
 
@@ -475,6 +499,7 @@ def load_campaign_interactions(full: bool = False) -> int:
         if not page.get("has_more"):
             break
     write_watermark(source, entity, max_ts, total, cursor_id=cursor_id)
+    _collapse("fact_campaign_interactions", total)
     return total
 
 

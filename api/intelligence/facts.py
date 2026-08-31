@@ -26,6 +26,26 @@ FACT_TABLES = {
 FACT_AGGREGATIONS = {"sum", "count", "uniqExact", "min", "max"}
 
 
+# A fundamental may name its own time column, but only one the table really has.
+TIME_COLUMNS = {
+    "fact_transactions": {"occurred_at"},
+    "fact_loan_applications": {"created_at", "decided_at"},
+    "fact_account_openings": {"opened_at"},
+    "fact_cards": {"issued_at"},
+    "fact_campaign_interactions": {"occurred_at"},
+}
+
+
+def _time_col(spec: dict) -> str:
+    table = spec["table"]
+    chosen = spec.get("time_column")
+    if not chosen:
+        return FACT_TABLES[table]["time_col"]
+    if chosen not in TIME_COLUMNS.get(table, set()):
+        raise ValueError("time_column %r is not a time column of %s" % (chosen, table))
+    return chosen
+
+
 def _sql(spec: dict, window: Window, tenant_id: str):
     """(select, from, where, params). FINAL so a mutated row is read once, at its latest state."""
     table = spec["table"]
@@ -36,7 +56,7 @@ def _sql(spec: dict, window: Window, tenant_id: str):
         raise ValueError("aggregation %r is not allowed in a contract" % agg)
 
     meta = FACT_TABLES[table]
-    time_col = meta["time_col"]
+    time_col = _time_col(spec)
     if meta.get("snapshot"):
         # A snapshot is Date-typed and must never be summed across dates.
         clause = "%s >= toDate(%%(w_start)s) AND %s < toDate(%%(w_end)s)" % (time_col, time_col)
@@ -72,7 +92,8 @@ def _sql(spec: dict, window: Window, tenant_id: str):
 
 def _time_expr(spec: dict) -> str:
     meta = FACT_TABLES[spec["table"]]
-    return meta["time_col"] if meta.get("snapshot") else "toDate(%s)" % meta["time_col"]
+    col = _time_col(spec)
+    return col if meta.get("snapshot") else "toDate(%s)" % col
 
 
 class FactReader:

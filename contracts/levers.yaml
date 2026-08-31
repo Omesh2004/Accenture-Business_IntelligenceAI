@@ -1,0 +1,192 @@
+# The Decide tool's lever library.
+#
+# A recommendation is assembled, never invented: Decide may only name a lever listed here AND
+# allowed by the KPI's own contract. Each lever declares who owns it, what it costs, the impact
+# range it has been observed to have, and how to tell whether it worked.
+#
+# expected_impact is a RANGE on the KPI's own unit, never a point estimate.
+
+levers:
+  fix_kyc_step:
+    label: Repair the failing verification step
+    owner_role: onboarding_ops
+    applies_to: [kyc_completion_rate]
+    preconditions: ["a single step or segment concentrates the drop"]
+    effort: medium
+    expected_impact: {low: 0.35, high: 0.75, unit: share_of_gap_recovered}
+    monitoring:
+      watch: kyc_completion_rate
+      threshold: "returns to within 5% of the pre-movement baseline"
+      for_days: 7
+
+  review_document_rules:
+    label: Relax or correct document acceptance rules
+    owner_role: onboarding_ops
+    applies_to: [kyc_completion_rate]
+    preconditions: ["rejections concentrate on a document reason"]
+    effort: low
+    expected_impact: {low: 0.15, high: 0.40, unit: share_of_gap_recovered}
+    monitoring:
+      watch: kyc_completion_rate
+      threshold: "rejection share falls below its trailing median"
+      for_days: 14
+
+  escalate_vendor:
+    label: Escalate to the identity verification vendor
+    owner_role: onboarding_ops
+    applies_to: [kyc_completion_rate]
+    preconditions: ["the drop coincides with a vendor change or vendor error rate"]
+    effort: low
+    expected_impact: {low: 0.20, high: 0.80, unit: share_of_gap_recovered}
+    monitoring:
+      watch: kyc_completion_rate
+      threshold: "vendor error rate returns to baseline"
+      for_days: 7
+
+  review_approval_rules:
+    label: Review the credit approval rules
+    owner_role: lending_ops
+    applies_to: [loan_approval_volume, revenue]
+    preconditions: ["approval rate moved while application volume did not"]
+    effort: medium
+    expected_impact: {low: 0.10, high: 0.45, unit: share_of_gap_recovered}
+    monitoring:
+      watch: loan_approval_volume
+      threshold: "approval rate within 3 points of baseline"
+      for_days: 14
+
+  adjust_risk_thresholds:
+    label: Adjust risk-segment thresholds
+    owner_role: lending_ops
+    applies_to: [loan_approval_volume]
+    preconditions: ["the movement concentrates in one risk segment"]
+    effort: high
+    expected_impact: {low: 0.15, high: 0.50, unit: share_of_gap_recovered}
+    monitoring:
+      watch: loan_approval_volume
+      threshold: "segment approval rate within 5 points of the other segments"
+      for_days: 21
+
+  add_underwriting_capacity:
+    label: Add underwriting capacity
+    owner_role: lending_ops
+    applies_to: [loan_approval_volume]
+    preconditions: ["decision lag is rising while submissions rise"]
+    effort: high
+    expected_impact: {low: 0.20, high: 0.60, unit: share_of_gap_recovered}
+    monitoring:
+      watch: loan_approval_volume
+      threshold: "median decision lag returns under 3 days"
+      for_days: 14
+
+  failover_provider:
+    label: Fail over to the secondary payment provider
+    owner_role: payments_ops
+    applies_to: [transaction_failure_rate, revenue]
+    preconditions: ["failures concentrate on one channel or provider"]
+    effort: low
+    expected_impact: {low: 0.50, high: 0.90, unit: share_of_gap_recovered}
+    monitoring:
+      watch: transaction_failure_rate
+      threshold: "returns below 2%"
+      for_days: 3
+
+  roll_back_release:
+    label: Roll back the most recent release
+    owner_role: payments_ops
+    applies_to: [transaction_failure_rate]
+    preconditions: ["the movement starts within a day of a release"]
+    effort: medium
+    expected_impact: {low: 0.40, high: 0.95, unit: share_of_gap_recovered}
+    monitoring:
+      watch: transaction_failure_rate
+      threshold: "returns below 2%"
+      for_days: 3
+
+  raise_capacity:
+    label: Raise processing capacity
+    owner_role: payments_ops
+    applies_to: [transaction_failure_rate]
+    preconditions: ["failures rise with volume rather than with a channel"]
+    effort: medium
+    expected_impact: {low: 0.25, high: 0.65, unit: share_of_gap_recovered}
+    monitoring:
+      watch: transaction_failure_rate
+      threshold: "returns below 2% at peak volume"
+      for_days: 7
+
+  throttle_retries:
+    label: Throttle client retry behaviour
+    owner_role: payments_ops
+    applies_to: [transaction_failure_rate]
+    preconditions: ["failed volume rises faster than distinct customers affected"]
+    effort: low
+    expected_impact: {low: 0.10, high: 0.35, unit: share_of_gap_recovered}
+    monitoring:
+      watch: transaction_failure_rate
+      threshold: "retry share of failures falls below 20%"
+      for_days: 7
+
+  review_pricing:
+    label: Review the fee schedule
+    owner_role: finance
+    applies_to: [revenue]
+    preconditions: ["revenue moved while transaction volume did not"]
+    effort: high
+    expected_impact: {low: 0.10, high: 0.40, unit: share_of_gap_recovered}
+    monitoring:
+      watch: revenue
+      threshold: "revenue per fee-bearing transaction returns to baseline"
+      for_days: 30
+
+  reallocate_campaign_spend:
+    label: Reallocate campaign spend to the affected segment
+    owner_role: growth_ops
+    applies_to: [new_account_signups, revenue]
+    preconditions: ["the movement concentrates in a segment a campaign targets"]
+    effort: low
+    expected_impact: {low: 0.10, high: 0.35, unit: share_of_gap_recovered}
+    monitoring:
+      watch: new_account_signups
+      threshold: "segment share returns to its trailing median"
+      for_days: 14
+
+  review_onboarding_friction:
+    label: Review onboarding friction in the affected segment
+    owner_role: growth_ops
+    applies_to: [new_account_signups]
+    preconditions: ["signups fall while campaign reach holds"]
+    effort: medium
+    expected_impact: {low: 0.15, high: 0.45, unit: share_of_gap_recovered}
+    monitoring:
+      watch: new_account_signups
+      threshold: "returns to within 10% of baseline"
+      for_days: 14
+
+  adjust_messaging:
+    label: Adjust customer messaging
+    owner_role: growth_ops
+    applies_to: [new_account_signups, kyc_completion_rate, loan_approval_volume]
+    preconditions: ["drop-off is concentrated at a step with a known message"]
+    effort: low
+    expected_impact: {low: 0.05, high: 0.25, unit: share_of_gap_recovered}
+    monitoring:
+      watch: kyc_completion_rate
+      threshold: "step drop-off falls by at least 5 points"
+      for_days: 14
+
+  # The honest default. When nothing else has its precondition met, propose the cheapest
+  # check rather than a lever that does not fit -- a recommendation nobody can act on is worse
+  # than saying the cause is not yet established.
+  investigate:
+    label: Investigate before acting
+    owner_role: analyst
+    applies_to: [new_account_signups, kyc_completion_rate, loan_approval_volume, revenue,
+                 transaction_failure_rate]
+    preconditions: []
+    effort: low
+    expected_impact: {low: 0.0, high: 0.0, unit: share_of_gap_recovered}
+    monitoring:
+      watch: "the KPI under investigation"
+      threshold: "a cause is established or the movement reverts"
+      for_days: 7

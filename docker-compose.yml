@@ -136,6 +136,7 @@ services:
       - VLLM_URL=http://host.docker.internal:11434/v1
     volumes:
       - ./api:/app/api
+      - ./contracts:/app/contracts:ro
     command: python api/intelligence/service.py
     restart: unless-stopped
 
@@ -155,6 +156,8 @@ services:
       - CLICKHOUSE_PASSWORD=clickhouse
       - VLLM_URL=http://host.docker.internal:11434/v1
       - INTELLIGENCE_LLM=${INTELLIGENCE_LLM:-0}
+    volumes:
+      - ./contracts:/app/contracts:ro
     command: uvicorn api.main:app --host 0.0.0.0 --port 8001
     restart: unless-stopped
 

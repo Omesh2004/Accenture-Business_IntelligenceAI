@@ -1,0 +1,124 @@
+id: new_account_signups
+name: New Account Signups
+definition: >
+  The number of accounts opened each day. Top of the chain: signups feed onboarding, onboarding
+  gates lending, lending drives revenue.
+formula: count(accounts where opened_at in window)
+unit: count
+additivity: additive
+
+grain:
+  time: daily
+  entity: account
+
+sources:
+  - id: nexabank_core
+    system: ClickHouse.fact_account_openings
+    grain: account
+    cadence: hourly_batch
+    freshness_sla_minutes: 120
+  - id: nexabank_clickstream
+    system: ClickHouse.events_raw
+    grain: event
+    cadence: real_time
+    freshness_sla_minutes: 15
+    role: corroboration
+
+readiness:
+  status: ready
+  gate: >
+    An opened account is a ledger fact. The clickstream registration event corroborates it but
+    covers only the sampled population, so it must never be the count.
+
+identity:
+  account_no: required
+  customer_id: hashed
+
+fundamentals:
+  - metric: accounts_opened
+    table: fact_account_openings
+    measure: "1"
+    aggregation: count
+    additivity: additive
+    engine_type: sql
+
+dimensions:
+  allowed: [account_type, region, country, branch_code]
+  max_depth: 2
+  min_segment_volume: 10
+  availability:
+    account_type: {seeded: true, live: true}
+    region: {seeded: true, live: true}
+    country: {seeded: true, live: true}
+    branch_code: {seeded: true, live: true}
+  excluded:
+    - key: lifecycle_status
+      reason: "Mutates after opening, so it is not a property of the opening event."
+    - key: location
+      reason: "Synthesised per session by the producer."
+
+quality:
+  freshness_sla_minutes: 120
+  provisional_window_minutes: 60
+  hard_invariants:
+    - id: non_negative
+      expr: accounts_opened >= 0
+      on_fail: quarantine
+  soft_invariants:
+    - id: clickstream_corroboration
+      expr: accounts_opened >= clickstream_registrations * 0.1
+      on_fail: ambiguous
+      note: "Different populations and cadences; abstain rather than quarantine."
+  defect_fingerprints:
+    - id: batch_not_loaded
+      signature: "accounts_opened == 0 for a window that previously had volume"
+      verdict: fail
+
+detection:
+  direction: both
+  band_source: robust_baseline
+  warn_pct_change: 15
+  critical_pct_change: 30
+  min_persistence_windows: 2
+  min_denominator: 10
+  robust_scorer: mad
+  multiple_testing: benjamini_hochberg
+  sparse_history_policy: abstain_with_interval
+
+forecast:
+  enabled: true
+  horizon_days: 7
+  baseline: seasonal_naive
+  interval_required: true
+  fallback: rolling_median
+  min_history_days: 14
+
+causal:
+  enabled: true
+  evidence_rungs: [association, attribution, corroborated_cause]
+  interventions: [campaign, branch_opening, rate_change]
+  control_dimensions: [account_type]
+  degrade_to: attribution
+
+decision:
+  owner: growth_ops
+  allowed_levers: [adjust_messaging, reallocate_campaign_spend, review_onboarding_friction,
+                   investigate]
+  requires_human_approval: true
+  expected_impact: interval
+
+lineage:
+  tables: [fact_account_openings, events_raw]
+  sources: [nexabank_core, nexabank_clickstream]
+  events: [register.auth.success]
+
+access_restriction:
+  visible_to: [cfo, ops_manager, analyst, risk_officer, data_steward]
+
+observability:
+  golden_scenarios: [real_movement, sparse_history]
+  verifier_required: true
+  engine_type: sql
+
+interconnection:
+  drives: kyc_completion_rate
