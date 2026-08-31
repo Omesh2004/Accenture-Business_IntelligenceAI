@@ -72,37 +72,35 @@ All through `docker compose`.
 # Bring the stack up (the narrator model is opt-in: add --profile gpu)
 docker compose up -d
 
-# Rebuild a Python service after an edit  (ingestion-api | analytics-api | processor-worker)
+# Rebuild a Python service after an edit  (ingestion-api | analytics-api | processor-worker — source is baked in)
 docker compose up -d --build analytics-api
 
-# Restart a Node service after an edit  (nexabank-backend | nexabank-frontend | analytics-dashboard)
+# Restart a Node service after an edit  (nexabank-backend | nexabank-frontend | dashboard)
 docker compose restart nexabank-backend
 
 # Warehouse migrations
 docker compose exec -T ingestion-api python warehouse/migrate.py            # apply pending
 docker compose exec -T ingestion-api python warehouse/migrate.py --status   # list only
 
-# Query the warehouse
+# Query the warehouse  (database is feature_intelligence today; bronze/silver/gold after the rebuild)
 docker compose exec clickhouse clickhouse-client --password clickhouse --query "SELECT 1"
 
-# Seed mock data — slow mode: real Kafka -> pipeline path, writes fixtures/planted_truth.json
-docker compose --profile tools run --rm tools python scripts/seed_data.py --scenario all
-
-# Scenario / intelligence gate checks against the planted ground truth
-docker compose --profile tools run --rm tools python scripts/run_intelligence_gates.py
-
-# Data-quality and taxonomy checks
-docker compose --profile tools run --rm tools python scripts/verify_data_quality.py
-
-# Tests  (a SKIP is a failure until you have read its reason)
-docker compose --profile test run --rm tests
+# Operator tooling runs in the `tools` image (profile tools; pytest + node are installed there).
+# Its default command is verify_data_quality.py; override it to run any script:
+docker compose --profile tools run --rm tools python scripts/seed_data.py --scenario all      # slow-mode seed + fixtures/planted_truth.json
+docker compose --profile tools run --rm tools python scripts/run_intelligence_gates.py        # score against planted ground truth
+docker compose --profile tools run --rm tools python scripts/verify_data_quality.py           # data-quality + taxonomy checks
 
 # Type-check a TypeScript project without touching host node_modules
-docker compose exec analytics-dashboard npx tsc --noEmit
+docker compose exec dashboard npx tsc --noEmit
+docker compose exec nexabank-backend npx tsc --noEmit
 
 # Is Kafka carrying events, or is ingestion silently on the ClickHouse fallback?
 curl -s localhost:8000/health          # ingest_path: kafka | clickhouse_fallback
 ```
+
+There is no automated test suite yet. When one lands it runs in the `tools` image — a pytest
+`SKIP` is a failure until you have read its reason (rule 6).
 
 The warehouse is mid-migration from a single `feature_intelligence` database to `bronze` /
 `silver` / `gold` (see `docs/audit/`). Commands that name a database or table change with it.

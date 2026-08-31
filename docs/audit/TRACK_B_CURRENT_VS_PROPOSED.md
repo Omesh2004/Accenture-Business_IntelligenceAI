@@ -7,6 +7,16 @@ Proposal source: `CLAUDE.md` + `docs/SOLUTION.md`, `docs/ARCHITECTURE.md`, `docs
 `docs/INTELLIGENCE.md`. Nothing here proposes an approach the docs do not; where the docs leave a
 real gap it is called out under **Missing puzzle pieces**.
 
+> **Update — `docs/DATA_MODEL.md` revised after this audit (commit `d5c8ff1`).** It added "The
+> five KPIs, and where each number comes from": **every KPI value now comes from the daily banking
+> snapshot (`silver.fact_*`), not the clickstream** — the clickstream is behavioural context only
+> (funnel stage detail, journey reconstruction). This supersedes CLAUDE.md §6's clickstream
+> wording for signups / KYC completion / transaction failure. Where this audit assumed a
+> clickstream source for those KPIs (§2.1, §5.2, the segment-cube critique), read
+> `TRACK_B_PHASED_PLAN.md` § intro + decisions D1/D2 for the current position. The structural
+> findings (bronze/silver/gold split, Metric API doorway, migration reset, taxonomy ownership,
+> `_raw`, debloat) are unaffected.
+
 Legend:
 - **MATCH** — current workflow already does what the proposal asks; keep as-is.
 - **CHANGE** — current workflow contradicts the proposal and must be reworked.

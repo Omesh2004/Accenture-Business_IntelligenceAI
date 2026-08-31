@@ -1,6 +1,6 @@
 # Track A ⇄ Track B sync
 
-**For:** whoever is building Track A (`NexaBank/` — the data source: banking domain, event
+**For:** whoever is building Track A (`nexabank/` — the data source: banking domain, event
 tracking + taxonomy, the Simulate panel, ground-truth fixtures).
 
 **From:** Track B (`ingestion/`, `pipeline/`, `warehouse/`, `api/` — ingestion, the
@@ -22,7 +22,7 @@ Track B's full plan: [`TRACK_B_PHASED_PLAN.md`](TRACK_B_PHASED_PLAN.md). You onl
 | A1 | Stop coercing unknown event names in `enforceTaxonomy` — send the raw instrumented name | Phase 2/3 | No (defeats a goal if late, doesn't break anything) |
 | A2 | Keep emitting `metadata._simulated` on every forwarded event (already done) | Phase 3 | Yes — silently breaks the fabricated-dimension guard if dropped |
 | A3 | Fix the *source* of fabricated dims: derive geo from the customer's branch, device from the real user-agent (`CLAUDE.md` / `DATA_MODEL.md` P3) | Any time; nice-to-have | No |
-| ~~A4~~ | ~~keyset params on `/api/extract/accounts`~~ — **cancelled**: Track B decided signups is clickstream-sourced (D2), so that endpoint is unused | — | — |
+| A4 | Add keyset params (`since_id` tiebreaker) to `GET /api/extract/accounts` — signups (#1) reads it now that `DATA_MODEL.md` sources every KPI from the snapshot | Phase 3 | No (a page boundary among same-timestamp rows drops the remainder) |
 | A5 | Decide + possibly expose fee schedule + calendar as extract endpoints (Track B default: NexaBank owns them) | Phase 0 decision, Phase 3 build | No |
 | A6 | Make the Simulate console write a ground-truth fixture (`CLAUDE.md` §4) | Phase 7 | No (only `scripts/seed_data.py` scenarios are checkable without it) |
 | A7 | Drop the `bank_b` / `safexbank` tenant everywhere | Phase 6 | No |
@@ -86,26 +86,38 @@ pagination `?since=<iso>&since_id=<id>&limit=<n>` (or `?offset=` for `customers`
 `{ entity, count, watermark, cursor_id, has_more, records: [...] }`.
 
 This contract is **good as-is** — watermarked, keyset-exact, token-guarded. **Frozen.** Track B
-moves to landing every record in `bronze.core_banking` (raw JSON kept) before deriving silver
-facts, but that is invisible to NexaBank.
+lands every record in `bronze.core_banking` (raw JSON kept) before deriving silver facts, invisible
+to NexaBank.
 
-**Entities Track B will consume for the 5-KPI chain:**
+**This interface now carries every KPI number.** `docs/DATA_MODEL.md` was revised (commit
+`d5c8ff1`) so that **all five KPI values come from the daily banking snapshot, not the
+clickstream** — the clickstream is behavioural context only. So the extract API matters *more*,
+not less: its record shapes are the source of truth for every figure the engine reports.
+
+**Entities Track B consumes for the 5-KPI chain:**
 
 | Entity | Feeds | Keep? |
 |---|---|---|
-| `transactions` | revenue, transaction-failure cross-check | **yes** |
-| `loan_applications` | loan approval volume, KYC cross-check | **yes** |
-| `customers` | segment dimensions (risk_segment, age/income bracket) | **yes** |
+| `accounts` | **new account signups (#1)** — `accounts_opened` by `opened_at` | **yes** |
+| `loan_applications` | **kyc completion rate (#2)** (`kyc_step`), **loan approval volume (#3)** (`status`/`decided_at`), **interest revenue (#4)** | **yes** |
+| `transactions` | **transaction failure rate (#5)** (`status`), **fee revenue (#4)** | **yes** |
+| `customers` | measured segment dims (risk_segment, age/income bracket) | **yes** |
 | `campaigns` | abstain scenario (real campaign vs suspected glitch) | **yes** |
-| `branches` | segment dimensions (region, country, city) | **yes** |
-| `accounts` | ~~signups~~ — **not used**: Track B decided signups is clickstream-sourced (D2) | **drop** |
+| `branches` | measured segment dims (region, country, city) | **yes** |
 | `cards` | card activations — **not in the 5-KPI chain** | **drop unless Track C asks** |
 | `campaign_interactions` | CPA — **not in the chain** | **drop unless Track C asks** |
 | `macro_environment` | external rate driver — **not in the chain** | **drop unless Track C asks** |
 
-**A4 — cancelled.** Track B decided signups is a clickstream count (`register.auth.success`), not a
-banking-record count, so `/api/extract/accounts` is not consumed and needs no keyset fix. You may
-delete that handler too.
+Confirm each entity's records carry the fields the rollups read: `accounts.opened_at`,
+`loan_applications.{kyc_step, status, decided_at, principal_amount, interest_rate}`,
+`transactions.{status, channel, txn_type, mcc}`, and the measured dims (region, branch_code,
+risk_segment, loan_type).
+
+**A4 — reinstated.** `GET /api/extract/accounts` currently filters `createdOn > since` with **no
+`since_id` tiebreaker** (unlike `transactions` / `loan_applications`). Since signups reads it (D2),
+it needs the same `keysetWhere("createdOn", since, sinceId)` + `nextCursorId` you already use in
+`extractShared.ts`, or a page boundary that lands among rows sharing a timestamp drops the
+remainder.
 
 **A5 — decision needed:** fee schedule (`dim_fee_schedule`) and calendar (`dim_calendar`) are
 **currently synthesised by Track B** (`api/intelligence/loaders.py::seed_reference_data`). Revenue
@@ -200,9 +212,11 @@ and run the pipeline transforms, which is pipeline-service territory.
   an `ENABLE_DEV_SEED` env flag.
 - Same request/response shape as today (`tenant_id`, `users`, `days`, `seed`, `passes`,
   `purge_first`, `purge_tables`, `behavior`, `create_accounts`).
-- Behaviour is identical downstream: fast mode writes `bronze.events` + `bronze.core_banking`
-  (with `_raw`), then runs the real silver/gold transforms — so a fast-seeded dataset is
+- Behaviour is identical downstream: fast mode writes `bronze.core_banking` (+ a `bronze.events`
+  sample) with `_raw`, then runs the real silver/gold transforms — so a fast-seeded dataset is
   indistinguishable from a slow-seeded one. It only skips Kafka and the remote-Postgres writes.
+  Because KPI numbers now come from the fact tables, the fact path is what matters; a thin
+  clickstream sample for the funnel views is enough.
 
 **What you do:** in `eventRoutes.ts` fast mode, change the target from
 `${base}/events/seed/fast` to the pipeline service's `${PIPELINE_URL}/dev/seed`. Track B provides
@@ -211,13 +225,12 @@ live, so there is no window where fast mode is broken.
 
 ### A11 — extract endpoints that lose their consumer (Phase 3, FYI)
 
-The Round 2 KPI chain is 5 KPIs. Track B will **only** call these extract endpoints:
-`transactions`, `loan_applications`, `customers`, `campaigns`, `branches` (and `accounts` *only if*
-signups turns out to be snapshot-sourced — open question #1).
+The Round 2 KPI chain is 5 KPIs, all snapshot-sourced. Track B will call these extract endpoints:
+`accounts`, `loan_applications`, `transactions`, `customers`, `campaigns`, `branches`.
 
 **Track B will stop calling:** `/api/extract/cards`, `/api/extract/campaign_interactions`,
-`/api/extract/macro_environment` (and possibly `/api/extract/accounts`). They support KPIs the
-brief dropped (card activations, CPA, net-deposit / external-rate driver).
+`/api/extract/macro_environment`. They support KPIs the brief dropped (card activations, CPA,
+net-deposit / external-rate driver). Delete or leave dormant — nothing breaks either way.
 
 You may delete those route handlers from `extractRefRoutes.ts` for your own debloat, or leave them
 dormant — nothing will break either way. Just don't rely on them being exercised. If Track C later
@@ -282,22 +295,28 @@ Flag your intent; not blocking either way.
 
 ## 8. Track B decisions that affect you (already made — for your awareness)
 
-- **Signups = clickstream** (`register.auth.success`). `/api/extract/accounts` is not consumed;
-  A4 cancelled.
-- **Revenue interest line = flat daily accrual** (`principal × rate / 365`) on approved loan
-  applications, computed by Track B from `/api/extract/loan_applications`. **No new extract
-  endpoint, no `fact_loans` table.** If Track C later decides `revenue.yaml` needs a real
-  amortisation schedule, *that* becomes a new ask on you (a loans/accrual extract endpoint) — but
-  not now, and not unless Track C raises it.
+- **Every KPI number comes from the daily banking snapshot** (`docs/DATA_MODEL.md`, commit
+  `d5c8ff1`) — the clickstream is behavioural context only and never produces a figure. So:
+  - **Signups = `/api/extract/accounts`** (`accounts_opened` by `opened_at`), *not* the clickstream
+    `register.auth.success`. A4 is back on.
+  - **KYC completion rate** and **transaction failure rate** also come from the snapshot
+    (`loan_applications.kyc_step`, `transactions.status`), not clickstream funnel events. Both
+    rates are stored as their two counts, never the ratio.
+  - The extract API's record shapes are now the source of truth for every figure — see §3 for the
+    exact fields each entity must carry.
+- **Revenue** = `fee_revenue` (real fee schedule × real amounts) + `interest_accrued`
+  (`principal × rate / 365` on approved apps) + `pro_revenue` (the one line with no measured
+  money — a `simulated:` contract block). **No new extract endpoint, no `fact_loans` table**
+  unless Track C later needs a real amortisation schedule.
 
 ## 8b. Open questions for Track A (answer in Phase 0)
 
 1. **Reference data ownership** (A5) — do you take fee schedule + calendar as extract endpoints
    (Track B's default), or does Track B keep synthesising them?
 2. **`enforceTaxonomy`** (A1) — can you reduce it to a passthrough for Round 2, and by when?
-3. **Ground truth from the console** (A6) — will `/events/simulate` (or a wrapper script) write
+3. **Ground truth from the console** (A6) — will `/events/simulate` / the fact generator write
    `fixtures/planted_truth.json` the way `scripts/seed_data.py` does? `CLAUDE.md` §4 requires every
-   planted scenario to record its own ground truth. Today only the Python seeder does.
+   planted scenario to record its own ground truth.
 4. **Location capture** (A9) — delete, or keep and make it real?
 
 (Fast mode — A10 — is **not** an open question: it stays, the endpoint just moves. See §6.)
@@ -309,7 +328,7 @@ Flag your intent; not blocking either way.
 - [ ] A1 — `enforceTaxonomy` → passthrough / shape-check only
 - [ ] A2 — `metadata._simulated` still emitted on every forwarded event (regression-test it)
 - [ ] A3 — (optional) geo from branch, device from UA; drop those from `_simulated`
-- [ ] ~~A4~~ — cancelled (signups is clickstream-sourced); `/api/extract/accounts` may be deleted
+- [ ] A4 — `since_id` keyset tiebreaker added to `GET /api/extract/accounts` (signups reads it)
 - [ ] A5 — reference-data decision made; `fee_schedule` + `calendar` endpoints added if chosen
 - [ ] A6 — Simulate console writes `planted_truth.json`
 - [ ] A7 — `bank_b` / `safexbank` removed from tenants, aliases, seeds, `plantMovement.ts`
