@@ -1,4 +1,10 @@
-"""Gate D regression suite: determinism diff + the five scenario gates.
+"""ROUND-1 SCRIPT — Track C rebuild pending. Scores the Signal Store against
+`fixtures/planted_truth.json`; its `ClickHouseMetricLayer` / `DB = "feature_intelligence"`
+assumptions are from before the bronze/silver/gold split. Track C repoints this when its stages
+run against the Round-2 KPI set. (Track B's own scenario + determinism verification is in
+`docs/execution/PHASE_7_REPORT.md`.)
+
+Gate D regression suite: determinism diff + the five scenario gates.
 
 Runs INSIDE a container against live ClickHouse (CLAUDE.md, Key commands):
     docker compose exec -T ingestion-api python scripts/run_intelligence_gates.py

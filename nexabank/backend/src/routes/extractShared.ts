@@ -11,8 +11,8 @@ export const DEFAULT_LIMIT = 1000;
 /** The bank's own clearing account; it is not a customer of either tenant. */
 export const EXTERNAL_ACCOUNT = "EXTERNAL-BANK";
 
-const TENANT_TO_ANALYTICS: Record<string, string> = { bank_a: "nexabank", bank_b: "safexbank" };
-const ANALYTICS_TO_TENANT: Record<string, string> = { nexabank: "bank_a", safexbank: "bank_b" };
+const TENANT_TO_ANALYTICS: Record<string, string> = { bank_a: "nexabank" };
+const ANALYTICS_TO_TENANT: Record<string, string> = { nexabank: "bank_a" };
 
 export function analyticsTenant(prismaTenantId: string): string {
   return TENANT_TO_ANALYTICS[prismaTenantId] || prismaTenantId;

@@ -115,7 +115,7 @@ LLM_SEED = _i("INTEL_LLM_SEED", 1337)
 LLM_DISCOVERY_TIMEOUT_S = _i("INTEL_LLM_DISCOVERY_TIMEOUT_S", 5)
 
 # --- service ----------------------------------------------------------------
-TENANTS = _list("INTELLIGENCE_TENANTS", "nexabank,safexbank")
+TENANTS = _list("INTELLIGENCE_TENANTS", "nexabank")
 WINDOW_DAYS = _i("INTELLIGENCE_WINDOW_DAYS", 7)
 BASELINE_DAYS = _i("INTELLIGENCE_BASELINE_DAYS", 28)
 DATASET = _s("INTELLIGENCE_DATASET", "seeded")

@@ -288,7 +288,6 @@ export default function Register3() {
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="bank_a">NexaBank (IFSC: NEXA0001)</SelectItem>
-                  <SelectItem value="bank_b">SafeX Bank (IFSC: SAFX0001)</SelectItem>
                 </SelectContent>
               </Select>
             </div>

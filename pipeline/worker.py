@@ -51,7 +51,7 @@ def _dead_letter(records, error: str) -> bool:
             for r in records
         ]
         ch_client._get_client().insert(
-            "feature_intelligence.events_dead_letter",
+            "bronze.events_dead_letter",
             rows,
             column_names=["event_id", "tenant_id", "event_name", "payload", "error", "stage"],
         )
@@ -107,6 +107,13 @@ def _attach_kafka_metadata(event_data: dict, msg) -> dict:
     event_data["kafka_offset"] = msg.offset()
     event_data["kafka_topic"] = msg.topic()
     event_data["ingest_path"] = "kafka"
+    # `_raw` = the exact body the ingestion API received. Ingestion embeds it in the message;
+    # fall back to the raw message value verbatim if an older producer did not (plan §3.1).
+    if not event_data.get("_raw"):
+        try:
+            event_data["_raw"] = msg.value().decode("utf-8", errors="replace")
+        except Exception:
+            event_data["_raw"] = ""
     return event_data
 
 

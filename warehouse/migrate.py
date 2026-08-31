@@ -1,17 +1,18 @@
-"""P1-2: idempotent migration runner.
+"""Idempotent migration runner for the bronze / silver / gold warehouse.
 
-`warehouse/clickhouse/schema.sql` runs ONLY on an empty ClickHouse volume, and nothing applied
-`warehouse/clickhouse/migrations/*.sql` at all. That gap already destroyed data once: a fresh volume created
-an 8-column events_raw while the running code required 14, every insert failed with
-"Unrecognized column", and the dead-letter fallback failed too because it had the same gap --
-events were lost with no trace.
+The layered DDL under `warehouse/clickhouse/{bronze,silver,gold}/*.sql` is the
+authoritative schema. This runner applies it in LAYER ORDER (bronze → silver →
+gold), records each file in `gold.schema_migrations` by name and content hash,
+and then applies any post-baseline numbered migrations under
+`warehouse/clickhouse/migrations/*.sql`.
+
+Re-running is a no-op. An EDITED file that was already applied is reported, not
+silently re-run (mirror the edit into a new numbered migration instead).
 
 Usage:
-    docker compose exec -T ingestion-api python warehouse/migrate.py          # apply pending
-    docker compose exec -T ingestion-api python warehouse/migrate.py --status # list only
-
-Applied files are recorded in feature_intelligence.schema_migrations by name and content hash,
-so re-running is a no-op and an EDITED migration is reported rather than silently skipped.
+    docker compose run --rm migrate                                   # apply pending
+    docker compose exec -T ingestion-api python warehouse/migrate.py --status
+    docker compose exec -T ingestion-api python warehouse/migrate.py --baseline
 """
 from __future__ import annotations
 
@@ -25,11 +26,13 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from warehouse.client import ch_client  # noqa: E402
 
-DB = "feature_intelligence"
-MIGRATIONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "clickhouse", "migrations")
+CH_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "clickhouse")
+LAYERS = ("bronze", "silver", "gold")
+DATABASES = ("bronze", "silver", "gold")
+LEDGER_DB = "gold"
 
 LEDGER_DDL = f"""
-CREATE TABLE IF NOT EXISTS {DB}.schema_migrations (
+CREATE TABLE IF NOT EXISTS {LEDGER_DB}.schema_migrations (
     name        String,
     checksum    String,
     applied_at  DateTime DEFAULT now(),
@@ -64,26 +67,47 @@ def _statements(sql: str) -> list[str]:
     return out
 
 
-def applied() -> dict[str, str]:
+def _ensure_databases() -> None:
     client = ch_client._get_client()
+    for db in DATABASES:
+        client.command(f"CREATE DATABASE IF NOT EXISTS {db}")
     client.command(LEDGER_DDL)
+
+
+def _migration_files() -> list[tuple[str, str]]:
+    """(relative-name, absolute-path) for every DDL file, in apply order.
+
+    Layer DDL first, bronze → silver → gold, sorted within each layer; then
+    post-baseline numbered migrations under clickhouse/migrations/.
+    """
+    files: list[tuple[str, str]] = []
+    for layer in LAYERS:
+        for path in sorted(glob.glob(os.path.join(CH_DIR, layer, "*.sql"))):
+            files.append((f"{layer}/{os.path.basename(path)}", path))
+    for path in sorted(glob.glob(os.path.join(CH_DIR, "migrations", "*.sql"))):
+        files.append((f"migrations/{os.path.basename(path)}", path))
+    return files
+
+
+def applied() -> dict[str, str]:
+    _ensure_databases()
     rows = ch_client.query(
-        f"SELECT name, checksum FROM {DB}.schema_migrations FINAL WHERE ok = 1")
+        f"SELECT name, checksum FROM {LEDGER_DB}.schema_migrations FINAL WHERE ok = 1")
     return {str(r["name"]): str(r["checksum"]) for r in rows}
 
 
 def pending() -> list[tuple[str, str, str]]:
-    """(name, checksum, sql) for every migration not yet recorded as applied."""
+    """(name, checksum, sql) for every DDL file not yet recorded as applied."""
     done = applied()
     out = []
-    for path in sorted(glob.glob(os.path.join(MIGRATIONS_DIR, "*.sql"))):
-        name = os.path.basename(path)
+    for name, path in _migration_files():
         sql = open(path, encoding="utf-8").read()
         checksum = _checksum(sql)
         if name in done:
             if done[name] != checksum:
                 print(f"  ! {name} was applied then EDITED "
-                      f"(recorded {done[name]}, on disk {checksum}) -- not re-run")
+                      f"(recorded {done[name]}, on disk {checksum}) -- not re-run. "
+                      f"Mirror the change into a new migrations/*.sql instead.")
             continue
         out.append((name, checksum, sql))
     return out
@@ -91,7 +115,7 @@ def pending() -> list[tuple[str, str, str]]:
 
 def record(name: str, checksum: str, ok: bool, error: str = "") -> None:
     ch_client._get_client().insert(
-        f"{DB}.schema_migrations",
+        f"{LEDGER_DB}.schema_migrations",
         [[name, checksum, datetime.now(timezone.utc).replace(tzinfo=None), int(ok), error[:500]]],
         column_names=["name", "checksum", "applied_at", "ok", "error"],
     )
@@ -115,7 +139,6 @@ def apply_all(dry_run: bool = False) -> int:
             record(name, checksum, True)
             print("ok")
         except Exception as exc:
-            # Recorded as failed, not silently skipped -- the whole point of the ledger.
             record(name, checksum, False, str(exc))
             print(f"FAILED: {exc}")
             failures += 1
@@ -123,12 +146,11 @@ def apply_all(dry_run: bool = False) -> int:
 
 
 def baseline() -> int:
-    """Record every migration as applied WITHOUT running it.
+    """Record every pending file as applied WITHOUT running it.
 
-    For a database already in the target state -- which this one is, because migrations were
-    hand-applied before the ledger existed. Running them again fails on TABLE_ALREADY_EXISTS,
-    and those failures say nothing about whether the schema is correct. Verify the schema
-    first (`DESCRIBE` the tables), then baseline, then use apply for everything after.
+    For a database already in the target state (schema hand-applied before the
+    ledger existed). Verify the schema first (`DESCRIBE` the tables), then
+    baseline, then use apply for everything after.
     """
     todo = pending()
     for name, checksum, _ in todo:
@@ -138,29 +160,29 @@ def baseline() -> int:
 
 
 def _looks_migrated() -> bool:
-    """True if the schema is already past the initial state but the ledger is empty."""
+    """True if the layered schema already exists but the ledger is empty."""
     rows = ch_client.query(
-        "SELECT count() AS n FROM system.columns "
-        f"WHERE database = '{DB}' AND table = 'events_raw' AND name = '_inserted_at'")
+        "SELECT count() AS n FROM system.tables "
+        "WHERE database = 'bronze' AND name = 'events'")
     return bool(rows and int(rows[0]["n"]))
 
 
 if __name__ == "__main__":
-    print(f"migrations dir: {MIGRATIONS_DIR}")
+    print(f"clickhouse DDL dir: {CH_DIR}")
     done = applied()
     print(f"already applied: {len(done)}")
 
-    # Applying historic migrations to a database that is ALREADY in the target state is
-    # destructive, not merely noisy: a repoint migration drops the live materialized view and
-    # then fails to recreate it, leaving the rollup silently unfed. Baseline first.
+    # Applying DDL to a database already in the target state is destructive when
+    # a file is a repoint/rename dance, not merely noisy. Baseline first.
     if not done and _looks_migrated() and "--baseline" not in sys.argv and "--status" not in sys.argv:
-        print("\nREFUSING TO APPLY: the schema is already migrated but the ledger is empty.")
+        print("\nREFUSING TO APPLY: the bronze/silver/gold schema already exists "
+              "but the ledger is empty.")
         print("Verify the schema, then run:  python warehouse/migrate.py --baseline")
         sys.exit(2)
 
     if "--baseline" in sys.argv:
         n = baseline()
-        print(f"baselined {n} migration(s)")
+        print(f"baselined {n} file(s)")
         sys.exit(0)
 
     rc = apply_all(dry_run="--status" in sys.argv)

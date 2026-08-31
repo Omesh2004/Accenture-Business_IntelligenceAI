@@ -2,6 +2,16 @@
 
 How the pieces fit, how data flows, and the traps that have cost real time.
 
+> **Track B rebuild status (2026-09-01).** This document is the target design. Track B's rebuild
+> (`ingestion/` `pipeline/` `warehouse/` `api/`) has now landed Phases 0–7 of
+> [`docs/audit/TRACK_B_PHASED_PLAN.md`](audit/TRACK_B_PHASED_PLAN.md); what actually shipped and
+> where it deviated is recorded per-phase in [`docs/execution/`](execution/). Notable deltas from
+> the prose below: ingestion validates *shape only* and Silver **rejects** an unresolvable name
+> (it no longer coerces); the Metric API (`api/metric_api/`) + dashboard API (`api/dashboard_api/`)
+> replace the old `api/main.py`; one tenant (`nexabank`); `fact_cards` / `fact_campaign_interactions`
+> / `dim_macro_environment` are not built. Track C (`api/intelligence/`) and Track D (`dashboard/`)
+> are mid-rebuild against this.
+
 ## The shape of it
 
 ```

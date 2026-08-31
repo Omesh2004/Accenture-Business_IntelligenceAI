@@ -61,8 +61,7 @@ const normalizeToggleKey = (rawKey: string): string =>
 export default function AdminFeatureToggles() {
   const [activeTab, setActiveTab] = useState("bank_a")
   const [toggles, setToggles] = useState<Record<string, Record<string, boolean>>>({
-    bank_a: {},
-    bank_b: {}
+    bank_a: {}
   })
   const [dynamicToggles, setDynamicToggles] = useState<Toggle[]>([])
   const [loading, setLoading] = useState(true)
@@ -84,13 +83,8 @@ export default function AdminFeatureToggles() {
   const fetchAllToggles = async () => {
     setLoading(true)
     try {
-      const [resA, resB] = await Promise.all([
-        axios.get(`${API_BASE_URL}/events/toggles/bank_a`),
-        axios.get(`${API_BASE_URL}/events/toggles/bank_b`)
-      ])
-      
+      const resA = await axios.get(`${API_BASE_URL}/events/toggles/bank_a`)
       const rawAData = resA.data || {};
-      const rawBData = resB.data || {};
 
       const normalizeMap = (source: Record<string, boolean>) => {
         const out: Record<string, boolean> = {};
@@ -103,15 +97,10 @@ export default function AdminFeatureToggles() {
       };
 
       const aData = normalizeMap(rawAData);
-      const bData = normalizeMap(rawBData);
-
-      setToggles({
-        bank_a: aData,
-        bank_b: bData
-      })
+      setToggles({ bank_a: aData })
 
       // Build dynamic toggle cards from backend keys (single source of truth).
-      const backendKeys = new Set([...Object.keys(aData), ...Object.keys(bData)]);
+      const backendKeys = new Set(Object.keys(aData));
       const combined: Toggle[] = [];
       
       backendKeys.forEach(key => {
@@ -146,7 +135,7 @@ export default function AdminFeatureToggles() {
           [key]: enabled
         }
       }))
-      toast.success(`Feature updated for ${tenantId === 'bank_a' ? 'NexaBank' : 'SafeX Bank'}`)
+      toast.success(`Feature updated for NexaBank`)
     } catch (err) {
       console.error("Update failed:", err)
       toast.error("Failed to update feature")
@@ -171,13 +160,10 @@ export default function AdminFeatureToggles() {
               <TabsTrigger value="bank_a" className="rounded-xl px-8 py-3 font-bold data-[state=active]:bg-white data-[state=active]:shadow-sm">
                  NexaBank
               </TabsTrigger>
-              <TabsTrigger value="bank_b" className="rounded-xl px-8 py-3 font-bold data-[state=active]:bg-white data-[state=active]:shadow-sm">
-                 SafeX Bank
-              </TabsTrigger>
             </TabsList>
           </div>
 
-          {[ 'bank_a', 'bank_b' ].map((tenant) => (
+          {[ 'bank_a' ].map((tenant) => (
             <TabsContent key={tenant} value={tenant} className="mt-0">
                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                   {dynamicToggles.map((item) => {

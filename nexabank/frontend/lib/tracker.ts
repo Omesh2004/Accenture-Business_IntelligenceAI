@@ -32,11 +32,9 @@ async function hashUserIdHex(userId: string): Promise<string> {
     .join('');
 }
 
-function toAnalyticsTenantId(tenantId?: string): string {
-  const normalized = String(tenantId || '').trim().toLowerCase();
-  if (normalized === 'bank_a' || normalized === 'nexabank') return 'nexabank';
-  if (normalized === 'bank_b' || normalized === 'safexbank') return 'safexbank';
-  return normalized || 'nexabank';
+function toAnalyticsTenantId(_tenantId?: string): string {
+  // Round 2 is one bank.
+  return 'nexabank';
 }
 
 class NexaBankTracker {

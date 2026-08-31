@@ -42,10 +42,6 @@ const BRANCHES = [
   { code: "SA-003", name: "Sao Paulo Faria Lima", region: "South America", country: "Brazil", city: "São Paulo", head: 29, tenantId: "bank_a" },
   { code: "AF-011", name: "Lagos Victoria Island", region: "Africa", country: "Nigeria", city: "Lagos", head: 17, tenantId: "bank_a" },
   { code: "OC-002", name: "Sydney CBD", region: "Oceania", country: "Australia", city: "Sydney", head: 19, tenantId: "bank_a" },
-  { code: "SB-101", name: "SafeX Singapore", region: "Asia", country: "Singapore", city: "Singapore", head: 14, tenantId: "bank_b" },
-  { code: "SB-205", name: "SafeX London", region: "Europe", country: "United Kingdom", city: "London", head: 12, tenantId: "bank_b" },
-  { code: "SB-309", name: "SafeX New York", region: "North America", country: "USA", city: "New York", head: 11, tenantId: "bank_b" },
-  { code: "SB-402", name: "SafeX Sao Paulo", region: "South America", country: "Brazil", city: "São Paulo", head: 10, tenantId: "bank_b" },
 ];
 
 const MANAGERS = ["A. Whitfield", "R. Okonkwo", "M. Delgado", "S. Nakamura", "P. Lindqvist",
@@ -102,8 +98,6 @@ function unemployment(region: string, index: number): number {
  * The three Northeast branches map to Europe deliberately: that cohort is the planted deposit
  * outflow, and Europe is where the competitor-rate step now lives. Breaking that pairing would
  * leave the multi-source scenario with an internal segment and no external driver.
- *
- * bank_b needs no entry -- its four codes (SB-*) are reused, so the upsert rewrites them in place.
  */
 const LEGACY_BRANCH_MAP: Record<string, string> = {
   "NE-014": "EU-007", "NE-021": "EU-012", "NE-033": "EU-024",
@@ -183,10 +177,6 @@ async function main() {
       from: -40, to: -2, spend: 27000, tenantId: "bank_a" },
     { name: "Branch Loyalty Outreach", channel: "BRANCH" as const, segment: "MEDIUM",
       from: -30, to: 7, spend: 12000, tenantId: "bank_a" },
-    { name: "SafeX Savings Switch", channel: "EMAIL" as const, segment: "ALL",
-      from: -45, to: -3, spend: 31000, tenantId: "bank_b" },
-    { name: "SafeX Student Onboarding", channel: "APP_PUSH" as const, segment: "STUDENT",
-      from: -14, to: 10, spend: 9800, tenantId: "bank_b" },
   ];
   for (const c of CAMPAIGNS) {
     const existing = await prisma.campaign.findFirst({

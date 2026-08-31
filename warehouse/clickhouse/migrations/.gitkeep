@@ -1,0 +1,4 @@
+# Post-baseline numbered migrations go here, starting 0002_*.sql.
+# The baseline is the layered DDL in ../bronze/ ../silver/ ../gold/, applied in
+# that order by warehouse/migrate.py. A post-baseline change is BOTH a numbered
+# file here AND the same edit mirrored into the layer file it changes.

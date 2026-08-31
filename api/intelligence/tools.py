@@ -209,7 +209,7 @@ def _get_insight(tenant_id: str, persona: str, kpi_id: str = "", **_) -> ToolRes
         claims = list(_band_claims(row.get("evidence") or [], row["kpi_id"]))
         reading = _current_reading(tenant_id, row["kpi_id"])
         if reading is not None:
-            claims.append(_claim("observed", reading, "count", "events_raw", "latest reading"))
+            claims.append(_claim("observed", reading, "count", "gold.kpi_daily", "latest reading"))
         # A verdict of "inside its range" beside a band the reading is plainly outside is the
         # finding disagreeing with itself, and it happens whenever the stored insight predates the
         # data now being read. Drop the band and say the finding is behind, rather than printing a
@@ -648,7 +648,7 @@ def _rank_movements(tenant_id: str, persona: str, scope: str = "", **_) -> ToolR
         facts["quiet_%d" % j] = pretty_name(kpi_id)
         level = _current_reading(tenant_id, kpi_id)
         if level is not None:
-            claims.append(_claim("quiet_level_%d" % j, level, "count", "events_raw",
+            claims.append(_claim("quiet_level_%d" % j, level, "count", "gold.kpi_daily",
                                  "%s latest reading" % kpi_id))
     if wanted:
         facts["scope"] = ", ".join(pretty_name(k) for k in wanted)
