@@ -2,7 +2,7 @@
 
 WHY THIS EXISTS
 ---------------
-The normal generator (`NexaBank/.../eventRoutes.ts`) writes every row to Postgres first, and
+The normal generator (`nexabank/.../eventRoutes.ts`) writes every row to Postgres first, and
 Postgres is remote: ~350ms per round trip against everything else in this stack being a local
 container. Even after batching and concurrency a large run is minutes, because the work is
 fundamentally "wait on a network". Measured here instead: ~21,000 rows/sec.

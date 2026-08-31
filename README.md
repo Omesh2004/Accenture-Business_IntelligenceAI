@@ -36,7 +36,7 @@ docker compose up -d
 
 | Service | Port | What it is |
 |---|---|---|
-| `analytics-dashboard` | 3001 | FinInsights dashboard (Next.js) |
+| `dashboard` | 3001 | FinInsights dashboard (Next.js) |
 | `nexabank-frontend` | 3002 | NexaBank retail banking app (Next.js) |
 | `nexabank-backend` | 5000 | NexaBank API + Simulate engine (Express/Prisma/Postgres) |
 | `ingestion-api` | 8000 | Event intake, masking, deterministic event ids (FastAPI) |
@@ -58,7 +58,7 @@ change:
 docker compose up -d --build analytics-api
 ```
 
-The Node services (`nexabank-backend`, `nexabank-frontend`, `analytics-dashboard`) do bind-mount
+The Node services (`nexabank-backend`, `nexabank-frontend`, `dashboard`) do bind-mount
 `src`, but neither watcher reliably sees a write through a Windows bind mount. Restart before
 judging a change:
 
@@ -74,7 +74,7 @@ docker compose exec clickhouse clickhouse-client --password clickhouse \
   --database feature_intelligence --query "SELECT count() FROM events_raw"
 
 # Type-check a TypeScript project without touching host node_modules
-docker compose exec analytics-dashboard npx tsc --noEmit
+docker compose exec dashboard npx tsc --noEmit
 
 # Run the Python suite. A SKIP is a failure until you have read its reason.
 docker compose --profile test run --rm tests

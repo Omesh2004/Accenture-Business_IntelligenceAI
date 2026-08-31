@@ -166,7 +166,7 @@ services:
     # Opt-in: needs an NVIDIA GPU. `docker compose --profile gpu up vllm-server`
     profiles: ["gpu"]
     image: vllm/vllm-openai:latest
-    container_name: nucleus-vllm
+    container_name: fininsights-vllm
     ports:
       - "8002:8000"
     volumes:
@@ -204,11 +204,11 @@ services:
   # ANALYTICS DASHBOARD — port 3001
   # ═══════════════════════════════════════════════════════════
 
-  analytics-dashboard:
+  dashboard:
     build:
-      context: ./analytics-dashboard
+      context: ./dashboard
       dockerfile: Dockerfile
-    container_name: nucleus-analytics-dashboard
+    container_name: fininsights-dashboard
     ports:
       - "3001:3001"
     environment:
@@ -219,13 +219,13 @@ services:
       - NEXT_PUBLIC_ANALYTICS_WS_URL=ws://analytics-api:8001
       - NEXT_MODE=${NEXT_MODE:-development}
     env_file:
-      - ./analytics-dashboard/.env.local
+      - ./dashboard/.env.local
     volumes:
       # Mount central RBAC config
       - ./rbac.json:/rbac.json:ro
       # Hot-reload: mount source directories
-      - ./analytics-dashboard/src:/app/src
-      - ./analytics-dashboard/public:/app/public
+      - ./dashboard/src:/app/src
+      - ./dashboard/public:/app/public
     depends_on:
       - analytics-api
       - ingestion-api
@@ -237,13 +237,13 @@ services:
 
   nexabank-backend:
     build:
-      context: ./NexaBank/backend
+      context: ./nexabank/backend
       dockerfile: Dockerfile
     container_name: nexabank-backend
     ports:
       - "5000:5000"
     env_file:
-      - ./NexaBank/backend/.env
+      - ./nexabank/backend/.env
     environment:
       - NODE_ENV=development
       - PORT=5000
@@ -253,13 +253,13 @@ services:
       - EXTRACT_API_TOKEN=${EXTRACT_API_TOKEN:-local-dev-extract-token}
     volumes:
       # Hot-reload: mount source code (but NOT node_modules)
-      - ./NexaBank/backend/src:/app/src
-      - ./NexaBank/backend/prisma:/app/prisma
+      - ./nexabank/backend/src:/app/src
+      - ./nexabank/backend/prisma:/app/prisma
     restart: unless-stopped
 
   nexabank-frontend:
     build:
-      context: ./NexaBank/frontend
+      context: ./nexabank/frontend
       dockerfile: Dockerfile
     container_name: nexabank-frontend
     ports:
@@ -269,12 +269,12 @@ services:
       - NEXT_PUBLIC_API_URL=http://localhost:5000/api
     volumes:
       # Hot-reload: mount source directories
-      - ./NexaBank/frontend/app:/app/app
-      - ./NexaBank/frontend/components:/app/components
-      - ./NexaBank/frontend/hooks:/app/hooks
-      - ./NexaBank/frontend/lib:/app/lib
-      - ./NexaBank/frontend/types:/app/types
-      - ./NexaBank/frontend/public:/app/public
+      - ./nexabank/frontend/app:/app/app
+      - ./nexabank/frontend/components:/app/components
+      - ./nexabank/frontend/hooks:/app/hooks
+      - ./nexabank/frontend/lib:/app/lib
+      - ./nexabank/frontend/types:/app/types
+      - ./nexabank/frontend/public:/app/public
     depends_on:
       - nexabank-backend
       - ingestion-api
@@ -312,10 +312,10 @@ services:
       - ./rbac.json:/app/rbac.json:ro
       # Writable: seed_data.py writes planted_truth.json here and the gates read it back.
       - ./fixtures:/app/fixtures
-      # .dockerignore excludes NexaBank/ from this build context, so a mount is the only way
+      # .dockerignore excludes nexabank/ from this build context, so a mount is the only way
       # the taxonomy probe sees the real Node dialect.
-      - ./NexaBank/backend/src:/app/NexaBank/backend/src:ro
-      - ./NexaBank/frontend/lib:/app/NexaBank/frontend/lib:ro
+      - ./nexabank/backend/src:/app/nexabank/backend/src:ro
+      - ./nexabank/frontend/lib:/app/nexabank/frontend/lib:ro
     command: python scripts/verify_data_quality.py
 
 # ═══════════════════════════════════════════════════════════

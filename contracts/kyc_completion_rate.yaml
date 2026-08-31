@@ -16,7 +16,7 @@ grain:
 readiness:
   status: ready
   seeded_path: ready          # scripts/seed_data.py -- the path the Phase 1 demo runs on
-  live_path: ready            # NexaBank/backend/src/middleware/eventTracker.ts
+  live_path: ready            # nexabank/backend/src/middleware/eventTracker.ts
   blockers:
     - id: no-event-id
       status: resolved
@@ -39,7 +39,7 @@ readiness:
         trackEvent -> forwardToIngestionAPI -> FeatureEvent -> events_raw.session_id."
       correction: >
         This was marked resolved before it worked. The x-session-id interceptor was registered
-        only on the `apiClient` axios instance in NexaBank/frontend/lib/api.ts, and NOTHING
+        only on the `apiClient` axios instance in nexabank/frontend/lib/api.ts, and NOTHING
         imported apiClient -- all 56 call sites used the bare axios default. The header never
         left the browser, so getSessionId() fell through to `server-<uuid>` on every event.
         Measured on live data: 41 events across 41 sessions, 1.00 events per session.

@@ -19,11 +19,11 @@ docker-compose.yml
 **/Dockerfile
 **/.dockerignore
 
-# NexaBank (built separately)
-NexaBank/
+# nexabank (built separately)
+nexabank/
 
 # Analytics dashboard (built separately)
-analytics-dashboard/
+dashboard/
 
 # Misc
 build_log.txt
