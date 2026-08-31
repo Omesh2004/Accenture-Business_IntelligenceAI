@@ -10,6 +10,105 @@ to something the brief asks for. If a task does not map to the brief, we do not 
 
 ---
 
+## How to work on this repo
+
+Read this section first. It says where every document is, the rules for changing the repo, and the
+commands you will actually use. The product invariants — the golden rule, abstain-on-thin-evidence,
+plant-anomalies-first — are section 14; this section is about the work itself.
+
+### Where the documentation is
+
+Markdown lives only in `docs/`. `CLAUDE.md` and `README.md` are the only root markdown files.
+
+| Location | What it holds |
+|---|---|
+| `CLAUDE.md` (this file) | The brief, the rules, the KPIs and personas, the tech, the folder structure, the four-track split. Governs everything. |
+| `docs/SOLUTION.md` | What the product does and why, in plain English. |
+| `docs/ARCHITECTURE.md` | How the pieces fit, how data flows, and the traps that have cost real time. |
+| `docs/DATA_MODEL.md` | Bronze / Silver / Gold — what lives in each layer and who may read it; the Signal Store. |
+| `docs/INTELLIGENCE.md` | The agent, its six tools, the narrator, the verifier, entitlement. |
+| `contracts/*.yaml` | One KPI / semantic contract per KPI, plus `levers.yaml`. The narrator uses these definitions and nothing else. |
+| `docs/audit/` | The Track B rebuild: `TRACK_B_CURRENT_VS_PROPOSED.md` (audit), `TRACK_B_PHASED_PLAN.md` (the 8-phase plan + decisions D1–D8), `TRACK_A_B_SYNC.md` (the A⇄B interface contract). Committed and shared. |
+| `docs/execution/` | Personal working checklists. **Gitignored** — never rely on a teammate having one, or on it being current. The shared truth is `docs/audit/`. |
+| `README.md` | How to run the stack and the service/port map. |
+
+**Read before you start, by track (section 13):**
+
+| Working on | Read |
+|---|---|
+| `nexabank/` (Track A) | sections 4–6, 13 · `ARCHITECTURE.md` · `docs/audit/TRACK_A_B_SYNC.md` |
+| `ingestion/` `pipeline/` `warehouse/` `api/` Metric API (Track B) | sections 6, 11–12 · `DATA_MODEL.md` · `ARCHITECTURE.md` · all of `docs/audit/` |
+| `api/intelligence/` `contracts/` (Track C) | sections 2, 8–10, 14 · `INTELLIGENCE.md` · `DATA_MODEL.md` "Signal Store" |
+| `dashboard/` (Track D) | sections 7–8 · `INTELLIGENCE.md` "Personas and entitlement" |
+
+### Rules for changing the repo
+
+1. **Scope is the brief.** Every change maps to a row in section 3. No extra KPIs, no fourth
+   persona, no third data source, no bandits, no fine-tuning. When unsure, cut rather than add.
+2. **Stay in your track's folders** (section 13). A change that crosses a track boundary goes
+   through an interface document or `docs/audit/TRACK_A_B_SYNC.md` first — never a surprise edit in
+   another track's directory.
+3. **Branch off `develop`.** Never commit to `main` directly; open a PR into `main`. Commit or
+   push only when explicitly asked.
+4. **Docker only.** No host `.venv`, no host `node`, no `npm run` — those environments drift from
+   the images with no warning. Every command below goes through `docker compose`.
+5. **Edits are not live.** Rebuild the Python services after a change (`--build`); restart the
+   Node services. `tsc --noEmit` passing proves the bind mount is current and proves nothing about
+   the running process.
+6. **A pytest `SKIP` is a failure** until you have read its reason. A guard that skipped is not a
+   guard that passed.
+7. **Verify a metric by running the function, not by reading the code.** Most failures here are
+   silent renames, not exceptions.
+8. **Never commit a secret.** Rotate any credential that appears in a diff. Config is read from
+   the environment, never from source.
+9. **Keep the docs honest.** If you change how a piece works, update the core document that
+   describes it in the same change. Stale documentation is worse than none.
+
+### Key commands
+
+All through `docker compose`.
+
+```bash
+# Bring the stack up (the narrator model is opt-in: add --profile gpu)
+docker compose up -d
+
+# Rebuild a Python service after an edit  (ingestion-api | analytics-api | processor-worker)
+docker compose up -d --build analytics-api
+
+# Restart a Node service after an edit  (nexabank-backend | nexabank-frontend | analytics-dashboard)
+docker compose restart nexabank-backend
+
+# Warehouse migrations
+docker compose exec -T ingestion-api python warehouse/migrate.py            # apply pending
+docker compose exec -T ingestion-api python warehouse/migrate.py --status   # list only
+
+# Query the warehouse
+docker compose exec clickhouse clickhouse-client --password clickhouse --query "SELECT 1"
+
+# Seed mock data — slow mode: real Kafka -> pipeline path, writes fixtures/planted_truth.json
+docker compose --profile tools run --rm tools python scripts/seed_data.py --scenario all
+
+# Scenario / intelligence gate checks against the planted ground truth
+docker compose --profile tools run --rm tools python scripts/run_intelligence_gates.py
+
+# Data-quality and taxonomy checks
+docker compose --profile tools run --rm tools python scripts/verify_data_quality.py
+
+# Tests  (a SKIP is a failure until you have read its reason)
+docker compose --profile test run --rm tests
+
+# Type-check a TypeScript project without touching host node_modules
+docker compose exec analytics-dashboard npx tsc --noEmit
+
+# Is Kafka carrying events, or is ingestion silently on the ClickHouse fallback?
+curl -s localhost:8000/health          # ingest_path: kafka | clickhouse_fallback
+```
+
+The warehouse is mid-migration from a single `feature_intelligence` database to `bronze` /
+`silver` / `gold` (see `docs/audit/`). Commands that name a database or table change with it.
+
+---
+
 ## 1. What we are building, in one paragraph
 
 A KPI intelligence-to-action engine for a bank. It watches banking activity, notices when an
