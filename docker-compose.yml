@@ -56,7 +56,7 @@ services:
       - "8123:8123"
       - "9000:9000"
     volumes:
-      - ./storage/schema.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./warehouse/clickhouse/schema.sql:/docker-entrypoint-initdb.d/init.sql
       - clickhouse_data:/var/lib/clickhouse
       - clickhouse_logs:/var/log/clickhouse-server
     environment:
@@ -113,7 +113,7 @@ services:
       - CLICKHOUSE_HOST=clickhouse
       - CLICKHOUSE_USER=default
       - CLICKHOUSE_PASSWORD=clickhouse
-    command: python processing/worker.py
+    command: python pipeline/worker.py
     restart: unless-stopped
 
   intelligence:
@@ -225,10 +225,7 @@ services:
       - ./rbac.json:/rbac.json:ro
       # Hot-reload: mount source directories
       - ./analytics-dashboard/src:/app/src
-      - ./analytics-dashboard/lib:/app/lib
-      - ./analytics-dashboard/components:/app/components
       - ./analytics-dashboard/public:/app/public
-      - ./analytics-dashboard/types:/app/types
     depends_on:
       - analytics-api
       - ingestion-api
@@ -276,7 +273,6 @@ services:
       - ./NexaBank/frontend/components:/app/components
       - ./NexaBank/frontend/hooks:/app/hooks
       - ./NexaBank/frontend/lib:/app/lib
-      - ./NexaBank/frontend/src:/app/src
       - ./NexaBank/frontend/types:/app/types
       - ./NexaBank/frontend/public:/app/public
     depends_on:
@@ -284,17 +280,10 @@ services:
       - ingestion-api
     restart: unless-stopped
 
-# ═══════════════════════════════════════════════════════════
-# PERSISTENT VOLUMES — survive `docker compose down`
-# Only removed with `docker compose down -v`
-# ═══════════════════════════════════════════════════════════
-  # ═══════════════════════════════════════════════════════════
-  # Test runner — dev deps stay out of every runtime image.
-  #   docker compose --profile test run --rm tests
-  # ═══════════════════════════════════════════════════════════
-
-  tests:
-    profiles: ["test"]
+  # Operator tooling: seeding, gates, data-quality checks. Dev deps and node live only here.
+  #   docker compose --profile tools run --rm tools python scripts/seed_data.py
+  tools:
+    profiles: ["tools"]
     build:
       context: .
       dockerfile: Dockerfile
@@ -308,61 +297,31 @@ services:
       - CLICKHOUSE_HOST=clickhouse
       - CLICKHOUSE_USER=default
       - CLICKHOUSE_PASSWORD=clickhouse
-      # Service names, not localhost: inside a container localhost is the container itself, and
-      # scripts/seed_data.py would post every scenario event into the void and report success.
+      # Service names, not localhost -- inside a container localhost is the container itself.
       - INGEST_URL=http://ingestion-api:8000/events
       - ANALYTICS_URL=http://analytics-api:8001/metrics/realtime_users
       - EXTRACT_API_URL=http://nexabank-backend:5000/api
       - EXTRACT_API_TOKEN=${EXTRACT_API_TOKEN:-local-dev-extract-token}
+      - CLICKHOUSE_URL=http://clickhouse:8123
     volumes:
-      # Mounted, not baked: a gate that lints reader.py must see the working copy.
-      - ./tests:/app/tests:ro
+      # Mounted, not baked, so a script always reads the working copy.
       - ./scripts:/app/scripts:ro
       - ./api:/app/api:ro
       - ./contracts:/app/contracts:ro
-      # Entitlement config the persona tests assert on. Baked, a stale copy passes the gate.
+      - ./warehouse:/app/warehouse:ro
       - ./rbac.json:/app/rbac.json:ro
-      # NOT read-only, and not baked: seed_data.py WRITES planted_truth.json here and the gates
-      # read it back. Baked into the image, the seed wrote to a container that was then discarded
-      # and every gate scored the previous run's fixture.
+      # Writable: seed_data.py writes planted_truth.json here and the gates read it back.
       - ./fixtures:/app/fixtures
-      # Source-only, for the static cross-checks that compare dashboard route policy against the
-      # sidebar. Without it those tests SKIP, which reads as green and guards nothing.
-      - ./analytics-dashboard/src:/app/analytics-dashboard/src:ro
-      # schema.sql is compared against the live database; baked into the image the test
-      # reads a stale copy and reports drift that was already fixed.
-      - ./storage:/app/storage:ro
-      # NexaBank source for the producer-side guards. .dockerignore excludes NexaBank/ from this
-      # image's build CONTEXT, so it can never be baked in -- a bind mount is the only way these
-      # tests see it. Just the two subtrees they read, not the whole tree with its node_modules.
+      # .dockerignore excludes NexaBank/ from this build context, so a mount is the only way
+      # the taxonomy probe sees the real Node dialect.
       - ./NexaBank/backend/src:/app/NexaBank/backend/src:ro
       - ./NexaBank/frontend/lib:/app/NexaBank/frontend/lib:ro
-    command: python -m pytest tests/ -q
+    command: python scripts/verify_data_quality.py
 
-  # ═══════════════════════════════════════════════════════════
-  # Playwright end-to-end tests. Official image so the browsers are
-  # already present -- installing Chromium into the app images would
-  # bloat every runtime container for a dev-only tool.
-  #   docker compose --profile test run --rm e2e
-  # ═══════════════════════════════════════════════════════════
-
-  e2e:
-    profiles: ["test"]
-    image: mcr.microsoft.com/playwright:v1.49.1-noble
-    working_dir: /e2e
-    environment:
-      - DASHBOARD_URL=http://analytics-dashboard:3001
-      - NEXABANK_URL=http://nexabank-frontend:3002
-      - NEXTAUTH_SECRET=nucleus-analytics-secret-key-2026
-      - CI=${CI:-}
-    volumes:
-      - ./e2e:/e2e
-      # rbac.json decides which role an email resolves to; the specs assert against it.
-      - ./rbac.json:/rbac.json:ro
-    # npm ci on first run; the node_modules volume keeps it out of the repo.
-    command: sh -c "npm install --no-audit --no-fund && npx playwright test"
-
-
+# ═══════════════════════════════════════════════════════════
+# PERSISTENT VOLUMES — survive `docker compose down`
+# Only removed with `docker compose down -v`
+# ═══════════════════════════════════════════════════════════
 volumes:
   clickhouse_data:
     driver: local

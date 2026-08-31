@@ -2,7 +2,7 @@
 The ingest dialect of the event taxonomy, with no third-party imports.
 
 This is the single implementation of what `POST /events` does to an event name.
-`core/models.py` delegates its `FeatureEvent.validate_event_name` validator here so
+`ingestion/envelope.py` delegates its `FeatureEvent.validate_event_name` validator here so
 there is exactly one copy of the rules; nothing reimplements them.
 
 It lives apart from `models.py` so tooling can exercise the dialect without importing

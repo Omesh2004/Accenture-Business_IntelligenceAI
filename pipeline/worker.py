@@ -9,8 +9,8 @@ import time
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.config import settings
-from storage.client import ch_client
+from warehouse.config import settings
+from warehouse.client import ch_client
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)

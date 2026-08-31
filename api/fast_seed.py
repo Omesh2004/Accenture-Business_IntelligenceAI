@@ -38,7 +38,7 @@ import uuid
 from datetime import datetime, timedelta
 from decimal import Decimal
 
-from storage.client import ch_client
+from warehouse.client import ch_client
 from api.intelligence.loaders import (OPENING_COLUMNS, CARD_COLUMNS, CUSTOMER_COLUMNS,
                                       INTERACTION_COLUMNS, TXN_COLUMNS, APP_COLUMNS,
                                       record_freshness)

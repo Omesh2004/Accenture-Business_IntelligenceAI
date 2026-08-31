@@ -38,7 +38,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import requests  # noqa: E402
 
 from api.page_map import canonicalize_event_name  # noqa: E402
-from core.event_names import normalize_ingest_event_name  # noqa: E402
+from ingestion.event_names import normalize_ingest_event_name  # noqa: E402
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TENANT = os.environ.get("VERIFY_TENANT", "nexabank")

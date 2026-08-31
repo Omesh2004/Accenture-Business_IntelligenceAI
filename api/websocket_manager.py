@@ -6,7 +6,7 @@ from typing import Dict, Set
 from fastapi import WebSocket
 from aiokafka import AIOKafkaConsumer
 
-from core.config import settings
+from warehouse.config import settings
 
 logger = logging.getLogger(__name__)
 

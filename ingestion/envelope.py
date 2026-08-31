@@ -2,12 +2,12 @@ from typing import Optional, Dict, Any, List
 from enum import Enum
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-# The taxonomy rules live in core/event_names.py so they can be exercised without importing
+# The taxonomy rules live in ingestion/event_names.py so they can be exercised without importing
 # pydantic -- scripts/verify_data_quality.py runs on the host, which has none installed, and a
 # checker that cannot import the real function ends up reimplementing it. That is precisely
 # how the three dialects drifted apart (CLAUDE.md coupling point 2).
 # Re-exported here because existing code imports these names from this module.
-from core.event_names import (  # noqa: F401
+from ingestion.event_names import (  # noqa: F401
     LEGACY_REGEX,
     TAXONOMY_REGEX,
     normalize_ingest_event_name,
@@ -112,7 +112,7 @@ class FeatureEvent(BaseModel):
     @field_validator('event_name')
     @classmethod
     def validate_event_name(cls, v: str) -> str:
-        # Coerces rather than rejects -- see core/event_names.py. An unrecognised name is
+        # Coerces rather than rejects -- see ingestion/event_names.py. An unrecognised name is
         # wrapped as core.<name>.action, so the failure mode here is a silent rename.
         return normalize_ingest_event_name(v)
 
@@ -138,20 +138,3 @@ class FeatureEvent(BaseModel):
             }
         },
     )
-
-# ─────────────── License & Toggle Models ───────────────
-
-class LicenseEntry(BaseModel):
-    feature_name: str
-    is_licensed: bool = True
-    plan_tier: str = "pro"
-
-class LicenseSyncRequest(BaseModel):
-    tenant_id: str
-    features: List[LicenseEntry]
-
-class TrackingToggleRequest(BaseModel):
-    tenant_id: str
-    feature_name: str
-    is_enabled: bool
-    actor_email: str

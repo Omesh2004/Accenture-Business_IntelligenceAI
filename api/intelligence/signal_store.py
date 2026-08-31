@@ -16,7 +16,7 @@ DB = "feature_intelligence"
 
 # Imported lazily so the stages are importable without the ClickHouse driver.
 def _ch():
-    from storage.client import ch_client
+    from warehouse.client import ch_client
     return ch_client
 
 

@@ -1,14 +1,14 @@
 """P1-2: idempotent migration runner.
 
-`storage/schema.sql` runs ONLY on an empty ClickHouse volume, and nothing applied
-`storage/migrations/*.sql` at all. That gap already destroyed data once: a fresh volume created
+`warehouse/clickhouse/schema.sql` runs ONLY on an empty ClickHouse volume, and nothing applied
+`warehouse/clickhouse/migrations/*.sql` at all. That gap already destroyed data once: a fresh volume created
 an 8-column events_raw while the running code required 14, every insert failed with
 "Unrecognized column", and the dead-letter fallback failed too because it had the same gap --
 events were lost with no trace.
 
 Usage:
-    docker compose exec -T ingestion-api python storage/migrate.py          # apply pending
-    docker compose exec -T ingestion-api python storage/migrate.py --status # list only
+    docker compose exec -T ingestion-api python warehouse/migrate.py          # apply pending
+    docker compose exec -T ingestion-api python warehouse/migrate.py --status # list only
 
 Applied files are recorded in feature_intelligence.schema_migrations by name and content hash,
 so re-running is a no-op and an EDITED migration is reported rather than silently skipped.
@@ -23,10 +23,10 @@ from datetime import datetime, timezone
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from storage.client import ch_client  # noqa: E402
+from warehouse.client import ch_client  # noqa: E402
 
 DB = "feature_intelligence"
-MIGRATIONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "migrations")
+MIGRATIONS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "clickhouse", "migrations")
 
 LEDGER_DDL = f"""
 CREATE TABLE IF NOT EXISTS {DB}.schema_migrations (
@@ -155,7 +155,7 @@ if __name__ == "__main__":
     # then fails to recreate it, leaving the rollup silently unfed. Baseline first.
     if not done and _looks_migrated() and "--baseline" not in sys.argv and "--status" not in sys.argv:
         print("\nREFUSING TO APPLY: the schema is already migrated but the ledger is empty.")
-        print("Verify the schema, then run:  python storage/migrate.py --baseline")
+        print("Verify the schema, then run:  python warehouse/migrate.py --baseline")
         sys.exit(2)
 
     if "--baseline" in sys.argv:

@@ -15,7 +15,7 @@ import time
 from datetime import datetime, timedelta
 
 sys.path.insert(0, os.environ.get("REPO_ROOT", "/app"))
-from storage.client import ch_client
+from warehouse.client import ch_client
 from api.intelligence.metrics import ClickHouseMetricLayer, Window
 from api.intelligence.orchestrator import Orchestrator
 from api.intelligence.contracts import load_all

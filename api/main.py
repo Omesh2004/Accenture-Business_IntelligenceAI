@@ -12,11 +12,11 @@ from fastapi.middleware.gzip import GZipMiddleware
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from storage.client import ch_client
+from warehouse.client import ch_client
 from api.insights import generate_insights, query_vllm
 from api.page_map import resolve_page, resolve_display_name, normalize_event, canonicalize_event_name, CANONICAL_EVENT_ALIASES, FEATURE_DISPLAY_NAMES
-from core.config import settings
-from core.middleware import require_cloud_mode, require_tenant_access
+from warehouse.config import settings
+from api.middleware import require_cloud_mode, require_tenant_access
 
 # Alias for Python's built-in range() since many endpoints use 'range' as a query param name
 builtins_range = range
@@ -51,7 +51,7 @@ TENANT_ALIAS_MAP = {
 # double-counts a replayed batch. Idempotency is delivered at READ time by counting distinct
 # event_ids instead -- see docs/DATABASE.md FOUNDATION-1/4.
 #
-# This expression is byte-for-byte the one in mv_daily_feature_usage (storage/schema.sql).
+# This expression is byte-for-byte the one in mv_daily_feature_usage (warehouse/clickhouse/schema.sql).
 # Keep them identical: if they drift, /metrics/kpi and daily_feature_usage report different
 # totals for the same window and the dashboard contradicts itself. The concat() branch only
 # covers legacy rows written before event_id existed.
@@ -2393,7 +2393,7 @@ def get_pro_users(
 # LICENSE VS USAGE
 # ═══════════════════════════════════════════════════════════
 
-from core.models import LicenseSyncRequest, TrackingToggleRequest
+from api.schemas import LicenseSyncRequest, TrackingToggleRequest
 
 @app.get("/license/usage")
 def get_license_usage(tenants: str = Query(..., description="Comma-separated list of tenants"), range: str = Query("30d", description="Time range like 7d, 30d")):

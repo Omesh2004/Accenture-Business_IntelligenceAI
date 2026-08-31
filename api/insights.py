@@ -6,7 +6,7 @@ from typing import List, Dict, Any
 
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from storage.client import ch_client
+from warehouse.client import ch_client
 from api.page_map import normalize_event, resolve_display_name, resolve_page
 
 from api.data_layer import PRECOMPUTED_LAYER

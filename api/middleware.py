@@ -2,7 +2,7 @@ from fastapi import HTTPException
 from traceback import format_exc
 import logging
 
-from core.config import settings
+from warehouse.config import settings
 
 logger = logging.getLogger(__name__)
 

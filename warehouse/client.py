@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from core.config import settings
+from warehouse.config import settings
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,7 @@ class ClickHouseClient:
         Phase G's real ClickHouse-outage simulation): previously unset, which meant
         `clickhouse_connect`'s own default `send_receive_timeout=300` applied -- a real network
         stall (as opposed to a fast connection-refused) left `insert_events()` blocked for up to
-        5 minutes on its FIRST attempt, never reaching `processing/worker.py`'s
+        5 minutes on its FIRST attempt, never reaching `pipeline/worker.py`'s
         retry/backoff/`batch_stuck` logic at all (that logic is correct, per Phase F -- it just
         never got a chance to run). `connect_timeout=10` matches clickhouse_connect's own
         default, stated explicitly rather than relied on implicitly, consistent with this
@@ -64,7 +64,7 @@ class ClickHouseClient:
     ):
         """Bulk insert raw events into ClickHouse.
 
-        Callers: processing/worker.py (the Kafka-consumed path -- attaches real
+        Callers: pipeline/worker.py (the Kafka-consumed path -- attaches real
         kafka_partition/kafka_offset/kafka_topic and ingest_path='kafka' per event, see
         run_worker()) and api/seed_safexbank.py (a direct-to-ClickHouse seeding script that
         bypasses Kafka and the ingestion API entirely, and sets none of these fields).
@@ -74,7 +74,7 @@ class ClickHouseClient:
         caller-supplied deterministic token for ClickHouse's own insert-level block dedup, so a
         retried insert of the exact same logical batch (network ack lost, insert already
         landed) is caught by ClickHouse itself, not just by the caller's own retry-identity
-        discipline. Only processing/worker.py's flush_batch() passes one today (see its own
+        discipline. Only pipeline/worker.py's flush_batch() passes one today (see its own
         docstring for a load-bearing caveat: this token is currently a NO-OP on the live
         events_raw table). Left unset (None) for every other caller -- api/seed_safexbank.py's
         writes are not part of any retry loop this token would help with, so no token shape was
