@@ -200,9 +200,15 @@ def intelligence_outcome(req: OutcomeRequest):
 
 
 @app.post("/intelligence/ask")
-@app.post("/intelligence/ask/stream")
-def intelligence_ask(req: AskRequest):
-    raise HTTPException(
-        status_code=503,
-        detail="the intelligence agent is being rebuilt for Round 2 (Track C). "
-               "The read endpoints (/intelligence/insight, /series, /recommendations) are live.")
+def intelligence_ask(request: Request, req: AskRequest):
+    """Ask the agent a question. Persona is resolved server-side, never from the body."""
+    from api.intelligence import loop
+    tenant = _tenant(req.tenant_id)
+    p = resolve_persona(request, req.persona)
+    question = (req.question or "").strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="question is required")
+    res = loop.run(tenant, question, p)
+    # Entitlement is applied inside the agent before assembly; this is belt and braces at the
+    # boundary, so a new field can never leak a hidden KPI.
+    return filter_revenue(p, res.as_dict())

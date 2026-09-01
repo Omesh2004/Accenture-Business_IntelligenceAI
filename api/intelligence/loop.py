@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from api.intelligence import (config, gates, llm_client, personas, planner, reader, tools,
                               understanding, visuals)
 from api.intelligence.stages.narrate import ClaimSet, verify
+from api.middleware import hidden_kpis
 
 MAX_ROUNDS = getattr(config, "AGENT_MAX_ROUNDS", 3)
 MAX_PARALLEL = 4
@@ -442,6 +443,35 @@ def run(tenant_id: str, question: str, persona: str, engine: str = "auto", emit=
     if restricted:
         trace.add("Apply entitlement", "personas.allows", restriction_note,
                   status="skipped", kind="reason")
+
+    # A hidden KPI is refused BEFORE any tool runs, so the figure is never assembled and cannot
+    # be back-computed from what comes back. Redacting it afterwards would be too late.
+    hidden = hidden_kpis(persona)
+    # Only what the question NAMES blocks it. Revenue merely sitting in the candidate list is
+    # not a request for revenue, and refusing there made every Ops question unanswerable.
+    named = set(planner.matched_metrics(ctx))
+    if ctx.focus_metric:
+        named.add(ctx.focus_metric)
+    blocked = sorted(hidden & named)
+    if blocked:
+        names = ", ".join(tools.pretty_name(k) for k in blocked)
+        trace.add("Apply entitlement", "personas.hidden_kpis",
+                  "%s is not visible to %s" % (names, profile.label),
+                  status="abstained", kind="reason")
+        return Result(
+            answer=("%s is not available to %s. It is owned by the finance team, who can "
+                    "answer it directly." % (names, profile.label)),
+            persona=persona, persona_label=profile.label, abstained=True,
+            reason="entitlement", verifier_pass=True, engine_type="rule",
+            trace=trace.as_list(), rounds=0)
+
+    # Not named, but still must never surface: drop hidden KPIs from everything the agent may
+    # consider, so a ranking cannot mention one.
+    if hidden:
+        ctx.metric_ids = [k for k in ctx.metric_ids if k not in hidden]
+        ctx.moved_ids = [k for k in ctx.moved_ids if k not in hidden]
+        if ctx.focus_metric in hidden:
+            ctx.focus_metric = ""
 
     observations: list[planner.Observation] = []
     claims: list[dict] = []

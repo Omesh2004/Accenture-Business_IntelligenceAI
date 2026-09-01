@@ -17,3 +17,4 @@ class OutcomeRequest(BaseModel):
 class AskRequest(BaseModel):
     question: str
     persona: str | None = None
+    tenant_id: str | None = None
