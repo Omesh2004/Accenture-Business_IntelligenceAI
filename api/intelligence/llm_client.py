@@ -7,18 +7,51 @@ False -- no GPU, no server, no network -- which is why this returns None rather 
 from __future__ import annotations
 
 import json
+import logging
 import re
 import urllib.request
 
 from api.intelligence import config
 
+logger = logging.getLogger(__name__)
+
 _JSON_BLOCK = re.compile(r"\{.*\}", re.DOTALL)
 _probe: tuple[bool, str] | None = None
+#: The served context window, read from the model card. 0 until the first probe.
+_context_len = 0
+
+
+def _why(exc: Exception) -> str:
+    """The server's own reason, when it gave one. An HTTPError carries it in the body."""
+    body = ""
+    try:
+        body = exc.read().decode("utf-8")[:300]                     # type: ignore[attr-defined]
+    except Exception:                                               # noqa: BLE001
+        body = ""
+    return f"{type(exc).__name__}: {body or exc}"
+
+
+def _budget(prompt: str, want: int) -> int:
+    """How many output tokens the server can actually give for this prompt.
+
+    Asking for more than the context allows is not a truncated answer, it is a 400: the request
+    is rejected outright and the caller falls back. That failure is silent by design -- every LLM
+    path must survive an unreachable model -- so a budget set higher than the window turned the
+    narrator off completely and left the deterministic template answering everything.
+
+    Four characters per token is deliberately pessimistic for English prose, so the estimate
+    errs towards asking for less rather than being refused.
+    """
+    if not _context_len:
+        return want
+    used = len(prompt) // 4
+    room = _context_len - used - 64          # a margin for the chat template's own tokens
+    return max(64, min(want, room))
 
 
 def available() -> tuple[bool, str]:
     """(usable, model). Probed once per process; a missing server is a normal state, not an error."""
-    global _probe
+    global _probe, _context_len
     if _probe is not None:
         return _probe
     if not config.LLM_ENABLED:
@@ -32,6 +65,11 @@ def available() -> tuple[bool, str]:
         with urllib.request.urlopen(req, timeout=probe_timeout) as resp:
             models = (json.loads(resp.read().decode("utf-8")) or {}).get("data") or []
         model = config.LLM_MODEL or (models[0].get("id") if models else "")
+        # vLLM publishes the window on the model card. Knowing it is what lets every call size
+        # its own request instead of guessing and being refused.
+        for card in models:
+            if card.get("id") == model or not _context_len:
+                _context_len = int(card.get("max_model_len") or 0)
         _probe = (bool(model), model or "")
     except Exception:
         _probe = (False, "")
@@ -61,7 +99,7 @@ def complete_text(prompt: str, max_tokens: int | None = None,
         "stream": False,
         "temperature": config.LLM_TEMPERATURE if temperature is None else temperature,
         "seed": config.LLM_SEED,
-        "max_tokens": max_tokens or config.LLM_MAX_TOKENS,
+        "max_tokens": _budget(prompt, max_tokens or config.LLM_MAX_TOKENS),
     }
     try:
         req = urllib.request.Request(
@@ -74,7 +112,8 @@ def complete_text(prompt: str, max_tokens: int | None = None,
         usage = body.get("usage") or {}
         return (content.strip(), int(usage.get("prompt_tokens", 0)),
                 int(usage.get("completion_tokens", 0)))
-    except Exception:                                               # noqa: BLE001
+    except Exception as exc:                                        # noqa: BLE001
+        logger.warning("llm text call failed, falling back to the template: %s", _why(exc))
         return "", 0, 0
 
 
@@ -91,7 +130,7 @@ def complete_json(prompt: str, max_tokens: int | None = None) -> tuple[dict | No
         # is re-checked against the claim set regardless.
         "temperature": config.LLM_TEMPERATURE,
         "seed": config.LLM_SEED,
-        "max_tokens": max_tokens or config.LLM_MAX_TOKENS,
+        "max_tokens": _budget(prompt, max_tokens or config.LLM_MAX_TOKENS),
     }
     try:
         req = urllib.request.Request(
@@ -107,6 +146,7 @@ def complete_json(prompt: str, max_tokens: int | None = None) -> tuple[dict | No
             return None, int(usage.get("prompt_tokens", 0)), int(usage.get("completion_tokens", 0))
         return (json.loads(match.group(0)),
                 int(usage.get("prompt_tokens", 0)), int(usage.get("completion_tokens", 0)))
-    except Exception:
+    except Exception as exc:
         # A planner that cannot reach its model plans deterministically instead.
+        logger.warning("llm json call failed, planning deterministically: %s", _why(exc))
         return None, 0, 0

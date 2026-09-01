@@ -59,12 +59,16 @@ export default function PersonaLens({
   const lens = LENS[persona] || LENS.analyst;
   const current = list.find((p) => p.id === persona);
 
+  // The entrance is a CSS animation, not a framer one.
+  //
+  // As a `motion.section` this card kept arriving and then vanishing: it sits inside the layout's
+  // AnimatePresence, and when the enter animation did not settle the element was left at opacity
+  // 0 while still holding its space, so a purple band rendered as a gap. `.rise` uses
+  // animation-fill-mode: both, so the card paints whether or not any JavaScript animation runs.
+  // Motion inside it stays framer's job; visibility does not.
   return (
-    <motion.section
-      initial={{ opacity: 0, y: 12 }}
-      animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.55, ease: EASE }}
-      className="hero-band sheen-once mb-6 px-6 py-5 text-white sm:px-7"
+    <section
+      className="hero-band sheen-once rise mb-6 px-6 py-5 text-white sm:px-7"
       aria-label="Viewing as"
     >
       <div className="flex flex-wrap items-center gap-2.5">
@@ -180,6 +184,6 @@ export default function PersonaLens({
           {current.remit}
         </p>
       )}
-    </motion.section>
+    </section>
   );
 }
