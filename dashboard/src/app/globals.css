@@ -549,27 +549,23 @@ button:disabled,
   box-shadow: var(--shadow-card);
 }
 
-/* The hero band. The wave is a real image so the curve matches the reference exactly; the
-   gradient underneath carries the colour so the image can stay a light overlay. */
+/* The hero band.
+   The wave and the gradient are two layers of ONE background, not an element background plus a
+   pseudo-element behind it. The pseudo-element version depended on a negative z-index inside an
+   isolated stacking context to sit between the background and the text, and when that resolved
+   the other way the band painted with no colour at all -- white text on a white page, which read
+   as a missing card rather than a broken one. Two background layers cannot fail that way. */
 .hero-band {
   position: relative;
   overflow: hidden;
   border-radius: 20px;
-  background: var(--hero-grad);
+  background-image: image-set(url('/dashboard-card-overlay.png') 1x), var(--hero-grad);
+  background-size: cover, auto;
+  background-position: center right, center;
+  background-repeat: no-repeat, no-repeat;
+  background-blend-mode: soft-light, normal;
+  background-color: #4014cc;      /* the floor, so the band is never colourless */
   box-shadow: var(--shadow-hero);
-  isolation: isolate;
-}
-.hero-band::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background-image: url('/dashboard-card-overlay.png');
-  background-size: cover;
-  background-position: center right;
-  opacity: 0.55;
-  mix-blend-mode: soft-light;
-  pointer-events: none;
-  z-index: -1;
 }
 
 /* The icon tile beside a KPI name. */

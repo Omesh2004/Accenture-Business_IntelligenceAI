@@ -66,10 +66,10 @@ function Sidebar() {
         href="/"
         className={`flex h-[74px] items-center gap-2.5 ${sidebarCollapsed ? 'justify-center' : 'px-5'}`}
       >
-        <span className="relative h-9 w-9 shrink-0">
-          <Image src="/logo1.png" alt="FinInsights" fill sizes="36px" priority
-                 className="object-contain" />
-        </span>
+        {/* Explicit width and height rather than `fill`: `fill` positions the image against the
+            nearest positioned ancestor, and an inline span has no box for it to fill. */}
+        <Image src="/logo1.png" alt="FinInsights" width={36} height={36} priority
+               className="h-9 w-9 shrink-0 object-contain" />
         {!sidebarCollapsed && (
           <span className="text-[19px] font-semibold tracking-[-0.02em]"
                 style={{ color: 'var(--rail-text-strong)' }}>

@@ -54,6 +54,25 @@ function Elapsed({ from }: { from: number }) {
   );
 }
 
+/**
+ * One stage of an answer arriving.
+ *
+ * The whole answer used to appear the instant the lead line finished typing: four cards, three
+ * charts and a derivation panel in a single frame. Staging them costs nothing and lets a reader
+ * follow the argument in the order it was made.
+ */
+function Reveal({ delay, children }: { delay: number; children: React.ReactNode }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.42, delay, ease: EASE }}
+    >
+      {children}
+    </motion.div>
+  );
+}
+
 function UserTurn({ text }: { text: string }) {
   return (
     <motion.div
@@ -78,12 +97,17 @@ function AssistantTurn({
   tenants,
   onTyped,
   onDismiss,
+  followUps = [],
+  onFollowUp,
 }: {
   message: ChatMessage;
   live: boolean;
   tenants: string[];
   onTyped: () => void;
   onDismiss: () => void;
+  /** Offered under the newest answer only, so a transcript is not lined with stale prompts. */
+  followUps?: string[];
+  onFollowUp?: (q: string) => void;
 }) {
   const answer = message.answer;
   const [typed, setTyped] = useState(!live);
@@ -103,6 +127,24 @@ function AssistantTurn({
     || (answer?.visuals?.length ?? 0) > 0
     || answer?.trace?.some((t) => t.kind === 'act'),
   );
+  // At most three charts, and never one the cards above already are: `bars` IS the "Where is it
+  // concentrated" list and `delta` IS the big number in "What happened". Drawing them again put
+  // the same figures on screen twice, which reads as two findings rather than one.
+  const charts = useMemo(() => {
+    const all = answer?.visuals || [];
+    const order = ['trend', 'waterfall', 'band', 'donut'];
+    const seen = new Set<string>();
+    const picked: typeof all = [];
+    for (const kind of order) {
+      const found = all.find((v) => v.kind === kind && !seen.has(v.kind));
+      if (!found) continue;
+      seen.add(found.kind);
+      picked.push(found);
+      if (picked.length === 3) break;
+    }
+    return picked;
+  }, [answer?.visuals]);
+
   const sources = useMemo(() => {
     const seen = new Set<string>();
     return (answer?.citations || []).filter((c) => {
@@ -173,16 +215,24 @@ function AssistantTurn({
         )}
       </div>
 
-      {/* The four questions a reader arrives with, then everything the run could honestly draw. */}
+      {/* The four questions a reader arrives with, then everything the run could honestly draw.
+          Each stage waits for the one before it, so the answer assembles in the order it was
+          reasoned rather than appearing all at once. */}
       {typed && answer && (
         <>
-          <AnswerCards answer={answer} visuals={answer.visuals || []} />
-          {(answer.visuals?.length ?? 0) > 0 && (
-            <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
-              {answer.visuals!.map((v, i) => (
-                <Chart key={`${v.tool}-${v.kind}-${i}`} visual={v} />
-              ))}
-            </div>
+          <Reveal delay={0}>
+            <AnswerCards answer={answer} visuals={answer.visuals || []} />
+          </Reveal>
+          {charts.length > 0 && (
+            <Reveal delay={0.34}>
+              <div className={`grid grid-cols-1 gap-3 ${
+                charts.length === 1 ? '' : charts.length === 2 ? 'lg:grid-cols-2'
+                                                              : 'lg:grid-cols-2 xl:grid-cols-3'}`}>
+                {charts.map((v, i) => (
+                  <Chart key={`${v.tool}-${v.kind}-${i}`} visual={v} />
+                ))}
+              </div>
+            </Reveal>
           )}
         </>
       )}
@@ -193,11 +243,15 @@ function AssistantTurn({
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.4, ease: EASE }}
         >
-          <details className="group mt-3 rounded-xl border border-gray-200 bg-white">
-            <summary className="cursor-pointer select-none px-4 py-2.5 text-xs tracking-[0.08em] uppercase text-gray-500 hover:text-gray-700">
+          <details className="surface group mt-3 overflow-hidden">
+            <summary className="flex cursor-pointer select-none items-center gap-2 px-5 py-3
+                                text-[10.5px] font-semibold uppercase tracking-[0.14em]
+                                text-slate-500 transition-colors hover:text-slate-700">
+              <span className="inline-block h-1.5 w-1.5 rounded-full"
+                    style={{ background: 'var(--brand)' }} />
               How this answer was derived
             </summary>
-            <div className="border-t border-gray-100">
+            <div className="border-t border-slate-100">
           <AgentConsole
             gates={answer.rail || []}
             steps={answer.trace || []}
@@ -220,6 +274,25 @@ function AssistantTurn({
 
       {/* The tables each figure was read from, flat. The console shows a source per section; this
           is the whole provenance of the answer in one line, which is what a reader checks first. */}
+      {typed && live && followUps.length > 0 && (
+        <Reveal delay={0.62}>
+          <div className="flex flex-wrap gap-1.5 pt-1">
+            {followUps.map((q) => (
+              <button
+                key={q}
+                onClick={() => onFollowUp?.(q)}
+                className="cursor-pointer rounded-full border px-3 py-1.5 text-[12px]
+                           transition-colors duration-200"
+                style={{ borderColor: INK.hairline, background: INK.surface,
+                         color: INK.textSoft }}
+              >
+                {q}
+              </button>
+            ))}
+          </div>
+        </Reveal>
+      )}
+
       {typed && sources.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="text-[10px] tracking-[0.16em] uppercase" style={{ color: INK.textFaint }}>
@@ -516,6 +589,8 @@ function ChatSurface({
                 tenants={tenants}
                 onTyped={scrollToEnd}
                 onDismiss={() => setMessages((prev) => prev.filter((x) => x.id !== m.id))}
+                followUps={suggestions}
+                onFollowUp={submit}
               />
             ),
           )}
@@ -577,7 +652,10 @@ function ChatSurface({
 
       <div className="shrink-0 px-5 pb-5" style={{ background: INK.canvas }}>
         <div className="mx-auto max-w-3xl">
-          {!running && suggestions.length > 0 && (
+          {/* Only on an empty transcript. Once an answer is on screen a permanent row of
+              questions sits between the reader and the thing they asked for, and reads as part
+              of the answer rather than as a prompt. Follow-ups live under the answer instead. */}
+          {messages.length === 0 && !running && suggestions.length > 0 && (
             <div className="mb-3 flex flex-wrap gap-1.5">
               {suggestions.map((s, i) => (
                 <motion.button

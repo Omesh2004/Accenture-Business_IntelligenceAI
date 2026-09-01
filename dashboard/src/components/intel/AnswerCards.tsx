@@ -98,9 +98,14 @@ export default function AnswerCards(
   const action = bySlot.what_now || bySlot.action;
   if (!what && !why && !action && !where) return null;
 
+  // The row sizes itself to what it actually has. A single card stretched across a third of the
+  // width with two empty columns beside it reads as two cards that failed to load.
+  const shown = [what, why, where].filter(Boolean).length;
+  const cols = shown >= 3 ? 'lg:grid-cols-3' : shown === 2 ? 'lg:grid-cols-2' : '';
+
   return (
     <div className="space-y-3">
-      <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
+      <div className={`grid grid-cols-1 items-start gap-3 ${cols}`}>
         {what && (
           <Card icon={fell ? ArrowDownRight : ArrowUpRight} title="What happened?">
             {pct != null && observed != null && baseline != null ? (
@@ -115,7 +120,14 @@ export default function AnswerCards(
                 </p>
               </>
             ) : null}
-            <p className="mt-2.5 text-[12.5px] leading-relaxed text-slate-500">{what.text}</p>
+            {pct == null && (
+              <p className="text-[12.5px] leading-relaxed text-slate-600">{what.text}</p>
+            )}
+            {what.text && pct != null && (
+              <p className="mt-3 border-t border-slate-100 pt-2.5 text-[11.5px] text-slate-400">
+                {bullets(what).slice(-1)[0]}
+              </p>
+            )}
           </Card>
         )}
 

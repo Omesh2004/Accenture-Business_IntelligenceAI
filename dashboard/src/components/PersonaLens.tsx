@@ -9,7 +9,13 @@
  */
 import React, { useEffect, useState } from 'react';
 import { AnimatePresence, motion } from 'framer-motion';
+import { Calendar, ChevronDown } from 'lucide-react';
 import { API_BASE_URL, rbacHeaders } from '@/lib/api';
+import { useAppDispatch, useAppSelector } from '@/lib/store';
+import { setTimeRange } from '@/lib/dashboardSlice';
+import type { TimeRange } from '@/types';
+
+const RANGES: TimeRange[] = ['Last 7 Days', 'Last 30 Days', 'Last 90 Days'];
 
 export type PersonaId = 'cfo' | 'ops_manager' | 'risk_officer' | 'analyst';
 
@@ -29,6 +35,9 @@ export default function PersonaLens({
   persona, onChange,
 }: { persona: PersonaId; onChange: (p: PersonaId) => void }) {
   const [options, setOptions] = useState<PersonaInfo[]>([]);
+  const [rangeOpen, setRangeOpen] = useState(false);
+  const dispatch = useAppDispatch();
+  const timeRange = useAppSelector((st) => st.dashboard.timeRange);
 
   useEffect(() => {
     (async () => {
@@ -86,6 +95,45 @@ export default function PersonaLens({
             </button>
           );
         })}
+
+        <div className="relative ml-auto">
+          <button
+            onClick={() => setRangeOpen((v) => !v)}
+            className="flex cursor-pointer items-center gap-2 rounded-full border border-white/25
+                       bg-white/10 px-3.5 py-1.5 text-[13px] text-white transition-colors
+                       duration-200 hover:bg-white/20"
+          >
+            <Calendar className="h-3.5 w-3.5 opacity-80" />
+            {timeRange}
+            <ChevronDown className={`h-3.5 w-3.5 opacity-80 transition-transform duration-200
+                                     ${rangeOpen ? 'rotate-180' : ''}`} />
+          </button>
+          <AnimatePresence>
+            {rangeOpen && (
+              <motion.div
+                initial={{ opacity: 0, y: -4 }}
+                animate={{ opacity: 1, y: 0 }}
+                exit={{ opacity: 0, y: -4 }}
+                transition={{ duration: 0.16, ease: EASE }}
+                className="surface absolute right-0 top-full z-30 mt-2 w-44 overflow-hidden p-1"
+              >
+                {RANGES.map((r) => (
+                  <button
+                    key={r}
+                    onClick={() => { dispatch(setTimeRange(r)); setRangeOpen(false); }}
+                    className={`w-full cursor-pointer rounded-lg px-3 py-2 text-left text-[13px]
+                                transition-colors ${r === timeRange
+                                  ? 'font-medium text-[color:var(--brand)]'
+                                  : 'text-slate-600 hover:bg-slate-50'}`}
+                    style={r === timeRange ? { background: 'var(--brand-soft)' } : undefined}
+                  >
+                    {r}
+                  </button>
+                ))}
+              </motion.div>
+            )}
+          </AnimatePresence>
+        </div>
       </div>
 
       <div className="mt-5 flex flex-wrap gap-x-14 gap-y-3">

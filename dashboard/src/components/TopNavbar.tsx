@@ -299,42 +299,7 @@ function TopNavbar() {
           </div>
         </div>
 
-        {/* Center Section: Time Range + Transparency */}
-        <div className="hidden md:flex items-center">
-          {/* Time Range Selector */}
-          <div ref={timeRef} className="relative">
-            <button
-              onClick={() => setShowTimeDropdown(!showTimeDropdown)}
-              className="flex items-center border border-gray-400 cursor-pointer gap-2 px-3 py-2 bg-white border border-gray-200 rounded-lg text-sm text-gray-700 hover:border-gray-300 transition-colors"
-              id="time-range-selector"
-            >
-              <Calendar className="w-4 h-4 text-gray-400" />
-              {timeRange}
-              <ChevronDown className="w-4 h-4 text-gray-400" />
-            </button>
-
-            {showTimeDropdown && (
-              <div className="absolute top-full right-0 mt-1 w-44 bg-white border border-gray-200 rounded-xl shadow-lg py-1 z-50 animate-in fade-in slide-in-from-top-1 duration-150">
-                {timeRanges.map((range) => (
-                  <button
-                    key={range}
-                    onClick={() => {
-                      dispatch(setTimeRange(range));
-                      setShowTimeDropdown(false);
-                    }}
-                    className={`w-full cursor-pointer text-left px-4 py-2 text-sm transition-colors ${range === timeRange
-                        ? 'bg-blue-50 text-blue-600 font-medium'
-                        : 'text-gray-700 hover:bg-gray-100'
-                      }`}
-                  >
-                    {range}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
-
+        {/* The period now sits in the persona band, beside the reader it applies to. */}
 
         {/* Right Section: Search + Profile */}
         <div className="flex items-center gap-4">
