@@ -179,6 +179,26 @@ GROUP BY tenant_id, date, value_key
 """
 
 
+def _cells_sql(s: dict) -> str:
+    """The leaf cell: every dimension of this KPI at once, which is what PSqueeze searches."""
+    dims = sorted(s["dims"])
+    keyparts = " , '|' , ".join(f"'{d}=' , toString({s['dims'][d]})" for d in dims)
+    arr_dims = ", ".join(f"'{d}'" for d in dims)
+    arr_vals = ", ".join(f"toString({s['dims'][d]})" for d in dims)
+    group = ", ".join(f"toString({s['dims'][d]})" for d in dims)
+    return f"""
+INSERT INTO {GOLD}.kpi_cells
+SELECT {s['t']} AS tenant_id, '{s['kpi']}' AS kpi_id, {s['d']} AS date,
+       '{s['fund']}' AS fundamental,
+       concat({keyparts}) AS cell_key,
+       [{arr_dims}] AS dims, [{arr_vals}] AS vals,
+       {s['value']} AS value, now() AS _version
+FROM {s['frm']}
+WHERE {s['where']}{_win_clause(s)}
+GROUP BY tenant_id, date, {group}
+"""
+
+
 def _window(days: int) -> tuple[date, date]:
     end = _now().date() + timedelta(days=1)
     return end - timedelta(days=days), end
@@ -191,12 +211,16 @@ def run(days: int = 120) -> dict:
 
     _exec(f"ALTER TABLE {GOLD}.kpi_daily DELETE WHERE date >= %(start)s AND date < %(end)s", p, ms)
     _exec(f"ALTER TABLE {GOLD}.kpi_daily_by_dim DELETE WHERE date >= %(start)s AND date < %(end)s", p, ms)
+    _exec(f"ALTER TABLE {GOLD}.kpi_cells DELETE WHERE date >= %(start)s AND date < %(end)s", p, ms)
 
     for s in SPECS:
         _exec(_daily_sql(s), p)
         for dim, expr in s["dims"].items():
             _exec(_by_dim_sql(s, dim, expr), p)
+        if s["dims"]:
+            _exec(_cells_sql(s), p)
 
+    _exec(f"OPTIMIZE TABLE {GOLD}.kpi_cells FINAL")
     _exec(f"OPTIMIZE TABLE {GOLD}.kpi_daily FINAL")
     _exec(f"OPTIMIZE TABLE {GOLD}.kpi_daily_by_dim FINAL")
 

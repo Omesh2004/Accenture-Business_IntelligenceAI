@@ -178,6 +178,34 @@ def _psqueeze_causes(ctx, metric_layer, fundamental, dims, direction, max_depth,
     long_base = Window(ctx.window.start - timedelta(days=config.BASELINE_DAYS), ctx.window.start)
     scale = span_days / max(1, config.BASELINE_DAYS)
 
+    # True multi-dimensional search when the cube is available: PSqueeze combines attributes
+    # into cuboids, which 1-D marginals cannot support.
+    if hasattr(metric_layer, "leaf_cells"):
+        try:
+            leaf_dims, leaves = metric_layer.leaf_cells(ctx.tenant_id, fundamental,
+                                                        ctx.window, long_base, min_vol)
+        except Exception:
+            leaf_dims, leaves = [], {}
+        usable = [d for d in leaf_dims if d in dims]
+        if leaves and len(leaves) >= config.PSQUEEZE_MIN_LEAVES and usable:
+            keep = [leaf_dims.index(d) for d in usable]
+            packed = {tuple(cell[i] for i in keep): vf for cell, vf in leaves.items()}
+            found = psqueeze.search(packed, usable, min(max_depth, len(usable)), direction)
+            out = []
+            for cand in found:
+                idx = {d: i for i, d in enumerate(usable)}
+                for value in cand.cell:
+                    members = [c for c in cand.members
+                               if all(c[idx[d]] == v for d, v in zip(cand.dims, value))]
+                    if not members:
+                        continue
+                    delta = sum(packed[c][0] - packed[c][1] for c in members)
+                    base = sum(packed[c][1] for c in members)
+                    out.append((cand.dims, value, delta, base))
+            if out:
+                return out
+
+    # Fall back to per-dimension marginals.
     best_per_dim = []
     for dim in dims:
         try:

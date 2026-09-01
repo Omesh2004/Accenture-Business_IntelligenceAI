@@ -97,6 +97,43 @@ def kpi_by_dim(tenant: str, kpi_id: str, fundamental: str, dims: list[str],
     return {"kpi_id": kpi_id, "fundamental": fundamental, "by_dim": result}
 
 
+# ── /metric/kpi/cells ───────────────────────────────────────────────────────
+def kpi_cells(tenant: str, kpi_id: str, fundamental: str, start: date, end: date,
+              baseline_start: date, baseline_end: date, min_volume: float = 0) -> dict:
+    """Leaf cells of the multi-dimensional cube, current window against a baseline.
+
+    The full dimension tuple, not a 1-D marginal: PSqueeze's ripple effect is defined over
+    leaves, so a per-dimension view gives it no cuboids to combine.
+    """
+    spec = resolve_kpi(kpi_id)
+    if fundamental not in spec.fundamentals:
+        raise ValueError(f"{fundamental!r} is not a fundamental of {kpi_id!r}")
+
+    def _sum(s: date, e: date) -> dict[str, tuple[list, list, float]]:
+        rows = _q(
+            f"SELECT cell_key, any(dims) AS dims, any(vals) AS vals, sum(v) AS val FROM ("
+            f"  SELECT cell_key, dims, vals, argMax(value,_version) AS v FROM {GOLD}.kpi_cells "
+            "   WHERE tenant_id=%(t)s AND kpi_id=%(k)s AND fundamental=%(f)s "
+            "     AND date>=%(s)s AND date<%(e)s GROUP BY date, cell_key, dims, vals) "
+            "GROUP BY cell_key",
+            {"t": tenant, "k": kpi_id, "f": fundamental, "s": s, "e": e})
+        return {str(r["cell_key"]): (list(r["dims"]), list(r["vals"]), float(r["val"]))
+                for r in rows}
+
+    cur, base = _sum(start, end), _sum(baseline_start, baseline_end)
+    scale = max(1, (end - start).days) / max(1, (baseline_end - baseline_start).days)
+    out = []
+    for key in set(cur) | set(base):
+        dims, vals, v = cur.get(key, (None, None, 0.0))
+        bdims, bvals, b = base.get(key, (None, None, 0.0))
+        dims, vals = dims or bdims or [], vals or bvals or []
+        if max(v, b * scale) < float(min_volume):
+            continue
+        out.append({"cell_key": key, "dims": dims, "vals": vals,
+                    "value": round(v, 6), "baseline": round(b * scale, 6)})
+    return {"kpi_id": kpi_id, "fundamental": fundamental, "cells": out}
+
+
 # ── /metric/kpi/cell_deltas ─────────────────────────────────────────────────
 def kpi_cell_deltas(tenant: str, kpi_id: str, fundamental: str, dims: list[str],
                     start: date, end: date, baseline_start: date, baseline_end: date,

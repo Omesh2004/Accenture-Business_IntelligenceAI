@@ -78,6 +78,13 @@ def r_cell_deltas(tenant: str, kpi_id: str, fundamental: str, dims: str,
                   baseline_start, baseline_end, min_volume)
 
 
+@router.get("/metric/kpi/cells")
+def r_kpi_cells(tenant: str, kpi_id: str, fundamental: str, start: date, end: date,
+                baseline_start: date, baseline_end: date, min_volume: float = 0):
+    return _guard(reads.kpi_cells, tenant_ok(tenant), kpi_id, fundamental, start, end,
+                  baseline_start, baseline_end, min_volume)
+
+
 @router.get("/metric/funnel")
 def r_funnel(tenant: str, funnel_id: str, start: date, end: date):
     return _guard(reads.funnel, tenant_ok(tenant), funnel_id, start, end)
