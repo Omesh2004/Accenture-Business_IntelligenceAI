@@ -11,6 +11,8 @@ from itertools import combinations
 
 from api.intelligence import config
 from api.intelligence.ids import cause_id, round6
+from api.intelligence.metrics import Window
+from api.intelligence.stages import psqueeze
 
 
 @dataclass
@@ -39,7 +41,17 @@ def run(ctx, metric_layer, anomaly: dict, dims: list[str], baseline_window) -> L
     ranked: list[tuple[tuple, tuple, float, float]] = []  # (dims, cell, delta, baseline_value)
     truncated = False
 
-    for depth in range(1, max_depth + 1):
+    # PSqueeze first (CLAUDE.md section 9). It needs the leaves -- the finest cells -- so it can
+    # cluster by deviation and test the ripple effect; one query gives them all.
+    ps = _psqueeze_causes(ctx, metric_layer, fundamental, dims, direction, max_depth,
+                          min_vol, baseline_window)
+    if ps:
+        ranked = ps
+        method = "psqueeze"
+    else:
+        method = "greedy_cube"
+
+    for depth in range(1, max_depth + 1) if not ranked else []:
         for combo in combinations(dims, depth):
             try:
                 # One query per combo, both windows at once.
@@ -100,11 +112,14 @@ def run(ctx, metric_layer, anomaly: dict, dims: list[str], baseline_window) -> L
                 note="every cell moved in proportion to its share of the population, so no "
                      "segment is concentrated enough to be called a driver")
 
-    # Every tie is broken, so rank-1 cannot flip between identical runs.
-    order = {d: i for i, d in enumerate(dims)}
-    ranked.sort(key=lambda r: (-abs(r[2]), len(r[0]),
-                               tuple(order.get(d, 99) for d in r[0]),
-                               "|".join(r[0]), "|".join(r[1])))
+    # Every tie is broken, so rank-1 cannot flip between identical runs. PSqueeze already
+    # ordered by explanatory power; re-sorting on raw delta would throw that away and hand the
+    # ranking back to whichever segment is simply biggest.
+    if method != "psqueeze":
+        order = {d: i for i, d in enumerate(dims)}
+        ranked.sort(key=lambda r: (-abs(r[2]), len(r[0]),
+                                   tuple(order.get(d, 99) for d in r[0]),
+                                   "|".join(r[0]), "|".join(r[1])))
 
     # Coextensive cells describe the same rows under different names; an identical movement
     # is the signal for that, so keep only the simplest spelling.
@@ -137,10 +152,56 @@ def run(ctx, metric_layer, anomaly: dict, dims: list[str], baseline_window) -> L
             "dimensions": dict(zip(combo, cell)),
             "fundamental": str(fundamental.get("metric", "")),
             "contribution": round6(share),
-            "method": "greedy_cube",
+            "method": method,
             "explained_pct": round6(covered),
             "engine_type": "stats",
         })
 
     return LocalizeResult(causes=causes, explained_pct=round6(covered),
                           search_truncated=truncated)
+
+
+def _psqueeze_causes(ctx, metric_layer, fundamental, dims, direction, max_depth, min_vol,
+                     baseline_window):
+    """PSqueeze per dimension, then rank the dimensions by how well each explains.
+
+    gold.kpi_daily_by_dim is grained one dimension per row, so there are no cross-dimensional
+    leaf cells to build cuboids from. Deviation clustering, the ripple effect and GPS all still
+    apply within a dimension -- that is what lets a root cause be a SET (both affected regions)
+    ranked by explanatory power rather than by raw size.
+    """
+    # The caller's baseline is the window immediately before this one, which a movement lasting
+    # longer than one window sits inside -- comparing the leak against itself. Use the same long
+    # pre-window history Detect uses, scaled to this window's length so deltas stay comparable.
+    from datetime import timedelta
+    span_days = max(1, (ctx.window.end - ctx.window.start).days)
+    long_base = Window(ctx.window.start - timedelta(days=config.BASELINE_DAYS), ctx.window.start)
+    scale = span_days / max(1, config.BASELINE_DAYS)
+
+    best_per_dim = []
+    for dim in dims:
+        try:
+            raw = metric_layer.cell_deltas(ctx.tenant_id, fundamental, [dim],
+                                           ctx.window, long_base, min_vol)
+            cells = {k: (cur, base * scale) for k, (cur, base) in raw.items()}
+        except Exception:
+            continue
+        if len(cells) < config.PSQUEEZE_MIN_LEAVES:
+            continue
+        found = psqueeze.search(cells, [dim], 1, direction)
+        if found:
+            best_per_dim.append((dim, found[0], cells))
+
+    if not best_per_dim:
+        return []
+    # The dimension whose root-cause set explains the most comes first.
+    best_per_dim.sort(key=lambda x: -x[1].gps)
+
+    out = []
+    for dim, cand, cells in best_per_dim:
+        for value in cand.cell:
+            if value not in cells:
+                continue
+            cur, base = cells[value]
+            out.append(((dim,), value, cur - base, base))
+    return out

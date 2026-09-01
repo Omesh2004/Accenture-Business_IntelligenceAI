@@ -43,6 +43,9 @@ NON_DIMENSION_KEYS = set(_list(
 
 # --- detect -----------------------------------------------------------------
 MATERIALITY_FLOOR = _f("INTEL_MATERIALITY_FLOOR", 0.15)
+# The deviation histogram needs 4 cells to find a valley. Higher excluded `region`
+# (6 values) -- the dimension that actually explained the movement.
+PSQUEEZE_MIN_LEAVES = int(_f("INTEL_PSQUEEZE_MIN_LEAVES", 4))
 # Share of the recent window that must move the same way for a change point.
 LEVEL_SHIFT_MIN = _f("INTEL_LEVEL_SHIFT_MIN", 0.75)
 # Absolute events a KPI must carry in the window before a breach is worth investigating.
