@@ -148,105 +148,6 @@ router.post(
   }
 );
 
-// ─── GET /events/toggles/:tenantId ────────────────────────────
-// Get feature toggles for a tenant
-router.get(
-  "/events/toggles/:tenantId",
-  async (req: Request, res: Response): Promise<void> => {
-    const { tenantId } = req.params;
-    try {
-      const analyticsResp = await axios.get(`${ANALYTICS_API_URL}/tracking/toggles`, {
-        params: { tenants: GLOBAL_ANALYTICS_TENANTS },
-        headers: {
-          "X-User-Role": "super_admin",
-          "X-User-Email": "nexabank-toggle-bridge@system.local",
-        },
-        timeout: 15000,
-      });
-
-      const togglesList = Array.isArray(analyticsResp.data?.toggles) ? analyticsResp.data.toggles : [];
-      const map: Record<string, boolean> = {};
-      for (const item of togglesList) {
-        if (item?.feature_name) {
-          const normalizedKey = normalizeToggleKey(String(item.feature_name));
-          if (normalizedKey) {
-            map[normalizedKey] = Boolean(item.is_enabled);
-          }
-        }
-      }
-
-      res.status(200).json(map);
-      return;
-    } catch {
-      // Fall back to local Prisma toggles to keep NexaBank operational if analytics API is unavailable.
-    }
-
-    try {
-      const toggles = await prisma.featureToggle.findMany({ where: { tenantId: { in: GLOBAL_LOCAL_TENANTS } } });
-
-      // Return as map: { emi_calculator: true, kyc: true, loan_module: true }
-      const map: Record<string, boolean> = {};
-      for (const t of toggles) {
-        const normalizedKey = normalizeToggleKey(t.key);
-        if (!normalizedKey) continue;
-        const previous = map[normalizedKey];
-        map[normalizedKey] = previous === undefined ? t.enabled : previous && t.enabled;
-      }
-
-      res.status(200).json(map);
-    } catch (err) {
-      res.status(500).json({ error: "Failed to fetch toggles" });
-    }
-  }
-);
-
-// ─── PUT /events/toggles/:key ──────────────────────────────────
-// Update a feature toggle (admin only)
-router.put(
-  "/events/toggles/:key",
-  isLoggedIn,
-  isAdmin,
-  async (req: Request, res: Response): Promise<void> => {
-    const { key } = req.params;
-    const { enabled, tenantId } = req.body as { enabled: boolean; tenantId: string };
-    const normalizedKey = normalizeToggleKey(key);
-
-    try {
-      const actorEmail = (req as any).user?.email || "nexabank-admin@system.local";
-
-      await axios.post(
-        `${ANALYTICS_API_URL}/tracking/toggles`,
-        {
-          tenant_id: GLOBAL_ANALYTICS_TENANTS,
-          feature_name: normalizedKey,
-          is_enabled: enabled,
-          actor_email: actorEmail,
-        },
-        {
-          headers: {
-            "X-User-Role": "super_admin",
-            "X-User-Email": actorEmail,
-          },
-          timeout: 15000,
-        }
-      );
-
-      const updates = await Promise.all(
-        GLOBAL_LOCAL_TENANTS.map((tenant) =>
-          prisma.featureToggle.upsert({
-            where: { key_tenantId: { key: normalizedKey, tenantId: tenant } },
-            update: { enabled },
-            create: { key: normalizedKey, enabled, tenantId: tenant },
-          })
-        )
-      );
-
-      res.status(200).json({ key: normalizedKey, enabled, tenantsUpdated: GLOBAL_LOCAL_TENANTS, count: updates.length });
-    } catch (err) {
-      res.status(500).json({ error: "Failed to update toggle" });
-    }
-  }
-);
 
 // ─── GET /events/admin/stats ───────────────────────────────────
 // Admin: get analytics overview
@@ -722,7 +623,7 @@ router.post(
       try {
         const analyticsTenant = toAnalyticsTenant(tenantId);
         const started = Date.now();
-        const r = await axios.post(`${base}/events/seed/fast`, {
+        const r = await axios.post(`${base}/dev/seed`, {
           tenant_id: analyticsTenant,
           users: Number.isFinite(rawCount) ? Math.max(1, Math.min(Math.floor(rawCount), 5000)) : 100,
           days: Number.isFinite(rawDays) ? Math.max(1, Math.min(Math.floor(rawDays), 365)) : 30,
