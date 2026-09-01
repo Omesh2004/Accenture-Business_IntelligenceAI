@@ -7,6 +7,17 @@ formula: kyc_completed / kyc_started
 unit: ratio
 additivity: non-additive     # the RATE is not additive; its two counts are
 
+# How a person refers to this metric. Without these the agent cannot tell that
+# "new account opening" means signups, and answers about something else entirely.
+aliases:
+  - kyc
+  - kyc completion
+  - kyc rate
+  - identity verification
+  - verification rate
+  - onboarding completion
+  - know your customer
+
 grain:
   time: daily
   entity: application

@@ -95,11 +95,22 @@ def latest_insight(tenant_id: str, persona: str = "analyst",
 
 
 def list_insights(tenant_id: str, persona: str = "analyst", limit: int = 20) -> list[dict]:
+    # One CURRENT insight per KPI. Every sweep writes a row keyed on its anomaly, and
+    # generated_at is the window end rather than the run time, so the table accumulates rows
+    # that cannot be ordered by time. A finding whose anomaly no longer exists is stale, so
+    # live findings rank first and LIMIT 1 BY keeps one per KPI.
     rows = _ch().query(
         f"SELECT insight_id, investigation_id, kpi_id, anomaly_id, persona, generated_at, "
-        f"trust_verdict, headline, confidence, simulated, abstained, verifier_pass "
-        f"FROM {DB}.insights FINAL WHERE tenant_id = %(t)s AND persona = %(p)s "
-        "ORDER BY generated_at DESC, insight_id ASC LIMIT %(n)s",
+        f"trust_verdict, headline, confidence, simulated, abstained, verifier_pass FROM ("
+        f"  SELECT i.insight_id, i.investigation_id, i.kpi_id, i.anomaly_id, i.persona, "
+        f"         i.generated_at, i.trust_verdict, i.headline, i.confidence, i.simulated, "
+        f"         i.abstained, i.verifier_pass, if(a.anomaly_id != '', 1, 0) AS live "
+        f"  FROM {DB}.insights AS i FINAL "
+        f"  LEFT JOIN (SELECT anomaly_id FROM {DB}.anomalies FINAL WHERE tenant_id = %(t)s) AS a "
+        f"    ON i.anomaly_id = a.anomaly_id "
+        f"  WHERE i.tenant_id = %(t)s AND i.persona = %(p)s"
+        f") ORDER BY kpi_id ASC, live DESC, generated_at DESC, insight_id ASC "
+        f"LIMIT 1 BY kpi_id LIMIT %(n)s",
         {"t": tenant_id, "p": persona, "n": int(limit)},
     )
     return [dict(r) for r in rows]

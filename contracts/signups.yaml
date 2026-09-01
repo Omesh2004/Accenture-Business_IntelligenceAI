@@ -7,6 +7,22 @@ formula: count(accounts where opened_at in window)
 unit: count
 additivity: additive
 
+# How a person refers to this metric. Without these the agent cannot tell that
+# "new account opening" means signups, and answers about something else entirely.
+aliases:
+  - new account openings
+  - new account opening
+  - account openings
+  - account opening
+  - new accounts
+  - new account
+  - signups
+  - sign ups
+  - sign-ups
+  - new customers
+  - customer acquisition
+  - onboarding volume
+
 grain:
   time: daily
   entity: account

@@ -13,15 +13,19 @@ import {
 import { dashboardAPI } from '@/lib/api';
 
 const KPIS = [
-  { id: 'signups', label: 'New Account Signups', unit: 'count' },
-  { id: 'kyc_completion_rate', label: 'KYC Completion Rate', unit: 'rate' },
-  { id: 'loan_approval_volume', label: 'Loan Approval Volume', unit: 'count' },
-  { id: 'revenue', label: 'Revenue', unit: 'money' },
-  { id: 'transaction_failure_rate', label: 'Transaction Failure Rate', unit: 'rate' },
+  { id: 'signups', label: 'New Account Signups', unit: 'count', pick: ['accounts_opened'] },
+  { id: 'kyc_completion_rate', label: 'KYC Completion Rate', unit: 'rate',
+    pick: ['kyc_completed', 'kyc_started'] },
+  { id: 'loan_approval_volume', label: 'Loan Approval Volume', unit: 'count',
+    pick: ['loans_approved'] },
+  { id: 'revenue', label: 'Revenue', unit: 'money',
+    pick: ['fee_revenue', 'interest_accrued', 'pro_revenue'] },
+  { id: 'transaction_failure_rate', label: 'Transaction Failure Rate', unit: 'rate',
+    pick: ['txn_failed', 'txn_total'] },
 ] as const;
 
 type Point = { date: string; value: number };
-type Series = { points: Point[]; kind: string; anomalyFrom?: string };
+type Series = { points: Point[]; kind: string; anomalyFrom?: string; detected?: boolean };
 
 function fmt(unit: string, v: number): string {
   if (unit === 'rate') return `${(v * 100).toFixed(1)}%`;
@@ -30,23 +34,22 @@ function fmt(unit: string, v: number): string {
 }
 
 /** A rate is derived from its two counts at read time; a count or money sums its fundamentals. */
-function toPoints(d: {
-  dates?: string[]; kind?: string; fundamentals?: Record<string, number[]>;
-}, unit: string): Point[] {
+function toPoints(
+  d: { dates?: string[]; fundamentals?: Record<string, number[]> },
+  unit: string, pick: readonly string[],
+): Point[] {
   const dates = d.dates || [];
   const f = d.fundamentals || {};
-  const names = Object.keys(f);
-  if (!dates.length || !names.length) return [];
+  if (!dates.length) return [];
   return dates.map((date, i) => {
     let value = 0;
-    if (unit === 'rate' && names.length >= 2) {
-      const [num, den] = d.kind === 'rate' && names.includes('kyc_completed')
-        ? ['kyc_completed', 'kyc_started']
-        : ['txn_failed', 'txn_total'];
+    if (unit === 'rate') {
+      const [num, den] = pick;
       const dv = Number(f[den]?.[i] ?? 0);
       value = dv > 0 ? Number(f[num]?.[i] ?? 0) / dv : 0;
     } else {
-      value = names.reduce((a, n) => a + Number(f[n]?.[i] ?? 0), 0);
+      // Money sums its declared lines; a count charts only its own fundamental.
+      value = pick.reduce((a, n) => a + Number(f[n]?.[i] ?? 0), 0);
     }
     return { date, value };
   });
@@ -79,12 +82,15 @@ export default function KpiTrends(
       const visible = await dashboardAPI.getVisibleKpis([tenant], days, persona);
       const permitted = visible.length ? visible : KPIS.map((k) => k.id);
       if (!cancelled) setAllowed(permitted);
+      // A chart is marked as moved only where the engine recorded an anomaly.
+      const moved = new Set(await dashboardAPI.getMovedKpis([tenant]));
       const out: Record<string, Series> = {};
       await Promise.all(KPIS.filter((k) => permitted.includes(k.id)).map(async (k) => {
         const d = await dashboardAPI.getMetricSeries(tenant, k.id, days);
         if (!d) return;
-        const points = toPoints(d, k.unit);
-        out[k.id] = { points, kind: d.kind, anomalyFrom: anomalyStart(points) };
+        const points = toPoints(d, k.unit, k.pick);
+        out[k.id] = { points, kind: d.kind, detected: moved.has(k.id),
+                      anomalyFrom: moved.has(k.id) ? anomalyStart(points) : undefined };
       }));
       if (!cancelled) { setSeries(out); setLoading(false); }
     })();
@@ -97,7 +103,7 @@ export default function KpiTrends(
         const s = series[k.id];
         const pts = s?.points || [];
         const last = pts.length ? pts[pts.length - 1].value : 0;
-        const moved = Boolean(s?.anomalyFrom);
+        const moved = Boolean(s?.detected);
         return (
           <div key={k.id} className="lift bg-white rounded-xl border border-gray-200/90 p-5">
             <div className="flex items-baseline justify-between mb-3">
@@ -112,8 +118,8 @@ export default function KpiTrends(
                   <AreaChart data={pts} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
                     <defs>
                       <linearGradient id={`g-${k.id}`} x1="0" y1="0" x2="0" y2="1">
-                        <stop offset="0%" stopColor={moved ? '#dc2626' : '#1a73e8'} stopOpacity={0.22} />
-                        <stop offset="100%" stopColor={moved ? '#dc2626' : '#1a73e8'} stopOpacity={0} />
+                        <stop offset="0%" stopColor={moved ? '#c2185b' : '#7500c0'} stopOpacity={0.22} />
+                        <stop offset="100%" stopColor={moved ? '#c2185b' : '#7500c0'} stopOpacity={0} />
                       </linearGradient>
                     </defs>
                     <CartesianGrid strokeDasharray="2 4" stroke="#eef1f5" vertical={false} />
@@ -126,10 +132,10 @@ export default function KpiTrends(
                       contentStyle={{ borderRadius: 10, border: '1px solid #e5e7eb', fontSize: 12 }} />
                     {s?.anomalyFrom && (
                       <ReferenceArea x1={s.anomalyFrom} x2={pts[pts.length - 1].date}
-                                     fill="#dc2626" fillOpacity={0.06} />
+                                     fill="#c2185b" fillOpacity={0.06} />
                     )}
                     <Area type="monotone" dataKey="value" strokeWidth={2}
-                          stroke={moved ? '#dc2626' : '#1a73e8'} fill={`url(#g-${k.id})`}
+                          stroke={moved ? '#c2185b' : '#7500c0'} fill={`url(#g-${k.id})`}
                           isAnimationActive animationDuration={900} />
                   </AreaChart>
                 </ResponsiveContainer>
@@ -140,7 +146,7 @@ export default function KpiTrends(
               )}
             </div>
             {moved && (
-              <p className="mt-2 text-xs text-red-700">
+              <p className="mt-2 text-xs" style={{ color: '#c2185b' }}>
                 Movement detected from {s?.anomalyFrom}
               </p>
             )}

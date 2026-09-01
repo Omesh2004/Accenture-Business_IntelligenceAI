@@ -831,6 +831,17 @@ export const dashboardAPI = {
     }
   },
 
+  /** KPI ids the engine recorded an anomaly for, so a chart can mark a real movement. */
+  async getMovedKpis(tenants: string[]): Promise<string[]> {
+    try {
+      const r = await apiClient.get<{ insights?: { kpi_id: string; anomaly_id?: string }[] }>(
+        `/intelligence/insights?tenants=${encodeURIComponent(tenants.join(','))}`);
+      return (r.data?.insights || []).filter((i) => i.anomaly_id).map((i) => i.kpi_id);
+    } catch {
+      return [];
+    }
+  },
+
   /** KPI ids this persona may see. Hidden ones are never requested. */
   async getVisibleKpis(tenants: string[], days: number, persona: string): Promise<string[]> {
     try {

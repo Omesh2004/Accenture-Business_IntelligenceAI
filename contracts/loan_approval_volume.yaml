@@ -7,6 +7,18 @@ formula: count(applications where status = APPROVED)
 unit: count
 additivity: additive
 
+# How a person refers to this metric. Without these the agent cannot tell that
+# "new account opening" means signups, and answers about something else entirely.
+aliases:
+  - loan approvals
+  - loans approved
+  - approval volume
+  - lending volume
+  - loans
+  - lending
+  - approvals
+  - credit approvals
+
 grain:
   time: daily
   entity: application

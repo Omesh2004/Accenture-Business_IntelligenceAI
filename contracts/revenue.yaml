@@ -7,6 +7,17 @@ formula: fee_revenue + interchange_revenue + interest_accrued
 unit: currency
 additivity: additive
 
+# How a person refers to this metric. Without these the agent cannot tell that
+# "new account opening" means signups, and answers about something else entirely.
+aliases:
+  - revenue
+  - income
+  - earnings
+  - fees
+  - fee income
+  - top line
+  - money
+
 grain:
   time: daily
   entity: transaction

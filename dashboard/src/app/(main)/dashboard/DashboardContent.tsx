@@ -19,7 +19,11 @@ export default function DashboardContent() {
     kpiMetrics,
     aiInsights,
     funnelData,
+    timeRange,
   } = useDashboardData(persona);
+
+  // The range selector drives every panel, charts included.
+  const rangeDays = Number(String(timeRange).replace(/[^0-9]/g, '')) || 30;
 
   if (isLoading && kpiMetrics.length === 0) {
     return <DashboardSkeleton />;
@@ -38,7 +42,7 @@ export default function DashboardContent() {
 
       <section className="reveal" id="kpi-trends" aria-label="KPI Trends">
         <h3 className="mb-3">How each KPI moved</h3>
-        <KpiTrends persona={persona} />
+        <KpiTrends persona={persona} days={rangeDays} />
       </section>
 
       <section className="reveal" id="funnel-section" aria-label="Onboarding Funnel">

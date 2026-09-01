@@ -93,6 +93,13 @@ def resolve_metric(question: str, candidates: list[str], profile,
     Returns '' when nothing matches, which lets a tool fall back to the most material finding --
     the same one the dashboard is showing.
     """
+    # A declared alias settles it outright. Without this the singular resolver matched only on
+    # the id, so "new account opening" set no focus and the answer fell back to whatever moved
+    # most -- a different KPI from the one the question named.
+    aliased = resolve_metrics(question, list(candidates), limit=1)
+    if aliased:
+        return aliased[0]
+
     words = matching.tokens(question)
     best, best_score = "", 0
     for kpi_id in sorted(candidates):
@@ -128,6 +135,21 @@ def resolve_metric(question: str, candidates: list[str], profile,
     return ""
 
 
+def _alias_phrases(kpi_id: str) -> list[str]:
+    """Phrases that name this KPI: its id, its display name and its declared aliases."""
+    try:
+        from api.intelligence.contracts import load_declared
+        c = load_declared().get(kpi_id)
+    except Exception:
+        c = None
+    out = [kpi_id.replace("_", " ")]
+    if c is not None:
+        if c.name:
+            out.append(str(c.name).lower())
+        out.extend(c.aliases)
+    return [p for p in {x.strip().lower() for x in out} if p]
+
+
 def resolve_metrics(question: str, candidates: list[str], limit: int = 4) -> list[str]:
     """Every metric the question names, best match first -- what a comparison needs.
 
@@ -135,13 +157,22 @@ def resolve_metrics(question: str, candidates: list[str], limit: int = 4) -> lis
     the tenant is not a comparison, it is a coincidence.
     """
     words = matching.tokens(question)
+    q = " " + " ".join(words) + " "
     scored = []
     for kpi_id in sorted(candidates):
+        best = 0
+        # A declared alias wins outright, and a longer phrase beats a shorter one, so
+        # "new account opening" resolves to signups rather than to whatever shares one word.
+        for phrase in _alias_phrases(kpi_id):
+            ptoks = [t for t in matching.tokens(phrase) if len(t) > 2]
+            if ptoks and all(f" {t} " in q for t in ptoks):
+                best = max(best, 10 + len(ptoks))
         parts = [p for p in re.split(r"[_.\-]", kpi_id.lower()) if len(p) > 2]
         overlap = sum(1 for part in parts
                       if any(matching.token_matches(w, part) for w in words))
-        if overlap:
-            scored.append((overlap, -len(kpi_id), kpi_id))
+        best = max(best, overlap)
+        if best:
+            scored.append((best, -len(kpi_id), kpi_id))
     if not scored:
         return []
     # Only the metrics the question names as strongly as its best match. A partial hit on one
@@ -192,6 +223,10 @@ def _mentions_metric(ctx: Context) -> bool:
     A word shared by several ids -- "loan", "rate" -- still resolves nothing, so an ambiguous
     question is never silently answered about whichever metric sorted first.
     """
+    # Aliases count as naming it. Without this "new account opening" named nothing, the
+    # question was read as general, and the answer came back about a different KPI entirely.
+    if resolve_metrics(ctx.question, list(ctx.metric_ids)):
+        return True
     return (matching.names_any(ctx.question, ctx.metric_ids)
             or bool(matching.names_distinctly(ctx.question, ctx.metric_ids)))
 
@@ -243,8 +278,11 @@ def matched_metrics(ctx: Context) -> tuple[str, ...]:
 
     Tier 0 stays reachable -- when nothing governed matches, the discovered series are the answer.
     """
+    # A declared alias is the strongest signal there is, so it leads.
+    aliased = resolve_metrics(ctx.question, list(ctx.metric_ids))
     hits = matching.metrics_named(ctx.question, ctx.metric_ids)
-    return tuple(governed(hits) or hits)
+    merged = list(dict.fromkeys([*aliased, *hits]))
+    return tuple(governed(merged) or merged)
 
 
 def candidates(ctx: Context,

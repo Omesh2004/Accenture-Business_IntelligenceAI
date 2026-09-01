@@ -137,6 +137,12 @@ class Contract:
         return int((self.raw.get("quality") or {}).get("provisional_window_minutes", 0))
 
     @property
+    def aliases(self) -> list[str]:
+        """Phrases a person may use for this metric, from the contract."""
+        raw = self.raw.get("aliases") or []
+        return [str(a).lower() for a in raw if str(a).strip()]
+
+    @property
     def strategic_weight(self) -> float:
         """Business impact, 0..1. Absent means middling rather than unimportant."""
         try:

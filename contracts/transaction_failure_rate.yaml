@@ -7,6 +7,17 @@ formula: txn_failed / txn_total
 unit: ratio
 additivity: non-additive     # the RATE is not additive; its two counts are
 
+# How a person refers to this metric. Without these the agent cannot tell that
+# "new account opening" means signups, and answers about something else entirely.
+aliases:
+  - transaction failures
+  - failed transactions
+  - payment failures
+  - failure rate
+  - declines
+  - decline rate
+  - payment errors
+
 grain:
   time: daily
   entity: transaction
