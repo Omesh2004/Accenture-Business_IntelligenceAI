@@ -303,8 +303,12 @@ def comprehend(ctx: Context) -> understanding.Reading:
                           and top[0] >= MIN_SELECT_SCORE)
         # The capability the words reach for, when they reach for one clearly. Passed in so a
         # question that matches a capability but no metric is answered rather than refused.
-        wanted = top[1].name if (top[1] and top[0] >= MIN_SELECT_SCORE
-                                 and top[1].intent not in ("greeting", "help")) else ""
+        # The best REAL capability, not the best of everything: `describe_identity` ties with the
+        # catalogue on "what are you measuring", and taking the absolute top then discarded the
+        # match because that tool is conversational, leaving the question unreadable.
+        wanted = next((spec.name for value, spec in scored
+                       if value >= MIN_SELECT_SCORE
+                       and spec.intent not in ("greeting", "help")), "")
         ctx.reading = understanding.read(
             ctx.question, _mentions_metric(ctx), conversational,
             matched=matched_metrics(ctx), capability=wanted)

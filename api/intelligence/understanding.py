@@ -147,6 +147,16 @@ def read(question: str, names_metric: bool, conversational: bool,
                        reason="read as a request for one specific fact (%s)" % ", ".join(lookup),
                        cues=lookup)
 
+    # A question that names no metric, asks neither why nor what-to-do, and plainly reaches for
+    # one capability IS that request. "What are you measuring" was falling through to the
+    # business-cue branch and being read as a briefing, so it was answered with the most material
+    # movement instead of the catalogue it asked for.
+    if capability and not names_metric and not matched and not wants_why and not wants_action:
+        return Reading(
+            "lookup", wants=(ASSURANCE,), chain=(),
+            reason="read as a request the %s capability answers" % capability.replace("_", " "),
+            cues=[capability])
+
     # Which parts of the chain the question explicitly reaches for. A question that asks none of
     # them but IS about the business wants all of them -- that is what a briefing is.
     wants = [WHAT_CHANGED, WHEN]
@@ -193,12 +203,6 @@ def read(question: str, names_metric: bool, conversational: bool,
             reason="read as a follow-up about the most material movement, wanting %s"
                    % _describe(wants),
             cues=sorted(set(wants_why + wants_action)))
-
-    if capability:
-        return Reading(
-            "lookup", wants=(ASSURANCE,), chain=(),
-            reason="read as a request the %s capability answers" % capability.replace("_", " "),
-            cues=[capability])
 
     return Reading("unmatched", reason="the question names no metric and uses no vocabulary "
                                        "about this business")
