@@ -69,27 +69,31 @@ export default function KpiTrends(
   { tenant?: string; days?: number; persona?: string },
 ) {
   const [series, setSeries] = useState<Record<string, Series>>({});
+  const [allowed, setAllowed] = useState<string[]>(KPIS.map((k) => k.id));
+  const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
+      setLoading(true);
       const visible = await dashboardAPI.getVisibleKpis([tenant], days, persona);
-      const allowed = visible.length ? visible : KPIS.map((k) => k.id);
+      const permitted = visible.length ? visible : KPIS.map((k) => k.id);
+      if (!cancelled) setAllowed(permitted);
       const out: Record<string, Series> = {};
-      await Promise.all(KPIS.filter((k) => allowed.includes(k.id)).map(async (k) => {
+      await Promise.all(KPIS.filter((k) => permitted.includes(k.id)).map(async (k) => {
         const d = await dashboardAPI.getMetricSeries(tenant, k.id, days);
         if (!d) return;
         const points = toPoints(d, k.unit);
         out[k.id] = { points, kind: d.kind, anomalyFrom: anomalyStart(points) };
       }));
-      if (!cancelled) setSeries(out);
+      if (!cancelled) { setSeries(out); setLoading(false); }
     })();
     return () => { cancelled = true; };
   }, [tenant, days, persona]);
 
   return (
     <div className="reveal-stagger grid grid-cols-1 lg:grid-cols-2 gap-4">
-      {KPIS.filter((k) => series[k.id] !== undefined).map((k) => {
+      {KPIS.filter((k) => allowed.includes(k.id)).map((k) => {
         const s = series[k.id];
         const pts = s?.points || [];
         const last = pts.length ? pts[pts.length - 1].value : 0;
@@ -130,7 +134,9 @@ export default function KpiTrends(
                   </AreaChart>
                 </ResponsiveContainer>
               ) : (
-                <div className="h-full grid place-items-center text-sm text-gray-400">No series yet</div>
+                <div className="h-full grid place-items-center text-sm text-gray-400">
+                  {loading ? 'Loading series' : 'No series for this window'}
+                </div>
               )}
             </div>
             {moved && (

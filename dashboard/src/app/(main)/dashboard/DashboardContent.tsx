@@ -6,7 +6,6 @@ import React, { useState } from 'react';
 import { useDashboardData } from '@/hooks/useDashboard';
 import { DashboardSkeleton } from '@/components/Skeletons';
 import KPICard from '@/components/KPICard';
-import TrafficChart from '@/components/TrafficChart';
 import AIInsightsPanel from '@/components/AIInsightsPanel';
 import JourneyFunnelInsights from '@/components/JourneyFunnelInsights';
 import KpiTrends from '@/components/KpiTrends';
@@ -18,11 +17,8 @@ export default function DashboardContent() {
   const {
     isLoading,
     kpiMetrics,
-    trafficData,
     aiInsights,
     funnelData,
-    timeRange,
-    changeTimeRange,
   } = useDashboardData(persona);
 
   if (isLoading && kpiMetrics.length === 0) {
@@ -43,14 +39,6 @@ export default function DashboardContent() {
       <section className="reveal" id="kpi-trends" aria-label="KPI Trends">
         <h3 className="mb-3">How each KPI moved</h3>
         <KpiTrends persona={persona} />
-      </section>
-
-      <section className="reveal" id="traffic-section" aria-label="Traffic Analytics">
-        <TrafficChart
-          data={trafficData}
-          timeRange={timeRange}
-          onTimeRangeChange={changeTimeRange}
-        />
       </section>
 
       <section className="reveal" id="funnel-section" aria-label="Onboarding Funnel">

@@ -472,6 +472,14 @@ function toTrafficRows(data: unknown): Record<string, string | number>[] {
   }));
 }
 
+
+/** kyc_completion_rate -> KYC Completion Rate. */
+function prettyKpi(id: string): string {
+  if (!id) return 'Finding';
+  return id.split('_').map((w) => (w === 'kyc' ? 'KYC' : w.charAt(0).toUpperCase() + w.slice(1)))
+    .join(' ');
+}
+
 export const dashboardAPI = {
   /** Fetch KPI metrics for the dashboard header */
   /** The five governed KPIs. The API returns fundamentals; the card shape is built here. */
@@ -507,73 +515,33 @@ export const dashboardAPI = {
       return [];
     }
   },
+  /** The KYC funnel from gold.funnel_daily: stage, order, entered. */
   async getFunnelData(tenants: string[], range: string): Promise<FunnelStep[]> {
+    const days = Number(String(range).replace(/[^0-9]/g, '')) || 30;
+    const COLORS = ['#a100ff', '#8b19e8', '#7500c0', '#5d1a94', '#460073'];
     try {
-      const { APP_REGISTRY } = await import('./feature-map');
-      const canonicalStepMap: Record<string, string> = {
-        login: 'login.auth.success',
-        'login.auth.success': 'login.auth.success',
-        dashboard_view: 'dashboard.page.view',
-        'dashboard.page.view': 'dashboard.page.view',
-        transfer_started: 'transaction.pay_now.success',
-        transfer_completed: 'transaction.pay_now.success',
-        'transaction.pay_now.success': 'transaction.pay_now.success',
-        loan_applied: 'loan.applied.success',
-        'loan.applied.success': 'loan.applied.success',
-        kyc_started: 'loan.kyc_started.success',
-        kyc_completed: 'loan.kyc_completed.success',
-        'loan.kyc_started.success': 'loan.kyc_started.success',
-        'loan.kyc_completed.success': 'loan.kyc_completed.success',
-        authorizer_approved: 'transaction.pay_now.success',
-      };
-
-      const normalizeStepToken = (step: string): string =>
-        String(step || '')
-          .trim()
-          .toLowerCase()
-          .replace(/\s+/g, '_');
-
-      const toCanonicalStep = (step: string): string => {
-        const normalized = normalizeStepToken(step);
-        return canonicalStepMap[normalized] || normalized;
-      };
-
-      const selectedConfigs = tenants
-        .map((tenantId) => APP_REGISTRY[tenantId])
-        .filter(Boolean);
-
-      const fallbackSteps = ['login.auth.success', 'dashboard.page.view', 'transaction.pay_now.success', 'loan.applied.success'];
-      const mergedSteps = selectedConfigs.length > 0
-        ? Array.from(
-            new Set(
-              selectedConfigs
-                .flatMap((cfg) => cfg.funnelSteps || [])
-                .map((step) => toCanonicalStep(step))
-                .filter(Boolean)
-            )
-          )
-        : fallbackSteps;
-
-      const steps = mergedSteps.length >= 2 ? mergedSteps.join(',') : fallbackSteps.join(',');
-      
-      const days = Number(String(range).replace(/[^0-9]/g, '')) || 30;
-      const response = await apiClient.get<{ stages?: BackendFunnelStep[]; funnel?: BackendFunnelStep[] }>(
-        `/funnels?tenants=${encodeURIComponent(tenants.join(','))}&days=${days}&funnel_id=kyc_funnel`);
-      const funnel = response.data.funnel || [];
-      
-      return funnel.map((step: BackendFunnelStep) => ({
-        step: step.step,
-        label: step.event_name,
-        value: step.users_completed,
-        dropOff: step.drop_off_pct,
-        timeToNextStep: '-',
-        color: '#1a73e8',
-      }));
+      const response = await apiClient.get<{
+        stages?: { stage: string; order: number; entered: number }[];
+      }>(`/funnels?tenants=${encodeURIComponent(tenants.join(','))}&days=${days}&funnel_id=kyc_funnel`);
+      const stages = [...(response.data?.stages || [])].sort((a, b) => a.order - b.order);
+      return stages.map((st, i) => {
+        const value = Number(st.entered || 0);
+        const prev = i === 0 ? value : Number(stages[i - 1].entered || 0);
+        // Drop-off is measured against the stage before it, so the first stage never leaks.
+        const dropOff = i === 0 || prev <= 0 ? 0 : Math.round(((prev - value) / prev) * 100);
+        return {
+          label: String(st.stage || '').replace(/_/g, ' '),
+          value,
+          dropOff,
+          color: COLORS[i % COLORS.length],
+        };
+      });
     } catch (error) {
-      console.error('Failed to fetch funnel from backend', error);
+      console.error('Failed to fetch funnel data', error);
       return [];
     }
   },
+
 
   async getTenants(tenants?: string[], range: string = '7d'): Promise<Tenant[]> {
     try {
@@ -627,16 +595,30 @@ export const dashboardAPI = {
         // Cache cleared on success
         delete aiInsightsErrorCache[cacheKey];
         
-        return insights.map((insight: BackendInsight, ix: number) => ({
-          id: `ai-${ix}`,
-          type: insight.severity === 'high' ? 'warning' as const : insight.severity === 'medium' ? 'info' as const : 'success' as const,
-          title: insight.type || 'Backend Insight',
-          message: insight.message || String(insight),
-          impact: insight.severity === 'high' ? 'High' : 'Medium',
-          priority: insight.severity,
-          confidence: normalizeConfidenceLabel(insight.confidence) || confidenceFromSeverity(insight.severity),
-          actionRequired: insight.severity === 'high',
-        }));
+        // Signal Store rows: headline, kpi_id, trust_verdict, confidence. The old mapping read
+        // severity/message, which do not exist, so every card rendered "[object Object]".
+        type StoredInsight = {
+          insight_id?: string; kpi_id?: string; headline?: string; narrative?: string;
+          trust_verdict?: string; confidence?: number; abstained?: number; simulated?: number;
+        };
+        return (insights as unknown as StoredInsight[]).map((row, ix) => {
+          const conf = Number(row.confidence ?? 0);
+          const quarantined = row.trust_verdict && row.trust_verdict !== 'pass';
+          const abstained = Boolean(row.abstained);
+          return {
+            id: row.insight_id || `insight-${ix}`,
+            type: (quarantined ? 'warning' : abstained ? 'info' : 'success') as
+              'warning' | 'info' | 'success',
+            title: prettyKpi(row.kpi_id || ''),
+            message: row.headline || row.narrative || 'No finding recorded for this metric.',
+            impact: conf >= 0.7 ? 'High' : conf >= 0.4 ? 'Medium' : 'Low',
+            priority: (conf >= 0.7 ? 'high' : conf >= 0.4 ? 'medium' : 'low') as
+              'high' | 'medium' | 'low',
+            confidence: (conf >= 0.7 ? 'High' : conf >= 0.4 ? 'Medium' : 'Low') as
+              'High' | 'Medium' | 'Low',
+            actionRequired: Boolean(quarantined),
+          };
+        });
       } catch (err: unknown) {
         const status = (err as { response?: { status?: number } })?.response?.status;
         const message = (err as { message?: string })?.message || String(err);
