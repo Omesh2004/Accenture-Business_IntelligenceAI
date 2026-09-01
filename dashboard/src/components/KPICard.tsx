@@ -49,13 +49,13 @@ function KPICard({ metric }: KPICardProps) {
 
   return (
     <div
-      className="bg-white rounded-lg border border-gray-200 p-4 shadow-sm hover:border-gray-300 hover:shadow transition-all duration-200 flex flex-col justify-between h-full group"
+      className="lift bg-white rounded-xl border border-gray-200/90 p-5 shadow-sm hover:border-gray-300 flex flex-col justify-between h-full group"
       id={`kpi-card-${metric.id}`}
     >
       {/* Header: Label */}
       <div className="flex items-center gap-2 mb-3">
         <IconComponent className="w-4 h-4 text-gray-500" />
-        <span className="text-sm text-gray-600 font-medium">{metric.label}</span>
+        <span className="eyebrow">{metric.label}</span>
         {metric.simulated && (
           // A modelled figure must never render bare -- see CLAUDE.md "Never fabricate a
           // metric silently". The title carries the reason the API supplied.
@@ -70,7 +70,10 @@ function KPICard({ metric }: KPICardProps) {
 
       {/* Value + Trend */}
       <div className="flex justify-between items-end mt-1">
-        <span className="num text-3xl font-medium text-gray-900 tracking-tight">
+        <span
+          className="num count-in font-medium text-gray-900 tracking-tight"
+          style={{ fontSize: 'var(--step-3)', lineHeight: 1.1 }}
+        >
           {metric.value}
         </span>
         <div

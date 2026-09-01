@@ -27,16 +27,16 @@ export default function DashboardContent() {
   }
 
   return (
-    <div className="animate-in fade-in duration-500 space-y-6 relative">
+    <div className="reveal space-y-8 relative">
       <section id="kpi-section" aria-label="Key Performance Indicators">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="reveal-stagger grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {kpiMetrics.map((metric) => (
             <KPICard key={metric.id} metric={metric} />
           ))}
         </div>
       </section>
 
-      <section id="traffic-section" aria-label="Traffic Analytics">
+      <section className="reveal" id="traffic-section" aria-label="Traffic Analytics">
         <TrafficChart
           data={trafficData}
           timeRange={timeRange}
@@ -44,16 +44,16 @@ export default function DashboardContent() {
         />
       </section>
 
-      <section id="funnel-section" aria-label="Onboarding Funnel">
+      <section className="reveal" id="funnel-section" aria-label="Onboarding Funnel">
         <JourneyFunnelInsights data={funnelData} />
       </section>
 
-      <section id="insights-section" aria-label="AI Insights">
+      <section className="reveal" id="insights-section" aria-label="AI Insights">
         <AIInsightsPanel insights={aiInsights} />
       </section>
 
       <section id="secondary-kpi-section" aria-label="Secondary Metrics">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="reveal-stagger grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
           {secondaryKpiMetrics.map((metric) => (
             <KPICard key={metric.id} metric={metric} />
           ))}

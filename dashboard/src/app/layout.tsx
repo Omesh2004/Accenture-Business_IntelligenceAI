@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
-import { Inter, Instrument_Serif, JetBrains_Mono } from "next/font/google";
+import { Arimo, Instrument_Serif, JetBrains_Mono } from "next/font/google";
 import "./globals.css";
 import StoreProvider from "@/lib/StoreProvider";
 import AuthProvider from "@/components/AuthProvider";
@@ -9,13 +9,12 @@ import { Toaster } from "sonner";
 import QueryProvider from "@/lib/QueryProvider";
 
 /**
- * Root layout with Inter font, Redux provider, and global metadata.
- * Uses Inter for a clean, professional look matching enterprise dashboards.
+ * Three faces, each with one job: a Helvetica-metric grotesque for interface, an editorial serif
+ * for statements, a monospace for figures.
  */
-
-const inter = Inter({
+const ui = Arimo({
   subsets: ["latin"],
-  variable: "--font-inter",
+  variable: "--font-ui",
   display: "swap",
 });
 
@@ -58,7 +57,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${inter.variable} ${display.variable} ${mono.variable} h-full antialiased`}
+      className={`${ui.variable} ${display.variable} ${mono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col font-sans bg-gray-100/50">
         <AuthProvider>

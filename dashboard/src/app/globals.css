@@ -115,7 +115,7 @@
 }
 
 html {
-  font-family: var(--font-inter), -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: var(--font-ui), -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -186,16 +186,38 @@ h1, h2, h3, h4 {
   color: var(--color-text-primary);
 }
 
-h1 { font-size: 2rem;    line-height: 1.18; }
-h2 { font-size: 1.5rem;  line-height: 1.25; }
-h3 { font-size: 1.125rem; line-height: 1.35; }
-h4 { font-size: 1rem;    line-height: 1.4; }
+/* Golden-ratio scale. φ = 1.618 between major steps, √φ = 1.272 between minor ones, off a
+   16px base. Every size below is a step on it, so nothing is chosen by eye. Line height runs
+   the other way -- tighter as type grows -- because a display line needs less leading to hold
+   together, and body needs 1.618 to stay readable. */
+:root {
+  --step--2: 0.618rem;   /* 9.9px  — micro labels           */
+  --step--1: 0.786rem;   /* 12.6px — captions, eyebrow       */
+  --step-0:  1rem;       /* 16px   — body                    */
+  --step-1:  1.272rem;   /* 20.4px — lead, card titles       */
+  --step-2:  1.618rem;   /* 25.9px — h3                      */
+  --step-3:  2.058rem;   /* 32.9px — h2                      */
+  --step-4:  2.618rem;   /* 41.9px — h1                      */
+  --step-5:  3.330rem;   /* 53.3px — hero                    */
+  --leading-body: 1.618;
+  --leading-tight: 1.272;
+}
+
+h1 { font-size: var(--step-4); line-height: 1.12; }
+h2 { font-size: var(--step-3); line-height: 1.18; }
+h3 { font-size: var(--step-2); line-height: var(--leading-tight); }
+h4 { font-size: var(--step-1); line-height: 1.35; }
+
+.hero-title { font-size: var(--step-5); line-height: 1.05; letter-spacing: -0.022em; }
+.lead       { font-size: var(--step-1); line-height: 1.45; color: var(--color-text-secondary); }
+
+body { font-size: var(--step-0); line-height: var(--leading-body); }
 
 /* An opt-out for headings that are really labels — a card title inside a dense panel, where a
    serif at 13px reads as decoration rather than hierarchy. */
 h1.ui-label, h2.ui-label, h3.ui-label, h4.ui-label,
 .ui-label {
-  font-family: var(--font-inter), system-ui, sans-serif;
+  font-family: var(--font-ui), system-ui, sans-serif;
   font-weight: 600;
   letter-spacing: 0;
 }
@@ -215,10 +237,10 @@ h1.ui-label, h2.ui-label, h3.ui-label, h4.ui-label,
 }
 
 .eyebrow {
-  font-family: var(--font-inter), system-ui, sans-serif;
-  font-size: 0.65rem;
-  font-weight: 600;
-  letter-spacing: 0.2em;
+  font-family: var(--font-ui), system-ui, sans-serif;
+  font-size: var(--step--1);
+  font-weight: 700;
+  letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--color-text-tertiary);
 }
@@ -309,7 +331,7 @@ h1.ui-label, h2.ui-label, h3.ui-label, h4.ui-label,
 
 /* Clean up chart axis text */
 .recharts-text {
-  font-family: var(--font-inter), sans-serif !important;
+  font-family: var(--font-ui), sans-serif !important;
 }
 
 /* ─────────────── Focus States ─────────────── */
@@ -350,4 +372,102 @@ h1.ui-label, h2.ui-label, h3.ui-label, h4.ui-label,
 ::selection {
   background-color: rgba(37, 99, 235, 0.15);
   color: var(--color-text-primary);
+}
+
+/* ─────────────── Motion ───────────────
+   Standard ease-out reads as a web page. These are the two curves a product film uses: a soft
+   overshoot for things arriving, and a long decelerate for things settling. Everything respects
+   prefers-reduced-motion at the bottom. */
+:root {
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-fast: 260ms;
+  --dur-base: 520ms;
+  --dur-slow: 900ms;
+}
+
+/* Arrive: rise, sharpen and settle. The blur is what makes it read as depth rather than a slide. */
+@keyframes riseIn {
+  from { opacity: 0; transform: translateY(14px) scale(0.985); filter: blur(6px); }
+  to   { opacity: 1; transform: translateY(0)    scale(1);     filter: blur(0); }
+}
+
+/* A light sweep across a surface, once, as it lands. */
+@keyframes sheen {
+  from { background-position: -160% 0; }
+  to   { background-position: 260% 0; }
+}
+
+@keyframes floatY {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-5px); }
+}
+
+/* A number that counts is a number a reader watches. Used with the reveal on KPI figures. */
+@keyframes countPulse {
+  0%   { opacity: 0; transform: translateY(6px); }
+  60%  { opacity: 1; transform: translateY(-1px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+.reveal        { animation: riseIn var(--dur-base) var(--ease-out-expo) both; }
+.reveal-spring { animation: riseIn var(--dur-base) var(--ease-spring) both; }
+.count-in      { animation: countPulse var(--dur-base) var(--ease-out-expo) both; }
+.float-slow    { animation: floatY 6s ease-in-out infinite; }
+
+/* Staggered entrance on the golden ratio: each child waits φ⁻¹ of the previous gap, so the
+   cadence accelerates instead of ticking metronomically. */
+.reveal-stagger > *          { animation: riseIn var(--dur-base) var(--ease-out-expo) both; }
+.reveal-stagger > *:nth-child(1) { animation-delay: 0ms; }
+.reveal-stagger > *:nth-child(2) { animation-delay: 62ms; }
+.reveal-stagger > *:nth-child(3) { animation-delay: 100ms; }
+.reveal-stagger > *:nth-child(4) { animation-delay: 162ms; }
+.reveal-stagger > *:nth-child(5) { animation-delay: 200ms; }
+.reveal-stagger > *:nth-child(6) { animation-delay: 262ms; }
+.reveal-stagger > *:nth-child(7) { animation-delay: 300ms; }
+.reveal-stagger > *:nth-child(8) { animation-delay: 362ms; }
+
+/* Surfaces that lift toward the pointer. The shadow grows faster than the translate, which is
+   what makes it feel like weight rather than a hover state. */
+.lift {
+  transition: transform var(--dur-fast) var(--ease-out-expo),
+              box-shadow var(--dur-fast) var(--ease-out-expo),
+              border-color var(--dur-fast) ease;
+  will-change: transform;
+}
+.lift:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 14px 34px -12px rgb(15 23 42 / 0.20), 0 4px 10px -6px rgb(15 23 42 / 0.12);
+}
+
+/* One sheen as a premium surface lands. */
+.sheen-once {
+  background-image: linear-gradient(100deg,
+    transparent 38%, rgb(255 255 255 / 0.55) 50%, transparent 62%);
+  background-size: 220% 100%;
+  background-repeat: no-repeat;
+  animation: sheen 1.5s var(--ease-out-expo) 380ms 1 both;
+}
+
+/* An underline that draws itself, for section headings. */
+.rule-draw {
+  position: relative;
+}
+.rule-draw::after {
+  content: "";
+  position: absolute;
+  left: 0; bottom: -0.4em;
+  height: 2px; width: 0;
+  background: linear-gradient(90deg, var(--color-accent, #1a73e8), transparent);
+  animation: ruleGrow var(--dur-slow) var(--ease-out-expo) 200ms forwards;
+}
+@keyframes ruleGrow { to { width: 3.2rem; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal, .reveal-spring, .count-in, .float-slow,
+  .reveal-stagger > *, .sheen-once, .rule-draw::after {
+    animation: none !important;
+  }
+  .lift { transition: none; }
+  .lift:hover { transform: none; }
 }
