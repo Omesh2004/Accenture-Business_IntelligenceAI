@@ -22,7 +22,7 @@ router.get("/extract/accounts", async (req: Request, res: Response): Promise<voi
   try {
     const { since, sinceId, limit } = parseParams(req);
     const rows = await prisma.account.findMany({
-      where: keysetWhere("createdOn", since, sinceId),
+      where: keysetWhere("createdOn", since, sinceId, "accNo"),
       orderBy: [{ createdOn: "asc" }, { accNo: "asc" }],
       take: limit,
       include: { customer: true, branch: true },
@@ -31,7 +31,7 @@ router.get("/extract/accounts", async (req: Request, res: Response): Promise<voi
       entity: "accounts",
       count: rows.length,
       watermark: nextWatermark(rows.map((r) => ({ ts: r.createdOn })), since),
-      cursor_id: nextCursorId(rows, sinceId),
+      cursor_id: nextCursorId(rows.map((r) => ({ id: r.accNo })), sinceId),
       has_more: rows.length === limit,
       records: rows.map((a) => ({
         account_no: a.accNo,
@@ -88,6 +88,39 @@ router.get("/extract/customers", async (req: Request, res: Response): Promise<vo
 
 
 // ─── Source C: branch operations and macro environment ─────────────────────
+// Track B's pipeline/extract/core_banking.py extracts campaigns, and silver.dim_campaign
+// feeds /metric/campaigns -- the calendar evidence the abstain scenario rests on.
+router.get("/extract/campaigns", async (req: Request, res: Response): Promise<void> => {
+  if (!requireExtractToken(req, res)) return;
+  try {
+    const { since, limit } = parseParams(req);
+    const rows = await prisma.campaign.findMany({
+      where: { updatedOn: { gt: since } },
+      orderBy: [{ updatedOn: "asc" }, { id: "asc" }],
+      take: limit,
+    });
+    res.json({
+      entity: "campaigns",
+      count: rows.length,
+      watermark: nextWatermark(rows.map((r) => ({ ts: r.updatedOn })), since),
+      has_more: rows.length === limit,
+      records: rows.map((c) => ({
+        campaign_id: c.id,
+        tenant_id: analyticsTenant(c.tenantId || "bank_a"),
+        name: c.name,
+        channel: c.channel,
+        target_segment: c.targetSegment,
+        start_date: c.startDate.toISOString().slice(0, 10),
+        end_date: c.endDate.toISOString().slice(0, 10),
+        spend: c.spend,
+        updated_at: c.updatedOn.toISOString(),
+      })),
+    });
+  } catch (err) {
+    res.status(500).json({ error: String(err) });
+  }
+});
+
 router.get("/extract/branches", async (req: Request, res: Response): Promise<void> => {
   if (!requireExtractToken(req, res)) return;
   try {

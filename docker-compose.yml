@@ -316,6 +316,8 @@ services:
       # Hot-reload: mount source code (but NOT node_modules)
       - ./nexabank/backend/src:/app/src
       - ./nexabank/backend/prisma:/app/prisma
+      # The generator writes the ground-truth fixture the gates score against.
+      - ./fixtures:/app/fixtures
     restart: unless-stopped
 
   nexabank-frontend:
