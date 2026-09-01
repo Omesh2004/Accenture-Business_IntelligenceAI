@@ -203,9 +203,10 @@ class Orchestrator:
 
         # ---- 05 Causal -----------------------------------------------------
         t0 = time.perf_counter()
-        cau = causal_decide.run_causal(ctx, anomaly, loc.causes, upstream_anomaly)
+        cau = causal_decide.run_causal(ctx, anomaly, loc.causes, upstream_anomaly, self.metrics)
         store.write_causal_effect(causal_decide.to_effect_row(ctx, anomaly, cau))
-        self._record_run(ctx, "causal", "rule", t0, inputs=cau.rung)
+        self._record_run(ctx, "causal", "stats" if cau.method != "rule" else "rule", t0,
+                         inputs=cau.rung)
 
         # ---- 06 Decide -----------------------------------------------------
         t0 = time.perf_counter()

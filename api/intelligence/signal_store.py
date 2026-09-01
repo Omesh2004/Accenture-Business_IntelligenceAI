@@ -121,11 +121,14 @@ def write_causal_effect(r: dict) -> int:
         "causal_effects",
         ["effect_id", "investigation_id", "anomaly_id", "tenant_id", "kpi_id", "intervention",
          "rung", "effect_point", "effect_lower", "effect_upper", "method", "assumptions_met",
-         "degraded_reason", "engine_type"],
+         "degraded_reason", "counterfactual", "observed", "placebo_effect", "control_cells",
+         "engine_type", "_version"],
         [[r["effect_id"], r["investigation_id"], r["anomaly_id"], r["tenant_id"], r["kpi_id"],
           r["intervention"], r["rung"], round6(r["effect_point"]), round6(r["effect_lower"]),
           round6(r["effect_upper"]), r["method"], int(r.get("assumptions_met", 1)),
-          r.get("degraded_reason", ""), r.get("engine_type", "stats")]],
+          r.get("degraded_reason", ""), round6(r.get("counterfactual", 0.0)),
+          round6(r.get("observed", 0.0)), round6(r.get("placebo_effect", 0.0)),
+          int(r.get("control_cells", 0)), r.get("engine_type", "stats"), datetime.utcnow()]],
     )
 
 

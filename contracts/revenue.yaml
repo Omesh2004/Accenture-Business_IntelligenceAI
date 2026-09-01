@@ -137,6 +137,8 @@ forecast:
 
 causal:
   enabled: true
+  # Revenue stays capped at corroborated_cause. Its pro_revenue line is a headcount times a
+  # fixed price, so a dollar effect there would be an artefact of the constant, not a measurement.
   evidence_rungs: [association, attribution, corroborated_cause]
   interventions: [pricing_change, campaign, payment_provider_change]
   control_dimensions: [channel, txn_type]

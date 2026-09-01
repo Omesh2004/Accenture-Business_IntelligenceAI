@@ -122,7 +122,10 @@ forecast:
 
 causal:
   enabled: true
-  evidence_rungs: [association, attribution, corroborated_cause]
+  # estimated_effect is reachable because this KPI counts an additive event over segments that
+  # give a control group. Localize names the treated cells, the unaffected cells give the trend
+  # they would have followed, and a placebo window tests that assumption before any claim.
+  evidence_rungs: [association, attribution, corroborated_cause, estimated_effect]
   interventions: [payment_provider_change, release, capacity_change]
   control_dimensions: [channel, txn_type]
   degrade_to: attribution
