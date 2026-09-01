@@ -55,7 +55,7 @@ def _loads(value: Any, default):
 
 
 def latest_insight(tenant_id: str, persona: str = "analyst",
-                   kpi_id: str | None = None) -> dict | None:
+                   kpi_id: str | None = None, window_days: int | None = None) -> dict | None:
     """The insight most worth reading for a tenant/persona, with evidence and engine breakdown.
 
     `generated_at` is pinned to the window end for determinism, so every insight in a sweep shares
@@ -68,6 +68,7 @@ def latest_insight(tenant_id: str, persona: str = "analyst",
     sql = (
         "SELECT i.* FROM ("
         f"  SELECT * FROM {DB}.insights FINAL WHERE tenant_id = %(t)s AND persona = %(p)s "
+        + ("  AND window_days = %(w)s " if window_days else "")
         + ("  AND kpi_id = %(k)s " if kpi_id else "")
         + ") AS i LEFT JOIN ("
           f"  SELECT anomaly_id, max(materiality) AS materiality FROM {DB}.anomalies FINAL "
@@ -79,6 +80,8 @@ def latest_insight(tenant_id: str, persona: str = "analyst",
     params = {"t": tenant_id, "p": persona, "declared": declared}
     if kpi_id:
         params["k"] = kpi_id
+    if window_days:
+        params["w"] = int(window_days)
     rows = _ch().query(sql, params)
     if not rows:
         return None
@@ -94,24 +97,46 @@ def latest_insight(tenant_id: str, persona: str = "analyst",
     return row
 
 
-def list_insights(tenant_id: str, persona: str = "analyst", limit: int = 20) -> list[dict]:
+def list_insights(tenant_id: str, persona: str = "analyst", limit: int = 20,
+                  window_days: int | None = None) -> list[dict]:
     # One CURRENT insight per KPI. Every sweep writes a row keyed on its anomaly, and
     # generated_at is the window end rather than the run time, so the table accumulates rows
     # that cannot be ordered by time. A finding whose anomaly no longer exists is stale, so
     # live findings rank first and LIMIT 1 BY keeps one per KPI.
+    # The window comes along with the finding. Without it a chart can say a KPI moved but not
+    # WHERE it moved, so it either shades nothing or has to guess from the shape of the line.
     rows = _ch().query(
         f"SELECT insight_id, investigation_id, kpi_id, anomaly_id, persona, generated_at, "
-        f"trust_verdict, headline, confidence, simulated, abstained, verifier_pass FROM ("
-        f"  SELECT i.insight_id, i.investigation_id, i.kpi_id, i.anomaly_id, i.persona, "
-        f"         i.generated_at, i.trust_verdict, i.headline, i.confidence, i.simulated, "
-        f"         i.abstained, i.verifier_pass, if(a.anomaly_id != '', 1, 0) AS live "
+        f"trust_verdict, headline, confidence, simulated, abstained, verifier_pass, "
+        f"window_start, window_end, direction, severity, magnitude, baseline, observed, "
+        f"band_lower, band_upper FROM ("
+        f"  SELECT i.insight_id AS insight_id, i.investigation_id AS investigation_id, "
+        f"         i.kpi_id AS kpi_id, i.anomaly_id AS anomaly_id, i.persona AS persona, "
+        f"         i.generated_at AS generated_at, i.trust_verdict AS trust_verdict, "
+        f"         i.headline AS headline, i.confidence AS confidence, "
+        f"         i.simulated AS simulated, i.abstained AS abstained, "
+        f"         i.verifier_pass AS verifier_pass, a.window_start AS window_start, "
+        f"         a.window_end AS window_end, a.direction AS direction, a.severity AS severity, "
+        f"         a.magnitude AS magnitude, a.baseline AS baseline, a.observed AS observed, "
+        f"         f.lower AS band_lower, f.upper AS band_upper, "
+        f"         if(a.anomaly_id != '', 1, 0) AS live "
         f"  FROM {DB}.insights AS i FINAL "
-        f"  LEFT JOIN (SELECT anomaly_id FROM {DB}.anomalies FINAL WHERE tenant_id = %(t)s) AS a "
+        f"  LEFT JOIN (SELECT anomaly_id, window_start, window_end, direction, severity, "
+        f"                    magnitude, baseline, observed "
+        f"             FROM {DB}.anomalies FINAL WHERE tenant_id = %(t)s) AS a "
         f"    ON i.anomaly_id = a.anomaly_id "
+        # The band the movement was scored against. A chart can then mark the DAYS that fell
+        # outside it, instead of shading the whole scored window and saying nothing.
+        f"  LEFT JOIN (SELECT kpi_id, as_of, horizon_days, argMax(lower, as_of) AS lower, "
+        f"                    argMax(upper, as_of) AS upper "
+        f"             FROM {DB}.forecasts FINAL WHERE tenant_id = %(t)s "
+        f"             GROUP BY kpi_id, as_of, horizon_days) AS f "
+        f"    ON f.kpi_id = i.kpi_id AND f.as_of = a.window_start "
         f"  WHERE i.tenant_id = %(t)s AND i.persona = %(p)s"
-        f") ORDER BY kpi_id ASC, live DESC, generated_at DESC, insight_id ASC "
+        + ("  AND i.window_days = %(w)s " if window_days else "")
+        + f") ORDER BY kpi_id ASC, live DESC, generated_at DESC, insight_id ASC "
         f"LIMIT 1 BY kpi_id LIMIT %(n)s",
-        {"t": tenant_id, "p": persona, "n": int(limit)},
+        {"t": tenant_id, "p": persona, "n": int(limit), "w": int(window_days or 0)},
     )
     return [dict(r) for r in rows]
 

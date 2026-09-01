@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 
 from api.intelligence import (config, gates, llm_client, personas, planner, reader, tools,
                               understanding, visuals)
+from api.intelligence.stages import llm_chat
 from api.intelligence.stages.narrate import ClaimSet, verify
 from api.middleware import hidden_kpis
 
@@ -151,7 +152,8 @@ class Result:
         }
 
 
-def _build_context(tenant_id: str, question: str, persona: str, trace: Trace) -> planner.Context:
+def _build_context(tenant_id: str, question: str, persona: str, trace: Trace,
+                   window_days: int = 0) -> planner.Context:
     """Memory the planner reasons over: which metrics exist and which one is in play.
 
     This is context assembly, not a step of a workflow -- the planner is free to ignore it, call
@@ -159,14 +161,16 @@ def _build_context(tenant_id: str, question: str, persona: str, trace: Trace) ->
     """
     profile = personas.get(persona)
     try:
-        rows = reader.list_insights(tenant_id, persona, limit=config.MAX_KPIS_PER_SWEEP)
+        rows = reader.list_insights(tenant_id, persona, limit=config.MAX_KPIS_PER_SWEEP,
+                                    window_days=window_days)
     except Exception as exc:                                        # noqa: BLE001
         trace.add("Load tenant context", "reader.list_insights", "unavailable: %s" % exc,
                   status="failed", kind="observe")
         rows = []
     metric_ids = sorted({r["kpi_id"] for r in rows})
     moved_ids = sorted({r["kpi_id"] for r in rows if r.get("anomaly_id")})
-    ctx = planner.Context(tenant_id, question, persona, metric_ids, moved_ids=moved_ids)
+    ctx = planner.Context(tenant_id, question, persona, metric_ids, moved_ids=moved_ids,
+                          window_days=window_days)
     ctx.focus_metric = planner.resolve_metric(question, metric_ids, profile, moved_ids)
     trace.add("Resolve what the question is about", "reader.list_insights",
               "%d metric(s) visible to %s, %d currently outside band%s"
@@ -211,7 +215,7 @@ def _execute(plan: planner.Plan, ctx: planner.Context,
     results: dict[int, tools.ToolResult] = {}
     if runnable:
         with ThreadPoolExecutor(max_workers=min(MAX_PARALLEL, len(runnable))) as pool:
-            futures = {pool.submit(tools.run, c.tool, a, ctx.persona): i
+            futures = {pool.submit(tools.run, c.tool, a, ctx.persona, ctx.window_days): i
                        for i, (c, a) in enumerate(runnable)}
             for future, i in futures.items():
                 results[i] = future.result()
@@ -410,8 +414,13 @@ def _rail_for(observations: list[planner.Observation], verified: bool | None,
     return gates.rail_state(engaged, reached=verified is not None, restricted=restricted)
 
 
-def run(tenant_id: str, question: str, persona: str, engine: str = "auto", emit=None) -> Result:
-    """Answer a question. `emit`, when given, receives each trace step as it happens."""
+def run(tenant_id: str, question: str, persona: str, engine: str = "auto", emit=None,
+        window_days: int = 0) -> Result:
+    """Answer a question. `emit`, when given, receives each trace step as it happens.
+
+    `window_days` is the caller's standing choice, normally the dashboard's range dropdown. A
+    question that names its own period overrides it for this turn.
+    """
     persona = persona if persona in config.PERSONAS else config.DEFAULT_PERSONA
     profile = personas.get(persona)
     trace = Trace(emit)
@@ -429,7 +438,32 @@ def run(tenant_id: str, question: str, persona: str, engine: str = "auto", emit=
                                 "; no model reachable, planning deterministically"),
               kind="reason")
 
-    ctx = _build_context(tenant_id, question, persona, trace)
+    # The dropdown is the standing choice; a question that names a period wins for this turn.
+    window_days = planner.resolve_window(question, window_days or config.WINDOW_DAYS,
+                                         config.WINDOW_CHOICES)
+    trace.add("Settle the period", "planner.resolve_window",
+              "answering over the last %d days" % window_days, kind="reason")
+    ctx = _build_context(tenant_id, question, persona, trace, window_days)
+
+    # A courtesy is not a question. "nice, thank you" used to reach the greeting tool and come
+    # back as the full capability spiel, which is what made the agent read as a form rather than
+    # an assistant. Answer it as a person would and stop; no tool, no claim set, no numbers.
+    social = llm_chat.looks_social(question)
+    if social:
+        profile = personas.get(persona)
+        flagged = [tools.pretty_name(k) for k in ctx.moved_ids][:3]
+        fallback = (profile.greeting if social in ("greeting", "help")
+                    else "Happy to help. Ask whenever you want to look at something.")
+        text, tin, tout = llm_chat.reply(
+            social, question, profile.label, profile.remit, flagged,
+            profile.examples[0] if profile.examples else "", fallback)
+        trace.add("Answer conversationally", "llm_chat.reply",
+                  "a %s turn: no metric was read and no figure is claimed" % social,
+                  kind="synthesize")
+        return Result(answer=text, persona=persona, persona_label=profile.label,
+                      trace=trace.steps, engine_type="llm" if tout else "rule",
+                      tokens_in=tin, tokens_out=tout, verifier_pass=True,
+                      suggestions=list(profile.examples[:2]))
 
     # Comprehension comes BEFORE capability selection: what kind of question this is decides which
     # stages run, rather than which cue words the user happened to use.

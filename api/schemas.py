@@ -18,3 +18,5 @@ class AskRequest(BaseModel):
     question: str
     persona: str | None = None
     tenant_id: str | None = None
+    #: The page's range selector. A question naming its own period overrides it for that turn.
+    days: int | None = None

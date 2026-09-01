@@ -49,6 +49,11 @@ PSQUEEZE_MIN_LEAVES = int(_f("INTEL_PSQUEEZE_MIN_LEAVES", 4))
 
 # Difference-in-differences. Too few unaffected cells and there is no control group to compare
 # against; a placebo effect above this share of the estimate means parallel trends has failed.
+# The windows every sweep scores. A reader asking about 30 or 90 days needs a finding that was
+# actually measured over 30 or 90 days, not the 7-day one relabelled.
+WINDOW_CHOICES = tuple(int(x) for x in
+                       os.getenv("INTELLIGENCE_WINDOW_CHOICES", "7,30,90").split(",") if x.strip())
+
 DID_MIN_CONTROL_CELLS = _i("INTEL_DID_MIN_CONTROL_CELLS", 3)
 DID_PLACEBO_MAX_RATIO = _f("INTEL_DID_PLACEBO_MAX_RATIO", 0.35)
 # Share of the recent window that must move the same way for a change point.
@@ -119,8 +124,10 @@ LLM_MAX_ATTEMPTS = _i("INTEL_LLM_MAX_ATTEMPTS", 2)
 # strictly more informative, because it states the band.
 LLM_NARRATE_SECTIONS = _s("INTEL_LLM_NARRATE_SECTIONS", "0") == "1"
 LLM_TIMEOUT_S = _i("INTEL_LLM_TIMEOUT_S", 60)
-LLM_MAX_TOKENS = _i("INTEL_LLM_MAX_TOKENS", 400)
-LLM_TEMPERATURE = _f("INTEL_LLM_TEMPERATURE", 0.0)
+# Room to explain. The cap is a runaway guard, not a style choice.
+LLM_MAX_TOKENS = _i("INTEL_LLM_MAX_TOKENS", 1600)
+# A little warmth so the prose reads as writing. Numbers come from claims, not sampling.
+LLM_TEMPERATURE = _f("INTEL_LLM_TEMPERATURE", 0.3)
 LLM_SEED = _i("INTEL_LLM_SEED", 1337)
 LLM_DISCOVERY_TIMEOUT_S = _i("INTEL_LLM_DISCOVERY_TIMEOUT_S", 5)
 

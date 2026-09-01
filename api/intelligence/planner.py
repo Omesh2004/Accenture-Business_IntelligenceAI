@@ -75,10 +75,48 @@ class Context:
     moved_ids: list[str] = field(default_factory=list)
     # How the question was read. Cached so comprehension happens once per run.
     reading: "understanding.Reading | None" = None
+    #: The window this answer is scored over, in days. The caller's default until the question
+    #: names one of its own.
+    window_days: int = 7
 
     @property
     def profile(self):
         return personas.get(self.persona)
+
+
+_WINDOW_WORDS = {
+    "today": 1, "yesterday": 1, "this week": 7, "last week": 7, "past week": 7,
+    "this month": 30, "last month": 30, "past month": 30, "this quarter": 90,
+    "last quarter": 90, "past quarter": 90, "this year": 90,
+}
+
+_WINDOW_RE = re.compile(r"(?:last|past|previous|over the last|in the last)?\s*"
+                        r"(\d{1,3})\s*(day|days|week|weeks|month|months)", re.I)
+
+
+def resolve_window(question: str, default_days: int, choices) -> int:
+    """The window the question asks for, else the caller's default.
+
+    The dropdown is the standing instruction and the question overrides it for that turn only,
+    which is how a person reads it: "and over the last 90 days?" changes this answer, not the page.
+    A window nobody swept cannot be answered honestly, so the request is snapped to the nearest
+    one that was.
+    """
+    q = (question or "").lower()
+    wanted = None
+    for phrase, days in _WINDOW_WORDS.items():
+        if phrase in q:
+            wanted = days
+            break
+    m = _WINDOW_RE.search(q)
+    if m:
+        n = int(m.group(1))
+        unit = m.group(2).lower()
+        wanted = n * (7 if unit.startswith("week") else 30 if unit.startswith("month") else 1)
+    if wanted is None:
+        wanted = default_days
+    opts = list(choices) or [default_days]
+    return min(opts, key=lambda c: (abs(c - wanted), c))
 
 
 def resolve_metric(question: str, candidates: list[str], profile,

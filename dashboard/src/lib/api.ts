@@ -480,6 +480,18 @@ function prettyKpi(id: string): string {
     .join(' ');
 }
 
+/** The window the engine actually scored, so a chart marks it rather than guessing. */
+export interface MovedWindow {
+  start: string; end: string; direction: number; severity: string;
+  /** The expected range the movement was scored against, when one was recorded. */
+  lower?: number; upper?: number;
+}
+
+interface RawInsightWindow {
+  kpi_id: string; anomaly_id?: string; window_start?: string; window_end?: string;
+  direction?: number; severity?: string; band_lower?: number; band_upper?: number;
+}
+
 export const dashboardAPI = {
   /** Fetch KPI metrics for the dashboard header */
   /** The five governed KPIs. The API returns fundamentals; the card shape is built here. */
@@ -832,13 +844,29 @@ export const dashboardAPI = {
   },
 
   /** KPI ids the engine recorded an anomaly for, so a chart can mark a real movement. */
-  async getMovedKpis(tenants: string[]): Promise<string[]> {
+  async getMovedKpis(tenants: string[], days?: number): Promise<Record<string, MovedWindow>> {
     try {
-      const r = await apiClient.get<{ insights?: { kpi_id: string; anomaly_id?: string }[] }>(
-        `/intelligence/insights?tenants=${encodeURIComponent(tenants.join(','))}`);
-      return (r.data?.insights || []).filter((i) => i.anomaly_id).map((i) => i.kpi_id);
+      // The window must be the one scored over the range on screen, or the shading marks a
+      // period the chart is not even showing.
+      const r = await apiClient.get<{ insights?: RawInsightWindow[] }>(
+        `/intelligence/insights?tenants=${encodeURIComponent(tenants.join(','))}`
+        + (days ? `&days=${days}` : ''));
+      const out: Record<string, MovedWindow> = {};
+      for (const i of r.data?.insights || []) {
+        if (!i.anomaly_id || !i.window_start) continue;
+        out[i.kpi_id] = {
+          // Dates only. The series is day-grain, so a timestamp would never match a tick.
+          start: String(i.window_start).slice(0, 10),
+          end: String(i.window_end || '').slice(0, 10),
+          direction: Number(i.direction ?? 0),
+          severity: String(i.severity || ''),
+          lower: i.band_lower == null ? undefined : Number(i.band_lower),
+          upper: i.band_upper == null ? undefined : Number(i.band_upper),
+        };
+      }
+      return out;
     } catch {
-      return [];
+      return {};
     }
   },
 
@@ -957,12 +985,12 @@ export const dashboardAPI = {
   /** Ask the agent a question. Persona is resolved server-side; tenant scoping is a query param
    *  because RBACMiddleware reads tenant from the query string, not the body. */
   async askIntelligence(
-    tenants: string[], question: string, persona?: string,
+    tenants: string[], question: string, persona?: string, days?: number,
   ): Promise<AgentAnswer | null> {
     try {
       const response = await apiClient.post<AgentAnswer>(
         `/intelligence/ask?tenants=${encodeURIComponent(tenants.join(','))}`,
-        persona ? { question, persona } : { question });
+        { question, ...(persona ? { persona } : {}), ...(days ? { days } : {}) });
       return response.data;
     } catch (error) {
       console.error('Failed to ask the intelligence agent', error);
@@ -1007,6 +1035,7 @@ export const dashboardAPI = {
       onError?: (detail: string) => void;
     },
     signal?: AbortSignal,
+    days?: number,
   ): Promise<void> {
     const headers = { 'Content-Type': 'application/json', ...(await rbacHeaders()) };
     const url =
@@ -1014,7 +1043,8 @@ export const dashboardAPI = {
     const response = await fetch(url, {
       method: 'POST',
       headers,
-      body: JSON.stringify(persona ? { question, persona } : { question }),
+      body: JSON.stringify(
+        { question, ...(persona ? { persona } : {}), ...(days ? { days } : {}) }),
       signal,
     });
     if (!response.ok || !response.body) {

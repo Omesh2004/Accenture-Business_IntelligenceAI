@@ -77,7 +77,7 @@ def build_prompt(claim_set: narrate.ClaimSet, persona: str, template_body: str) 
                    for c in claim_set.claims.values()},
     }
     return (
-        f"Rewrite one short analytics narrative for this reader.\n\n"
+        f"Explain this analytics finding to the reader below, in their language.\n\n"
         f"READER: {profile.label}\n"
         f"THEIR REMIT: {profile.remit}\n"
         f"WHAT THEY NEED: {_DEPTH_BRIEF.get(depth, _DEPTH_BRIEF['standard'])}\n\n"
@@ -86,9 +86,16 @@ def build_prompt(claim_set: narrate.ClaimSet, persona: str, template_body: str) 
         "2. Do NOT compute, round, sum, convert or derive any new number.\n"
         "3. Do NOT invent percentages, dates or counts.\n"
         "4. Do NOT add a finding, a cause or a recommendation that is not already in the "
-        "deterministic rendering. You may re-order and re-word it for this reader; you may not "
-        "extend it.\n"
-        f"5. {_LENGTH.get(depth, _LENGTH['standard'])} No preamble, no markdown, no lists.\n\n"
+        "deterministic rendering. You may not extend WHAT WAS FOUND.\n"
+        "5. You SHOULD explain what the finding means: what the metric measures, why a "
+        "movement of this shape matters, what a named segment implies, what the method "
+        "establishes and what it leaves open. Explanation is not a new finding, and it is "
+        "what the reader is asking for. Where the rendering abstains or calls the evidence "
+        "thin, explain WHY rather than glossing over it.\n"
+        "6. Write as a careful analyst talking to a colleague: plain sentences, no jargon "
+        "left undefined, no filler, no restating the question back.\n"
+        f"7. {_LENGTH.get(depth, _LENGTH['standard'])} No markdown, no bullet lists and no "
+        "headings; plain paragraphs separated by a blank line.\n\n"
         f"SIGNAL CARDS:\n{json.dumps(cards, sort_keys=True, indent=2)}\n\n"
         f"A correct deterministic rendering:\n{template_body}\n\n"
         'Return only JSON: {"headline": "...", "narrative": "..."}'

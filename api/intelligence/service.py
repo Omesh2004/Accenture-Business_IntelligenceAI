@@ -73,11 +73,15 @@ async def run_investigation_sweep(interval_minutes: int = None) -> None:
                 # movement to explain" -- the verdict came from one run and the band from the
                 # next. A decision and the band it was made against have to come from the same
                 # read, and the only way to guarantee that is to take both here.
-                results = orch.sweep(tenant, current_window(), dataset=DATASET,
-                                     run_forecast=True)
-                fired = sum(1 for r in results if r.get("anomaly"))
-                logger.info("sweep: tenant=%s investigations=%d anomalies=%d",
-                            tenant, len(results), fired)
+                # One pass per offered window. The same movement looks different over a week
+                # and over a quarter, and a reader who picks 90 days is owed a finding that was
+                # actually scored over 90 days.
+                for days in config.WINDOW_CHOICES:
+                    results = orch.sweep(tenant, current_window(days), dataset=DATASET,
+                                         run_forecast=True)
+                    fired = sum(1 for r in results if r.get("anomaly"))
+                    logger.info("sweep: tenant=%s window=%dd investigations=%d anomalies=%d",
+                                tenant, days, len(results), fired)
         except Exception:
             logger.exception("investigation sweep failed")
         await asyncio.sleep((interval_minutes or config.SWEEP_INTERVAL_MIN) * 60)

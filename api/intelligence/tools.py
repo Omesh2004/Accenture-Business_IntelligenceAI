@@ -91,8 +91,9 @@ def _claim(claim_id: str, value, unit: str, source: str, label: str, dp: int = 2
 
 
 # ── capabilities ───────────────────────────────────────────────────────────────────────────────
-def _list_metrics(tenant_id: str, persona: str, **_) -> ToolResult:
-    rows = reader.list_insights(tenant_id, persona, limit=config.MAX_KPIS_PER_SWEEP)
+def _list_metrics(tenant_id: str, persona: str, window_days: int = 0, **_) -> ToolResult:
+    rows = reader.list_insights(tenant_id, persona, limit=config.MAX_KPIS_PER_SWEEP,
+                                window_days=window_days)
     if not rows:
         return ToolResult(False, reason="no investigation has produced evidence for this tenant")
     try:
@@ -180,8 +181,9 @@ def _current_reading(tenant_id: str, kpi_id: str) -> float | None:
         return None
 
 
-def _get_insight(tenant_id: str, persona: str, kpi_id: str = "", **_) -> ToolResult:
-    row = reader.latest_insight(tenant_id, persona, kpi_id or None)
+def _get_insight(tenant_id: str, persona: str, kpi_id: str = "", window_days: int = 0,
+        **_) -> ToolResult:
+    row = reader.latest_insight(tenant_id, persona, kpi_id or None, window_days)
     if not row:
         return ToolResult(False, reason="no recorded insight matches that metric")
     # `magnitude` is the movement in the metric's own units. A percentage without it leaves a
@@ -357,8 +359,9 @@ def _unsliceable_reason(kpi_id: str) -> str:
             "over a dice roll" % (pretty_name(kpi_id), ", ".join(blocked)))
 
 
-def _get_causes(tenant_id: str, persona: str, kpi_id: str = "", **_) -> ToolResult:
-    row = reader.latest_insight(tenant_id, persona, kpi_id or None)
+def _get_causes(tenant_id: str, persona: str, kpi_id: str = "", window_days: int = 0,
+        **_) -> ToolResult:
+    row = reader.latest_insight(tenant_id, persona, kpi_id or None, window_days)
     causes = (row or {}).get("causes") or []
     if not causes:
         resolved = kpi_id or (row or {}).get("kpi_id", "")
@@ -431,8 +434,9 @@ def _render_causes(res: ToolResult, persona: str) -> str:
     return text
 
 
-def _get_factors(tenant_id: str, persona: str, kpi_id: str = "", **_) -> ToolResult:
-    row = reader.latest_insight(tenant_id, persona, kpi_id or None)
+def _get_factors(tenant_id: str, persona: str, kpi_id: str = "", window_days: int = 0,
+        **_) -> ToolResult:
+    row = reader.latest_insight(tenant_id, persona, kpi_id or None, window_days)
     factors = (row or {}).get("factors") or []
     if not factors:
         return ToolResult(False, reason="this metric declares no factor identity to decompose")
@@ -449,8 +453,9 @@ def _render_factors(res: ToolResult, persona: str) -> str:
     return "By factor, the change splits as: %s." % ", ".join(lines)
 
 
-def _get_forecast(tenant_id: str, persona: str, kpi_id: str = "", **_) -> ToolResult:
-    row = reader.latest_insight(tenant_id, persona, kpi_id or None)
+def _get_forecast(tenant_id: str, persona: str, kpi_id: str = "", window_days: int = 0,
+        **_) -> ToolResult:
+    row = reader.latest_insight(tenant_id, persona, kpi_id or None, window_days)
     claims = [c for c in ((row or {}).get("evidence") or [])
               if c["claim_id"] in ("forecast_point", "forecast_lower", "forecast_upper")]
     if not any(c["claim_id"] == "forecast_point" for c in claims):
@@ -485,8 +490,9 @@ def _is_governed(kpi_id: str) -> bool:
     return bool(contract and contract.governed)
 
 
-def _get_recommendations(tenant_id: str, persona: str, kpi_id: str = "", **_) -> ToolResult:
-    row = reader.latest_insight(tenant_id, persona, kpi_id or None)
+def _get_recommendations(tenant_id: str, persona: str, kpi_id: str = "", window_days: int = 0,
+        **_) -> ToolResult:
+    row = reader.latest_insight(tenant_id, persona, kpi_id or None, window_days)
     resolved = (row or {}).get("kpi_id", "")
     if resolved and not _is_governed(resolved):
         # Silence and "nothing to do" are different answers. An auto-discovered series has no
@@ -536,8 +542,9 @@ def _render_recommendations(res: ToolResult, persona: str) -> str:
     return text
 
 
-def _get_trust(tenant_id: str, persona: str, kpi_id: str = "", **_) -> ToolResult:
-    row = reader.latest_insight(tenant_id, persona, kpi_id or None)
+def _get_trust(tenant_id: str, persona: str, kpi_id: str = "", window_days: int = 0,
+        **_) -> ToolResult:
+    row = reader.latest_insight(tenant_id, persona, kpi_id or None, window_days)
     if not row:
         return ToolResult(False, reason="no recorded insight matches that metric")
     trust = row.get("trust") or {}
@@ -565,7 +572,7 @@ def _render_trust(res: ToolResult, persona: str) -> str:
                by_id["checks_passed"], by_id["checks_failed"], by_id["confidence"], tail))
 
 
-def _get_source_health(tenant_id: str, persona: str, **_) -> ToolResult:
+def _get_source_health(tenant_id: str, persona: str, window_days: int = 0, **_) -> ToolResult:
     sources = reader.source_health(tenant_id)
     if not sources:
         return ToolResult(False, reason="no source has reported a load yet")
@@ -590,7 +597,7 @@ def _render_source_health(res: ToolResult, persona: str) -> str:
     return "; ".join(lines) + "."
 
 
-def _get_runtime_cost(tenant_id: str, persona: str, **_) -> ToolResult:
+def _get_runtime_cost(tenant_id: str, persona: str, window_days: int = 0, **_) -> ToolResult:
     tel = reader.runtime_telemetry(tenant_id)
     claims = [
         _claim("total_runs", tel["total_runs"], "count", "model_runs", "stage runs", 0),
@@ -693,7 +700,8 @@ def _render_rank(res: ToolResult, persona: str) -> str:
     return "Covering %s. Of these, %s." % (res.facts["scope"], "; and ".join(parts))
 
 
-def _get_metric_contract(tenant_id: str, persona: str, kpi_id: str = "", **_) -> ToolResult:
+def _get_metric_contract(tenant_id: str, persona: str, kpi_id: str = "", window_days: int = 0,
+        **_) -> ToolResult:
     from api.intelligence.contracts import load_declared
     try:
         declared = load_declared()
@@ -734,7 +742,7 @@ def _compare_metrics(tenant_id: str, persona: str, kpi_ids: str = "", **_) -> To
         return ToolResult(False, reason="a comparison needs at least two metrics")
     claims, facts, found = [], {}, []
     for kpi in ids:
-        row = reader.latest_insight(tenant_id, persona, kpi)
+        row = reader.latest_insight(tenant_id, persona, kpi, window_days)
         if not row:
             continue
         # A metric inside its band has no `observed` claim; that is a comparable state, not a
@@ -770,11 +778,12 @@ def _render_compare(res: ToolResult, persona: str) -> str:
     return "Side by side: %s." % "; ".join(parts)
 
 
-def _greet(tenant_id: str, persona: str, **_) -> ToolResult:
+def _greet(tenant_id: str, persona: str, window_days: int = 0, **_) -> ToolResult:
     """Greeting is a capability like any other, so the planner picks it rather than the loop
     branching on the question shape."""
     profile = personas.get(persona)
-    rows = reader.list_insights(tenant_id, persona, limit=config.MAX_KPIS_PER_SWEEP)
+    rows = reader.list_insights(tenant_id, persona, limit=config.MAX_KPIS_PER_SWEEP,
+                                window_days=window_days)
     try:
         from api.intelligence.contracts import load_declared
         governed = set(load_declared())
@@ -802,7 +811,8 @@ def _render_greet(res: ToolResult, persona: str) -> str:
     return " ".join(parts)
 
 
-def _run_localized_search(tenant_id: str, persona: str, kpi_id: str = "", **_) -> ToolResult:
+def _run_localized_search(tenant_id: str, persona: str, kpi_id: str = "", window_days: int = 0,
+        **_) -> ToolResult:
     """Agentic Tool: Execute Stage 03 localization unconditionally to find high-variance segments."""
     if not kpi_id:
         return ToolResult(False, reason="localized search requires a specific metric to analyze")
@@ -883,7 +893,7 @@ def _render_localized_search(res: ToolResult, persona: str) -> str:
     return text
 
 
-def _identity(tenant_id: str, persona: str, **_) -> ToolResult:
+def _identity(tenant_id: str, persona: str, window_days: int = 0, **_) -> ToolResult:
     """What this system IS. A separate capability from the greeting on purpose.
 
     "hii" and "who are you" both sat in the greeting's cue list, so both returned the identical
@@ -891,7 +901,8 @@ def _identity(tenant_id: str, persona: str, **_) -> ToolResult:
     talking to, and answering it with "Good to see you" is the system declining to say.
     """
     profile = personas.get(persona)
-    rows = reader.list_insights(tenant_id, persona, limit=config.MAX_KPIS_PER_SWEEP)
+    rows = reader.list_insights(tenant_id, persona, limit=config.MAX_KPIS_PER_SWEEP,
+                                window_days=window_days)
     try:
         from api.intelligence.contracts import load_declared
         governed = set(load_declared())
@@ -921,7 +932,7 @@ def _render_identity(res: ToolResult, persona: str) -> str:
     )
 
 
-def _describe_capabilities(tenant_id: str, persona: str, **_) -> ToolResult:
+def _describe_capabilities(tenant_id: str, persona: str, window_days: int = 0, **_) -> ToolResult:
     profile = personas.get(persona)
     names = sorted(s.name for s in catalogue(persona)
                    if s.intent not in ("greeting", "help"))
@@ -1092,11 +1103,11 @@ def validate_call(name: str, args: dict, persona: str) -> dict:
     return {k: v for k, v in args.items() if k in spec.params}
 
 
-def run(name: str, args: dict, persona: str) -> ToolResult:
+def run(name: str, args: dict, persona: str, window_days: int = 0) -> ToolResult:
     """Execute one validated call. A tool that raises becomes an observation, never a 500."""
     spec = REGISTRY[name]
     try:
-        return spec.fn(persona=persona, **args)
+        return spec.fn(persona=persona, window_days=window_days, **args)
     except Exception as exc:                       # noqa: BLE001 - surfaced as an observation
         return ToolResult(False, reason="tool failed: %s" % exc, citation=name)
 

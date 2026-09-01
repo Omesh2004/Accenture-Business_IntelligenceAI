@@ -261,6 +261,7 @@ class Orchestrator:
 
             row = narrate.to_insight_row(ctx, persona, headline, body, claims, trust,
                                          anomaly, breakdown, abstained, ok)
+            row["window_days"] = max(1, (ctx.window.end - ctx.window.start).days)
             store.write_insight(row)
             result["insights"].append({"persona": persona, "headline": headline,
                                        "narrative": body, "verifier_pass": ok})

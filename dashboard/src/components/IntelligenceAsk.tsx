@@ -30,10 +30,13 @@ function IntelligenceAsk({
   tenants,
   persona,
   onPersonaChange,
+  days,
 }: {
   tenants: string[];
   persona?: string;
   onPersonaChange?: (persona: string) => void;
+  /** The page range selector. The agent answers over this unless the question names a period. */
+  days?: number;
 }) {
   const [open, setOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(true);
@@ -86,16 +89,17 @@ function IntelligenceAsk({
       signal: AbortSignal,
     ) =>
       dashboardAPI
-        .streamIntelligence(tenants, question, active || undefined, handlers, signal)
+        .streamIntelligence(tenants, question, active || undefined, handlers, signal, days)
         .catch(async (err) => {
           if ((err as Error)?.name === 'AbortError') return;
           // Streaming is delivery, not the answer. If a proxy buffers SSE the batch route still
           // produces the identical payload, so a question is never lost to transport.
-          const result = await dashboardAPI.askIntelligence(tenants, question, active || undefined);
+          const result = await dashboardAPI.askIntelligence(
+            tenants, question, active || undefined, days);
           if (result) handlers.onAnswer(result);
           else handlers.onError('The agent could not be reached.');
         }),
-    [tenants, active],
+    [tenants, active, days],
   );
 
   const launch = (q: string) => {

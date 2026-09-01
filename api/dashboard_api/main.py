@@ -133,11 +133,15 @@ def intelligence_insight(request: Request, tenants: str = Query(None),
 
 @app.get("/intelligence/insights")
 def intelligence_insights(request: Request, tenants: str = Query(None),
-                          limit: int = Query(20, ge=1, le=100)):
+                          limit: int = Query(20, ge=1, le=100),
+                          days: int = Query(0, ge=0, le=365)):
+    """`days` selects the findings scored over that window. Without it the newest of any window
+    wins, which is how a 90-day movement ended up marked on a 7-day chart."""
     tenant = _tenant(tenants)
     p = resolve_persona(request)
-    return filter_revenue(p, {"tenant_id": tenant, "persona": p,
-                              "insights": _reader().list_insights(tenant, p, limit)})
+    rows = _reader().list_insights(tenant, p, limit, window_days=days or None)
+    return filter_revenue(p, {"tenant_id": tenant, "persona": p, "days": days,
+                              "insights": rows})
 
 
 @app.get("/intelligence/sources")
@@ -227,7 +231,8 @@ def intelligence_ask_stream(request: Request, req: AskRequest):
             queue.append(frame(kind, payload))
 
         try:
-            res = loop.run(tenant, question, p, emit=emit)
+            res = loop.run(tenant, question, p, emit=emit,
+                           window_days=int(req.days or 0))
         except Exception as exc:
             yield frame("error", {"detail": str(exc)})
             return
@@ -252,7 +257,7 @@ def intelligence_ask(request: Request, req: AskRequest):
     question = (req.question or "").strip()
     if not question:
         raise HTTPException(status_code=400, detail="question is required")
-    res = loop.run(tenant, question, p)
+    res = loop.run(tenant, question, p, window_days=int(req.days or 0))
     # Entitlement is applied inside the agent before assembly; this is belt and braces at the
     # boundary, so a new field can never leak a hidden KPI.
     return filter_revenue(p, res.as_dict())
