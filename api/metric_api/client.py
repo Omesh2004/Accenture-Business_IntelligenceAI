@@ -81,9 +81,15 @@ class MetricAPIClient:
         d = _get("/metric/dedup_counts", {"tenant": tenant_id, "kpi_id": spec["kpi_id"], **_win(window)})
         return int(d["rows_as_inserted"]), int(d["distinct_ids"])
 
-    def freshness_minutes(self, tenant_id, window) -> float | None:
+    def freshness_minutes(self, tenant_id, window, source_ids=None) -> float | None:
+        # The oldest common data time across the KPI's OWN sources. Taking the max over every
+        # source in the tenant let one never-loaded feed mark every KPI stale.
         d = _get("/metric/freshness", {"tenant": tenant_id})
-        behinds = [s["minutes_behind"] for s in d.get("sources", []) if s.get("minutes_behind") is not None]
+        rows = d.get("sources", [])
+        if source_ids:
+            wanted = set(source_ids)
+            rows = [s for s in rows if s.get("source_id") in wanted]
+        behinds = [s["minutes_behind"] for s in rows if s.get("minutes_behind") is not None]
         return max(behinds) if behinds else None
 
     def dimension_invariance(self, tenant_id, key, window) -> float:

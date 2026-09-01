@@ -66,14 +66,8 @@ function Sidebar(_props: SidebarProps) {
     // App admin sees full detailed analytics for their app
     navItems = [
       { id: 'dashboard', label: 'Dashboard', icon: 'layout-dashboard', href: buildAppScopedPath(activeAppId, '/dashboard') },
-      { id: 'features', label: 'Feature Analytics', icon: 'bar-chart-3', href: buildAppScopedPath(activeAppId, '/features') },
       { id: 'license-usage', label: 'License vs Usage', icon: 'key', href: buildAppScopedPath(activeAppId, '/license-usage') },
-      { id: 'predictive', label: 'Predictive Insights', icon: 'trending-up', href: buildAppScopedPath(activeAppId, '/predictive') },
-      { id: 'tenants', label: 'Tenants', icon: 'users', href: buildAppScopedPath(activeAppId, '/tenants') },
-      { id: 'config', label: 'Configuration', icon: 'settings', href: buildAppScopedPath(activeAppId, '/settings') },
-      { id: 'governance', label: 'Governance', icon: 'shield', href: buildAppScopedPath(activeAppId, '/governance') },
       { id: 'intelligence', label: 'Intelligence', icon: 'brain', href: buildAppScopedPath(activeAppId, '/intelligence') },
-      { id: 'transparency', label: 'Trust & Transparency', icon: 'eye', href: buildAppScopedPath(activeAppId, '/transparency') },
       { id: 'ai-report', label: 'AI Report', icon: 'file-text', href: buildAppScopedPath(activeAppId, '/ai-report') }
     ];
   } else if (role === 'super_admin') {

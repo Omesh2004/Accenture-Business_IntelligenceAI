@@ -183,8 +183,7 @@ function TopNavbar() {
         selectedTenants.length > 0
           ? selectedTenants.map((tenantId) => normalizeTenantId(tenantId)).join(',')
           : resolvePrimaryTenantForApp(activeAppId);
-      const data = await dashboardAPI.getTransparencyInfo(activeTenant);
-      setTransparencyData(data as TransparencyData | null);
+      setTransparencyData(null);
       setTransparencyLoading(false);
     }
   };

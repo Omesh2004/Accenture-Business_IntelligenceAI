@@ -65,3 +65,6 @@ ENV/
 
 # Standalone JavaBank application
 /JavaBank/
+
+# Bytecode written back into a bind-mounted source tree; a stale .pyc can outlive an edit.
+api/**/__pycache__/

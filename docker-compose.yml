@@ -186,6 +186,7 @@ services:
       - VLLM_URL=http://host.docker.internal:11434/v1
     volumes:
       - ./api:/app/api
+      - ./contracts:/app/contracts:ro
     command: python api/intelligence/service.py
     restart: unless-stopped
 
@@ -207,6 +208,9 @@ services:
       - VLLM_URL=http://host.docker.internal:11434/v1
       - INTELLIGENCE_LLM=${INTELLIGENCE_LLM:-0}
       - METRIC_API_TENANTS=${METRIC_API_TENANTS:-nexabank}
+    volumes:
+      # Contracts are configuration, not code: both readers must see the same file.
+      - ./contracts:/app/contracts:ro
     # Phase 4: the Metric API is the doorway. Phase 5 folds the dashboard + /intelligence/*
     # read endpoints onto this same app; api/main.py is deleted then.
     command: uvicorn api.dashboard_api.main:app --host 0.0.0.0 --port 8001

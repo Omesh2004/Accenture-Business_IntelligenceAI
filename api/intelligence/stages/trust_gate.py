@@ -119,7 +119,11 @@ def run(ctx, metric_layer) -> TrustResult:
 
     # 4b. Freshness, scaled to the grain: a daily series is at best one bucket stale, so a
     #     streaming SLA would fail every daily KPI forever.
-    fresh = metric_layer.freshness_minutes(ctx.tenant_id, ctx.window)
+    # A corroboration source explains behaviour; it never produces the number, so it must
+    # not block the narrative when it is stale.
+    computed_from = [str(x.get("id", "")) for x in contract.sources
+                     if x.get("role") != "corroboration" and x.get("id")]
+    fresh = metric_layer.freshness_minutes(ctx.tenant_id, ctx.window, computed_from or None)
     sla = contract.freshness_sla_minutes
     grain_time = (contract.raw.get("grain") or {}).get("time", "daily")
     if grain_time == "daily":

@@ -50,6 +50,8 @@ export interface FactPlan {
   days: number;
   seed: number;
   templates: Template[];
+  /** Restrict the write to one entity. Everything else is generated but not inserted. */
+  only?: "customers" | "accounts" | "transactions" | "applications";
 }
 
 type Rng = () => number;
@@ -140,7 +142,8 @@ export async function generateFacts(plan: FactPlan) {
   const startMs = now.getTime() - plan.days * dayMs;
   const dayStart = (d: number) => new Date(startMs + d * dayMs);
 
-  const branches = await prisma.branch.findMany({ select: { code: true, region: true } });
+  const branches = await prisma.branch.findMany({
+    select: { code: true, region: true }, orderBy: { code: "asc" } });
   if (!branches.length) throw new Error("no branches: run seedReferenceData.ts first");
 
   const tag = `${plan.tenantId}-${plan.seed}`;
@@ -162,7 +165,23 @@ export async function generateFacts(plan: FactPlan) {
                   openDay: number; spendRate: number; median: number };
   const people: Person[] = [];
 
-  for (let i = 0; i < plan.customers; i++) {
+  // Regenerating one entity must target the segment the customer ACTUALLY has, not the one this
+  // run would compute. Recomputing risks planting the movement against different customers.
+  if (plan.only === "applications") {
+    const existing = await prisma.customer.findMany({
+      where: { email: { startsWith: `bulk.${tag}.` } },
+      select: { id: true, riskSegment: true, branchCode: true, branch: { select: { region: true } } },
+      orderBy: { email: "asc" },
+    });
+    if (!existing.length) throw new Error(`no bulk customers for ${tag}; generate them first`);
+    for (const c of existing) {
+      people.push({ id: c.id, accNo: "", branch: c.branchCode || "",
+                    region: c.branch?.region || "", risk: String(c.riskSegment || "LOW"),
+                    openDay: 0, spendRate: 0, median: 0 });
+    }
+  }
+
+  for (let i = 0; plan.only !== "applications" && i < plan.customers; i++) {
     const id = derivedUuid(`${tag}:cust:${i}`);
     const b = pick(r, branches);
     const risk = weighted(r, RISK, [55, 33, 12]);
@@ -200,7 +219,8 @@ export async function generateFacts(plan: FactPlan) {
       const ctx = { day, region: p.region, risk: p.risk, branch: p.branch };
       const mod = applyTemplates(plan.templates, ctx, plan.days);
 
-      const n = Math.floor(p.spendRate * mod.txnVolume * (0.5 + r()));
+      const n = plan.only === "applications"
+        ? 0 : Math.floor(p.spendRate * mod.txnVolume * (0.5 + r()));
       for (let k = 0; k < n; k++) {
         const type = weighted(r, ["PAYMENT", "TRANSFER", "WITHDRAWAL", "DEPOSIT"], [58, 20, 14, 8]);
         const [opts, w] = CHANNEL_MIX[type];
@@ -244,11 +264,12 @@ export async function generateFacts(plan: FactPlan) {
     }
   }
 
+  const want = (name: string) => !plan.only || plan.only === name;
   const written = {
-    customers: await insertRows("Customer", custCols, customers),
-    accounts: await insertRows("Account", acctCols, accounts),
-    transactions: await insertRows("Transaction", txnCols, txns),
-    applications: await insertRows("LoanApplication", appCols, apps),
+    customers: want("customers") ? await insertRows("Customer", custCols, customers) : 0,
+    accounts: want("accounts") ? await insertRows("Account", acctCols, accounts) : 0,
+    transactions: want("transactions") ? await insertRows("Transaction", txnCols, txns) : 0,
+    applications: want("applications") ? await insertRows("LoanApplication", appCols, apps) : 0,
   };
   return written;
 }
@@ -265,6 +286,7 @@ function arg(name: string, fallback: string): string {
     customers: Number(arg("customers", "4000")),
     days: Number(arg("days", "55")),
     seed: Number(arg("seed", "20260831")),
+    only: (arg("only", "") || undefined) as FactPlan["only"],
     templates: templateNames.map((n) => {
       const t = TEMPLATES[n];
       if (!t) throw new Error(`unknown template "${n}". known: ${Object.keys(TEMPLATES).join(", ")}`);

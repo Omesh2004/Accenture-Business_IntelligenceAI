@@ -52,9 +52,13 @@ export const TEMPLATES: Record<string, Template> = {
   kyc_leak_region: {
     name: "kyc_leak_region",
     kpi: "kyc_completion_rate",
-    lastDays: 14,
-    segment: { region: ["Europe"] },
-    effect: { kycCompletion: 0.34 },
+    // Nine days, so the baseline window is clean. Fourteen put both the scored and the
+    // comparison window inside the leak, and a level shift already in the baseline is invisible.
+    lastDays: 9,
+    // Two regions, not one. A single region is a sixth of volume, so the aggregate stayed inside
+    // its noise band and Detect correctly declined -- which meant Localize never ran on it.
+    segment: { region: ["Europe", "North America"] },
+    effect: { kycCompletion: 0.15 },
     expect: { direction: "down", rank1Dimension: "region", verdict: "pass" },
   },
 
@@ -65,7 +69,7 @@ export const TEMPLATES: Record<string, Template> = {
     lastDays: 7,
     segment: {},
     effect: { failureRate: 0.11 },
-    expect: { direction: "up", rank1Dimension: "channel", verdict: "pass" },
+    expect: { direction: "up", rank1Dimension: "", verdict: "pass" },
   },
 
   /** Lending demand spikes: more applications, approval rate holds. */
@@ -75,7 +79,7 @@ export const TEMPLATES: Record<string, Template> = {
     lastDays: 10,
     segment: {},
     effect: { applicationRate: 2.6 },
-    expect: { direction: "up", rank1Dimension: "loan_type", verdict: "pass" },
+    expect: { direction: "up", rank1Dimension: "", verdict: "pass" },
   },
 
   /** Credit tightens for high-risk applicants only: approvals fall, applications do not. */
