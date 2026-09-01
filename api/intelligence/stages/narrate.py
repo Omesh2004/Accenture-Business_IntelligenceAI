@@ -21,10 +21,8 @@ PERSONA_SECTIONS = {
     "cfo": {"cause", "forecast", "impact", "action"},
     "ops_manager": {"cause", "action"},
     "analyst": {"cause", "forecast", "action", "impact"},
-    "marketing_lead": {"cause", "forecast", "action"},
     "risk_officer": {"cause", "action", "forecast"},
     # A steward owns the `analytics` levers -- data quality remediation is still an action.
-    "data_steward": {"cause", "action"},
 }
 
 # What EVERY known persona may see. An unrecognised persona gets this, not the widest set:

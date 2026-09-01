@@ -15,6 +15,7 @@ from api.intelligence import signal_store as store
 from api.intelligence.contracts import Contract, load_all, sliceable_dimensions
 from api.intelligence.ids import investigation_id, run_id, inputs_hash
 from api.intelligence.metrics import ClickHouseMetricLayer, MetricSource, Window, ratio_series
+from api.metric_api.client import MetricAPIClient
 from api.intelligence.stages import (causal_decide, decompose, detect, forecast,
                                      llm_narrator, localize, narrate, trust_gate)
 
@@ -40,7 +41,7 @@ class Ctx:
 
 class Orchestrator:
     def __init__(self, metric_layer: MetricSource | None = None, personas=None):
-        self.metrics = metric_layer or ClickHouseMetricLayer()
+        self.metrics = metric_layer or MetricAPIClient()
         self.personas = tuple(personas or config.PERSONAS)
 
     # -- telemetry -----------------------------------------------------------

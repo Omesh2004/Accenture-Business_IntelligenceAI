@@ -18,6 +18,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 from api.intelligence import config
 from api.intelligence.contracts import load_all
 from api.intelligence.metrics import ClickHouseMetricLayer, Window
+from api.metric_api.client import MetricAPIClient
 from api.intelligence.orchestrator import Orchestrator
 
 logging.basicConfig(level=logging.INFO)
@@ -43,7 +44,7 @@ async def run_forecast_batch(interval_minutes: int = None) -> None:
     """Stage 04, ahead of Detect. History ends where the scored window begins."""
     while True:
         try:
-            ml = ClickHouseMetricLayer()
+            ml = MetricAPIClient()
             orch = Orchestrator(ml)
             for tenant in TENANTS:
                 win = current_window()
@@ -60,7 +61,7 @@ async def run_investigation_sweep(interval_minutes: int = None) -> None:
     """Stages 01-07 per KPI."""
     while True:
         try:
-            ml = ClickHouseMetricLayer()
+            ml = MetricAPIClient()
             orch = Orchestrator(ml)
             for tenant in TENANTS:
                 # Refit the band inside the sweep rather than trusting the hourly batch.

@@ -807,14 +807,15 @@ def _run_localized_search(tenant_id: str, persona: str, kpi_id: str = "", **_) -
     if not kpi_id:
         return ToolResult(False, reason="localized search requires a specific metric to analyze")
     
-    from api.intelligence.metrics import ClickHouseMetricLayer, Window
+    from api.intelligence.metrics import Window
+    from api.metric_api.client import MetricAPIClient
     from api.intelligence.orchestrator import Ctx
     from api.intelligence.contracts import load_all, sliceable_dimensions
     from api.intelligence.stages import localize
     from api.intelligence.ids import investigation_id
     from datetime import datetime, timedelta
     
-    metrics = ClickHouseMetricLayer()
+    metrics = MetricAPIClient()
     try:
         watermark = metrics.watermark(tenant_id)
     except Exception:

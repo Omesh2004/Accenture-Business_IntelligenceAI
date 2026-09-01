@@ -173,6 +173,8 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+      analytics-api:
+        condition: service_started
     environment:
       - CLICKHOUSE_HOST=clickhouse
       - CLICKHOUSE_USER=default
@@ -184,6 +186,7 @@ services:
       - EXTRACT_API_TOKEN=${EXTRACT_API_TOKEN:-local-dev-extract-token}
       - INTELLIGENCE_LLM=${INTELLIGENCE_LLM:-0}
       - VLLM_URL=http://host.docker.internal:11434/v1
+      - METRIC_API_URL=http://analytics-api:8001
     volumes:
       - ./api:/app/api
       - ./contracts:/app/contracts:ro

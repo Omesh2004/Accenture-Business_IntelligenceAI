@@ -82,7 +82,7 @@ DAILY_FRESHNESS_FLOOR_MIN = _i("INTEL_DAILY_FRESHNESS_FLOOR_MIN", 1440)
 
 # --- narrate ----------------------------------------------------------------
 PERSONAS = _list("INTEL_PERSONAS",
-                 "cfo,ops_manager,analyst,marketing_lead,risk_officer,data_steward")
+                 "cfo,ops_manager,analyst,risk_officer")
 DEFAULT_PERSONA = _s("INTEL_DEFAULT_PERSONA", "analyst")
 VERIFIER_TOLERANCE = _f("INTEL_VERIFIER_TOLERANCE", 0.01)
 

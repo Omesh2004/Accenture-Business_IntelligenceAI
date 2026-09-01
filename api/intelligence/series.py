@@ -21,6 +21,7 @@ from datetime import datetime, timedelta
 from api.intelligence import config
 from api.intelligence.contracts import load_declared
 from api.intelligence.metrics import ClickHouseMetricLayer, Window, ratio_series
+from api.metric_api.client import MetricAPIClient
 
 # The layer caches resolved event names per (tenant, window), and that cache is the expensive part
 # of an event-based read. One module-level instance amortises it across requests.
@@ -30,7 +31,7 @@ _LAYER: ClickHouseMetricLayer | None = None
 def _layer() -> ClickHouseMetricLayer:
     global _LAYER
     if _LAYER is None:
-        _LAYER = ClickHouseMetricLayer()
+        _LAYER = MetricAPIClient()
     return _LAYER
 
 

@@ -122,28 +122,6 @@ REGISTRY: dict[str, Persona] = {
                   "Which KPIs do you track?"),
         max_tools_per_round=4, max_rounds=3, detail="full",
     ),
-    "marketing_lead": Persona(
-        id="marketing_lead",
-        label="Marketing Lead",
-        remit="Acquisition efficiency: campaign spend, funnel entry and product uptake.",
-        greeting="Good to see you. I report on what acquisition is costing and what it is winning.",
-        intents=frozenset({"cause", "action", "forecast", "trust", "freshness", "status",
-                           "catalog", "definition", "ranking", "greeting", "help"}),
-        owner_roles=frozenset({"marketing_ops", "product_marketing", "growth_analytics"}),
-        lead_in={
-            "cause": "Acquisition position:",
-            "action": "Recommended campaign action:",
-            "ranking": "Ranked by acquisition impact:",
-            "forecast": "Pipeline outlook:",
-        },
-        kpi_preference=("signups", "kyc_completion_rate", "revenue"),
-        examples=("What drove the change in new account signups?",
-                  "Which segment is the movement concentrated in?",
-                  "Show me the forecast for new account signups.",
-                  "What action is recommended to lift signups?",
-                  "How reliable is the signups figure?"),
-        max_tools_per_round=3, max_rounds=3, detail="standard",
-    ),
     "risk_officer": Persona(
         id="risk_officer",
         label="Risk & Compliance Officer",
@@ -166,29 +144,6 @@ REGISTRY: dict[str, Persona] = {
                   "What control action is recommended for loan approvals?",
                   "How current is the data behind these figures?"),
         max_tools_per_round=3, max_rounds=3, detail="full",
-    ),
-    "data_steward": Persona(
-        id="data_steward",
-        label="Data Steward",
-        remit="Pipeline health: source freshness, trust verdicts, lineage and runtime cost.",
-        greeting="Good to see you. I report on whether the numbers are fit to be used at all.",
-        # No `cause`, `action` or `factor`: a steward certifies the figure, and does not own the
-        # business lever that would move it. The refusal is the entitlement demonstration.
-        intents=frozenset({"cause", "action", "trust", "freshness", "cost", "status", "catalog", "definition",
-                           "ranking", "greeting", "help"}),
-        owner_roles=frozenset({"analytics"}),
-        lead_in={
-            "trust": "Data quality position:",
-            "freshness": "Pipeline currency:",
-            "ranking": "Ranked by data risk:",
-        },
-        kpi_preference=(),
-        examples=("How current is each source, and is any behind SLA?",
-                  "How reliable is the KYC completion rate figure?",
-                  "Which KPIs do you track, and which are governed contracts?",
-                  "What did this analysis cost in tokens and latency?",
-                  "How is digital adoption rate calculated?"),
-        max_tools_per_round=2, max_rounds=2, detail="full",
     ),
 }
 
