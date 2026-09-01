@@ -66,7 +66,8 @@ SPECS: list[dict] = [
          where="a.kyc_step >= 1",
          value="toFloat64(count())", distinct="uniqExact(a.application_id)",
          dims={"loan_type": "a.loan_type", "risk_segment": "c.risk_segment",
-               "region": "c.region", "branch_code": "c.branch_code"}),
+               "region": "c.region", "branch_code": "c.branch_code",
+               "country": "c.country"}),
     dict(kpi="kyc_completion_rate", fund="kyc_completed",
          t="a.tenant_id", d="toDate(a.created_at)",
          frm=f"{SILVER}.fact_loan_applications a LEFT JOIN {SILVER}.dim_customer c "
@@ -74,7 +75,8 @@ SPECS: list[dict] = [
          where="a.kyc_step >= 3",
          value="toFloat64(count())", distinct="uniqExact(a.application_id)",
          dims={"loan_type": "a.loan_type", "risk_segment": "c.risk_segment",
-               "region": "c.region", "branch_code": "c.branch_code"}),
+               "region": "c.region", "branch_code": "c.branch_code",
+               "country": "c.country"}),
 
     dict(kpi="loan_approval_volume", fund="loans_approved",
          t="a.tenant_id", d="toDate(a.decided_at)",
@@ -82,14 +84,16 @@ SPECS: list[dict] = [
              f"ON a.tenant_id=c.tenant_id AND a.customer_id=c.customer_id",
          where="a.status = 'APPROVED' AND a.decided_at > toDateTime('1971-01-01')",
          value="toFloat64(count())", distinct="uniqExact(a.application_id)",
-         dims={"loan_type": "a.loan_type", "risk_segment": "c.risk_segment", "region": "c.region"}),
+         dims={"loan_type": "a.loan_type", "risk_segment": "c.risk_segment", "region": "c.region",
+               "branch_code": "c.branch_code", "country": "c.country"}),
     dict(kpi="loan_approval_volume", fund="principal_approved",
          t="a.tenant_id", d="toDate(a.decided_at)",
          frm=f"{SILVER}.fact_loan_applications a LEFT JOIN {SILVER}.dim_customer c "
              f"ON a.tenant_id=c.tenant_id AND a.customer_id=c.customer_id",
          where="a.status = 'APPROVED' AND a.decided_at > toDateTime('1971-01-01')",
          value="round(toFloat64(sum(a.principal_amount)), 2)", distinct="toUInt64(0)",
-         dims={"loan_type": "a.loan_type", "risk_segment": "c.risk_segment", "region": "c.region"}),
+         dims={"loan_type": "a.loan_type", "risk_segment": "c.risk_segment", "region": "c.region",
+               "branch_code": "c.branch_code", "country": "c.country"}),
 
     dict(kpi="transaction_failure_rate", fund="txn_total",
          t="tenant_id", d="toDate(occurred_at)",
@@ -97,14 +101,16 @@ SPECS: list[dict] = [
          where="1=1",
          value="toFloat64(count())", distinct="uniqExact(txn_id)",
          dims={"channel": "channel", "txn_type": "txn_type", "mcc": "mcc",
-               "region": "region", "branch_code": "branch_code"}),
+               "category": "category", "region": "region",
+               "branch_code": "branch_code", "country": "country"}),
     dict(kpi="transaction_failure_rate", fund="txn_failed",
          t="tenant_id", d="toDate(occurred_at)",
          frm=f"{SILVER}.fact_transactions",
          where="status = 'FAILED'",
          value="toFloat64(count())", distinct="uniqExact(txn_id)",
          dims={"channel": "channel", "txn_type": "txn_type", "mcc": "mcc",
-               "region": "region", "branch_code": "branch_code"}),
+               "category": "category", "region": "region",
+               "branch_code": "branch_code", "country": "country"}),
 
     dict(kpi="revenue", fund="pro_revenue",
          t="tenant_id", d="toDate(occurred_at)",
@@ -142,7 +148,8 @@ LEFT JOIN {SILVER}.dim_customer c ON a.tenant_id=c.tenant_id AND a.customer_id=c
                "AND toDate(a.decided_at) <= days.d",
          value="round(toFloat64(sum(a.principal_amount * a.interest_rate / 365)), 2)",
          distinct="toUInt64(0)",
-         dims={"loan_type": "a.loan_type", "risk_segment": "c.risk_segment", "region": "c.region"}),
+         dims={"loan_type": "a.loan_type", "risk_segment": "c.risk_segment", "region": "c.region",
+               "branch_code": "c.branch_code", "country": "c.country"}),
 ]
 
 

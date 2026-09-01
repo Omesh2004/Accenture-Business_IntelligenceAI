@@ -142,31 +142,31 @@ levers:
   reallocate_campaign_spend:
     label: Reallocate campaign spend to the affected segment
     owner_role: growth_ops
-    applies_to: [new_account_signups, revenue]
+    applies_to: [signups, revenue]
     preconditions: ["the movement concentrates in a segment a campaign targets"]
     effort: low
     expected_impact: {low: 0.10, high: 0.35, unit: share_of_gap_recovered}
     monitoring:
-      watch: new_account_signups
+      watch: signups
       threshold: "segment share returns to its trailing median"
       for_days: 14
 
   review_onboarding_friction:
     label: Review onboarding friction in the affected segment
     owner_role: growth_ops
-    applies_to: [new_account_signups]
+    applies_to: [signups]
     preconditions: ["signups fall while campaign reach holds"]
     effort: medium
     expected_impact: {low: 0.15, high: 0.45, unit: share_of_gap_recovered}
     monitoring:
-      watch: new_account_signups
+      watch: signups
       threshold: "returns to within 10% of baseline"
       for_days: 14
 
   adjust_messaging:
     label: Adjust customer messaging
     owner_role: growth_ops
-    applies_to: [new_account_signups, kyc_completion_rate, loan_approval_volume]
+    applies_to: [signups, kyc_completion_rate, loan_approval_volume]
     preconditions: ["drop-off is concentrated at a step with a known message"]
     effort: low
     expected_impact: {low: 0.05, high: 0.25, unit: share_of_gap_recovered}
@@ -181,7 +181,7 @@ levers:
   investigate:
     label: Investigate before acting
     owner_role: analyst
-    applies_to: [new_account_signups, kyc_completion_rate, loan_approval_volume, revenue,
+    applies_to: [signups, kyc_completion_rate, loan_approval_volume, revenue,
                  transaction_failure_rate]
     preconditions: []
     effort: low

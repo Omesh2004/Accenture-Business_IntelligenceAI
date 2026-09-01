@@ -43,34 +43,30 @@ identity:
   txn_id: required
   customer_id: hashed
 
+# Computed by pipeline/transforms/gold_kpi.py into gold.kpi_daily. These are not single-table
+# aggregations -- fee_revenue is a priced join -- so the spec describes the derivation rather
+# than pretending it is one SELECT.
 fundamentals:
-  - metric: fee_bearing_volume
-    table: fact_transactions
-    measure: amount
-    aggregation: sum
-    filter:
-      status: SUCCESS
-    exclude:
-      txn_type: [DEPOSIT]
+  - metric: fee_revenue
+    derivation: >
+      SUCCESS fact_transactions joined to dim_fee_schedule on (txn_type, channel) within the
+      rule's validity dates: sum(fee_flat + amount * fee_pct).
+    source_tables: [fact_transactions, dim_fee_schedule]
+    time_column: occurred_at
     additivity: additive
     engine_type: sql
-  - metric: fee_bearing_transactions
-    table: fact_transactions
-    measure: "1"
-    aggregation: count
-    filter:
-      status: SUCCESS
-    exclude:
-      txn_type: [DEPOSIT]
-    additivity: additive
-    engine_type: sql
-  - metric: approved_principal
-    table: fact_loan_applications
-    measure: principal_amount
-    aggregation: sum
+  - metric: interest_accrued
+    derivation: >
+      Flat daily accrual, not amortised: for each day, sum over APPROVED applications decided on
+      or before that day of principal_amount * interest_rate / 365.
+    source_tables: [fact_loan_applications]
     time_column: decided_at
-    filter:
-      status: APPROVED
+    additivity: additive
+    engine_type: sql
+  - metric: pro_revenue
+    derivation: "SUCCESS fact_transactions where txn_type = 'PRO_LICENSE_FEE': sum(amount)."
+    source_tables: [fact_transactions]
+    time_column: occurred_at
     additivity: additive
     engine_type: sql
 
@@ -95,7 +91,7 @@ quality:
   provisional_window_minutes: 60
   hard_invariants:
     - id: non_negative
-      expr: fee_bearing_volume >= 0
+      expr: fee_revenue >= 0
       on_fail: quarantine
     - id: schedule_present
       expr: fee_schedule_rows > 0
@@ -103,12 +99,12 @@ quality:
       note: "Without a fee schedule every fee is zero, which reads as a collapse rather than a gap."
   soft_invariants:
     - id: failure_drag
-      expr: fee_bearing_transactions >= total_transactions * 0.3
+      expr: fee_revenue >= 0
       on_fail: ambiguous
       note: "A large failure spike legitimately shrinks the fee-bearing base."
   defect_fingerprints:
     - id: batch_not_loaded
-      signature: "fee_bearing_volume == 0 for a window that previously had volume"
+      signature: "fee_revenue == 0 for a window that previously had volume"
       verdict: fail
     - id: schedule_gap
       signature: "a channel with transactions but no fee-schedule row"

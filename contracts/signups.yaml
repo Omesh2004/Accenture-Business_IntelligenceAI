@@ -1,4 +1,4 @@
-id: new_account_signups
+id: signups
 name: New Account Signups
 definition: >
   The number of accounts opened each day. Top of the chain: signups feed onboarding, onboarding

@@ -3,7 +3,7 @@ name: KYC Completion Rate
 definition: >
   The share of loan applications that complete identity verification. An application enters at
   step 1 and either walks to step 3 or stalls; the rate is completions divided by submissions.
-formula: kyc_completed_applications / submitted_applications
+formula: kyc_completed / kyc_started
 unit: ratio
 additivity: non-additive     # the RATE is not additive; its two counts are
 
@@ -38,7 +38,7 @@ identity:
   customer_id: hashed
 
 fundamentals:
-  - metric: kyc_completed_applications
+  - metric: kyc_completed
     table: fact_loan_applications
     measure: "1"
     aggregation: count
@@ -46,7 +46,7 @@ fundamentals:
       kyc_step: 3
     additivity: additive
     engine_type: sql
-  - metric: submitted_applications
+  - metric: kyc_started
     table: fact_loan_applications
     measure: "1"
     aggregation: count
@@ -77,25 +77,25 @@ quality:
   provisional_window_minutes: 60
   hard_invariants:
     - id: completed_subset
-      expr: kyc_completed_applications <= submitted_applications
+      expr: kyc_completed <= kyc_started
       on_fail: quarantine
       note: "Arithmetic: a completion that is not a submission is a defect."
     - id: source_present
-      expr: submitted_applications > 0
+      expr: kyc_started > 0
       on_fail: quarantine
   soft_invariants:
     - id: clickstream_reconciliation
-      expr: submitted_applications >= clickstream_kyc_starts * 0.2
+      expr: kyc_started >= clickstream_kyc_starts * 0.2
       on_fail: ambiguous
       note: >
         The clickstream covers a sampled population and lags by up to an hour, so the two
         legitimately disagree. Abstain and name the check; never quarantine on it.
   defect_fingerprints:
     - id: batch_not_loaded
-      signature: "submitted_applications == 0 while the clickstream still shows KYC starts"
+      signature: "kyc_started == 0 while the clickstream still shows KYC starts"
       verdict: fail
     - id: step_frozen
-      signature: "kyc_completed_applications == 0 for a full window while submissions continue"
+      signature: "kyc_completed == 0 for a full window while submissions continue"
       verdict: ambiguous
 
 detection:
@@ -145,5 +145,5 @@ observability:
   engine_type: sql
 
 interconnection:
-  driven_by: new_account_signups
+  driven_by: signups
   drives: loan_approval_volume

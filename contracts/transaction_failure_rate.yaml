@@ -3,7 +3,7 @@ name: Transaction Failure Rate
 definition: >
   The share of customer transactions that fail. The health signal of the chain: a failure rise
   suppresses fee revenue directly and can depress onboarding completion at the same time.
-formula: failed_transactions / total_transactions
+formula: txn_failed / txn_total
 unit: ratio
 additivity: non-additive     # the RATE is not additive; its two counts are
 
@@ -30,7 +30,7 @@ identity:
   customer_id: hashed
 
 fundamentals:
-  - metric: failed_transactions
+  - metric: txn_failed
     table: fact_transactions
     measure: "1"
     aggregation: count
@@ -38,7 +38,7 @@ fundamentals:
       status: FAILED
     additivity: additive
     engine_type: sql
-  - metric: total_transactions
+  - metric: txn_total
     table: fact_transactions
     measure: "1"
     aggregation: count
@@ -69,24 +69,24 @@ quality:
   provisional_window_minutes: 60
   hard_invariants:
     - id: failed_subset
-      expr: failed_transactions <= total_transactions
+      expr: txn_failed <= txn_total
       on_fail: quarantine
     - id: source_present
-      expr: total_transactions > 0
+      expr: txn_total > 0
       on_fail: quarantine
   soft_invariants:
     - id: plausible_ceiling
-      expr: failed_transactions <= total_transactions * 0.5
+      expr: txn_failed <= txn_total * 0.5
       on_fail: ambiguous
       note: >
         Above half of all transactions failing is far more likely to be a partial batch load
         than a real outage. Abstain and name the check.
   defect_fingerprints:
     - id: batch_not_loaded
-      signature: "total_transactions == 0 for a window that previously had volume"
+      signature: "txn_total == 0 for a window that previously had volume"
       verdict: fail
     - id: status_frozen
-      signature: "failed_transactions == 0 across a full window on every channel"
+      signature: "txn_failed == 0 across a full window on every channel"
       verdict: ambiguous
 
 detection:

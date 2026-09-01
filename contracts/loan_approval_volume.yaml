@@ -30,7 +30,7 @@ identity:
   customer_id: hashed
 
 fundamentals:
-  - metric: approved_applications
+  - metric: loans_approved
     table: fact_loan_applications
     measure: "1"
     aggregation: count
@@ -39,7 +39,7 @@ fundamentals:
       status: APPROVED
     additivity: additive
     engine_type: sql
-  - metric: approved_principal
+  - metric: principal_approved
     table: fact_loan_applications
     measure: principal_amount
     aggregation: sum
@@ -70,14 +70,14 @@ quality:
   provisional_window_minutes: 60
   hard_invariants:
     - id: non_negative
-      expr: approved_applications >= 0
+      expr: loans_approved >= 0
       on_fail: quarantine
     - id: principal_present
-      expr: approved_principal >= 0
+      expr: principal_approved >= 0
       on_fail: quarantine
   soft_invariants:
     - id: gated_by_onboarding
-      expr: approved_applications <= kyc_completed_applications
+      expr: loans_approved <= kyc_completed
       on_fail: ambiguous
       note: >
         An approval normally follows a completed KYC, but the two are counted on different days
@@ -85,10 +85,10 @@ quality:
         edge. Abstain, never quarantine.
   defect_fingerprints:
     - id: batch_not_loaded
-      signature: "approved_applications == 0 while submissions continue"
+      signature: "loans_approved == 0 while submissions continue"
       verdict: fail
     - id: decision_lag_stall
-      signature: "approved_applications flat while submitted_applications rises sharply"
+      signature: "loans_approved flat while kyc_started rises sharply"
       verdict: ambiguous
 
 detection:
