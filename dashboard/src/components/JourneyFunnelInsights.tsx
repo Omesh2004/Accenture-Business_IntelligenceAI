@@ -49,20 +49,25 @@ function JourneyFunnelInsights({ data }: JourneyFunnelInsightsProps) {
   );
 
   return (
-    <ChartContainer title="User Journey Intelligence" id="journey-funnel-intelligence">
+    <ChartContainer title="Onboarding Funnel" id="journey-funnel-intelligence">
+      <p className="text-xs text-gray-500 mb-4">
+        Behavioural view, from the clickstream. It follows sampled sessions through the
+        onboarding steps, so its counts are smaller than the KYC Completion Rate card, which is
+        computed from every loan application in core banking.
+      </p>
       <div className="space-y-4">
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div className="rounded-lg border border-gray-200 bg-gray-100 p-3">
-            <p className="text-[11px] uppercase tracking-wide text-gray-500">Entry Users</p>
+            <p className="text-[11px] uppercase tracking-wide text-gray-500">Entered</p>
             <p className="num mt-1 text-xl font-semibold text-gray-900">{entry.toLocaleString()}</p>
           </div>
           <div className="rounded-lg border border-gray-200 bg-gray-100 p-3">
             <p className="text-[11px] uppercase tracking-wide text-gray-500">Final Step Users</p>
             <p className="num mt-1 text-xl font-semibold text-gray-900">{completion.toLocaleString()}</p>
           </div>
-          <div className="rounded-lg border border-blue-200 bg-blue-50 p-3">
-            <p className="text-[11px] uppercase tracking-wide text-blue-600">Overall Conversion</p>
-            <p className="num mt-1 text-xl font-semibold text-blue-700">{formatPercent(overallConversion)}</p>
+          <div className="rounded-lg border border-purple-200 bg-purple-50 p-3">
+            <p className="text-[11px] uppercase tracking-wide text-purple-600">Overall Conversion</p>
+            <p className="num mt-1 text-xl font-semibold text-purple-700">{formatPercent(overallConversion)}</p>
           </div>
         </div>
 

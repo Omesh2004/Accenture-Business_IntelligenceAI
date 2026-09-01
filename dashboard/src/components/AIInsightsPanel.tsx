@@ -34,10 +34,10 @@ const insightStyles: Record<string, {
   success: {
     icon: CheckCircle,
     borderColor: 'border-gray-200',
-    badgeBg: 'bg-blue-50',
-    badgeText: 'text-blue-700',
+    badgeBg: 'bg-purple-50',
+    badgeText: 'text-purple-700',
     iconColor: 'text-[#1a73e8]',
-    label: 'Growth',
+    label: 'Stable',
   },
   info: {
     icon: Info,
@@ -71,7 +71,7 @@ function AIInsightsPanel({ insights }: AIInsightsPanelProps) {
     return (
       <ChartContainer title="AI Insights" id="ai-insights-panel">
         <div className="rounded-xl border border-dashed border-gray-200 bg-white p-8 text-center shadow-sm">
-          <div className="mx-auto mb-4 h-10 w-10 rounded-full border border-blue-100 bg-blue-50 flex items-center justify-center">
+          <div className="mx-auto mb-4 h-10 w-10 rounded-full border border-purple-100 bg-purple-50 flex items-center justify-center">
             <Info className="h-4 w-4 text-[#1a73e8]" />
           </div>
           <p className="text-sm font-semibold text-gray-800">No stored AI insights yet.</p>
@@ -96,7 +96,7 @@ function AIInsightsPanel({ insights }: AIInsightsPanelProps) {
             <div
               key={insightKey}
               onClick={() => setSelectedInsight(insight)}
-              className={`group relative overflow-hidden flex flex-col justify-between p-4 rounded-xl border ${style.borderColor} bg-white hover:shadow-md hover:border-blue-200 hover:-translate-y-0.5 transition-all duration-200 cursor-pointer`}
+              className={`group relative overflow-hidden flex flex-col justify-between p-4 rounded-xl border ${style.borderColor} bg-white hover:shadow-md hover:border-purple-200 hover:-translate-y-0.5 transition-all duration-200 cursor-pointer`}
             >
               <div className="absolute left-0 top-0 h-full w-1 bg-[#1a73e8]/80 opacity-80 group-hover:opacity-100 transition-opacity" />
 
@@ -118,7 +118,7 @@ function AIInsightsPanel({ insights }: AIInsightsPanelProps) {
                   <TrendingUp className="w-3 h-3 text-[#1a73e8]" />
                   <span className="text-[11px] text-gray-500 font-medium">Confidence: {confidenceLabel}</span>
                 </div>
-                <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-blue-600 opacity-0 group-hover:opacity-100 transition-opacity">
+                <span className="text-[10px] font-semibold uppercase tracking-[0.14em] text-purple-600 opacity-0 group-hover:opacity-100 transition-opacity">
                   View
                 </span>
               </div>
@@ -138,7 +138,7 @@ function AIInsightsPanel({ insights }: AIInsightsPanelProps) {
             onClick={(e) => e.stopPropagation()}
           >
             {/* Modal Header */}
-            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-linear-to-r from-blue-50 to-white">
+            <div className="px-6 py-4 border-b border-gray-100 flex items-center justify-between bg-linear-to-r from-purple-50 to-white">
               <div className="flex items-center gap-3">
                 <div className={`p-2 rounded-lg border border-gray-100 ${insightStyles[selectedInsight.type]?.badgeBg || insightStyles.info.badgeBg}`}>
                   {(() => {

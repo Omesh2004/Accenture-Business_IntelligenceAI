@@ -98,6 +98,22 @@ export default function KpiTrends(
   }, [tenant, days, persona]);
 
   return (
+    <>
+      {/* The two colours carry meaning, so they are stated rather than left to be inferred. */}
+      <div className="flex flex-wrap items-center gap-5 mb-3 text-xs text-gray-600">
+        <span className="inline-flex items-center gap-2">
+          <span className="inline-block w-6 h-0.5 rounded" style={{ background: '#7500c0' }} />
+          Inside the expected range
+        </span>
+        <span className="inline-flex items-center gap-2">
+          <span className="inline-block w-6 h-0.5 rounded" style={{ background: '#c2185b' }} />
+          Movement the engine detected
+        </span>
+        <span className="inline-flex items-center gap-2">
+          <span className="inline-block w-6 h-3 rounded" style={{ background: 'rgba(194,24,91,0.10)' }} />
+          The window it moved in
+        </span>
+      </div>
     <div className="reveal-stagger grid grid-cols-1 lg:grid-cols-2 gap-4">
       {KPIS.filter((k) => allowed.includes(k.id)).map((k) => {
         const s = series[k.id];
@@ -154,5 +170,6 @@ export default function KpiTrends(
         );
       })}
     </div>
+    </>
   );
 }
