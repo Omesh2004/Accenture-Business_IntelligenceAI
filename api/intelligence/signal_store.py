@@ -131,11 +131,12 @@ def write_causal_effect(r: dict) -> int:
 def write_recommendation(r: dict) -> int:
     return _insert(
         "recommendations",
-        ["rec_id", "investigation_id", "anomaly_id", "tenant_id", "action", "lever", "owner_role",
-         "expected_impact", "status", "engine_type"],
-        [[r["rec_id"], r["investigation_id"], r["anomaly_id"], r["tenant_id"], r["action"],
-          r["lever"], r["owner_role"], _j(r["expected_impact"]), r.get("status", "proposed"),
-          r.get("engine_type", "rule")]],
+        ["rec_id", "investigation_id", "anomaly_id", "tenant_id", "driver", "action", "lever",
+         "owner_role", "expected_impact", "confidence", "monitoring", "status", "engine_type"],
+        [[r["rec_id"], r["investigation_id"], r["anomaly_id"], r["tenant_id"], r.get("driver", ""),
+          r["action"], r["lever"], r["owner_role"], _j(r["expected_impact"]),
+          float(r.get("confidence", 0.0)), _j(r.get("monitoring", {})),
+          r.get("status", "proposed"), r.get("engine_type", "rule")]],
     )
 
 
