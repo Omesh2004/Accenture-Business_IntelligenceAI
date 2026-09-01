@@ -184,8 +184,8 @@ services:
       - INTELLIGENCE_DATASET=seeded
       - EXTRACT_API_URL=http://nexabank-backend:5000/api
       - EXTRACT_API_TOKEN=${EXTRACT_API_TOKEN:-local-dev-extract-token}
-      - INTELLIGENCE_LLM=${INTELLIGENCE_LLM:-0}
-      - VLLM_URL=http://host.docker.internal:11434/v1
+      - INTELLIGENCE_LLM=${INTELLIGENCE_LLM:-1}
+      - VLLM_URL=http://vllm-server:8000/v1
       - METRIC_API_URL=http://analytics-api:8001
     volumes:
       - ./api:/app/api
@@ -208,8 +208,8 @@ services:
       - CLICKHOUSE_HOST=clickhouse
       - CLICKHOUSE_USER=default
       - CLICKHOUSE_PASSWORD=clickhouse
-      - VLLM_URL=http://host.docker.internal:11434/v1
-      - INTELLIGENCE_LLM=${INTELLIGENCE_LLM:-0}
+      - VLLM_URL=http://vllm-server:8000/v1
+      - INTELLIGENCE_LLM=${INTELLIGENCE_LLM:-1}
       - METRIC_API_TENANTS=${METRIC_API_TENANTS:-nexabank}
     volumes:
       # Contracts are configuration, not code: both readers must see the same file.
