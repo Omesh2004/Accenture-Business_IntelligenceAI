@@ -19,7 +19,7 @@ import React, { memo, useCallback, useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'framer-motion';
 import { ArrowUp, MessageSquare, Sparkles } from 'lucide-react';
-import { dashboardAPI } from '@/lib/api';
+import { dashboardAPI, type ChatTurn } from '@/lib/api';
 import ChatSurface from './intel/ChatSurface';
 import Select from './intel/Select';
 import { EASE, FONT, INK } from './intel/theme';
@@ -87,15 +87,17 @@ function IntelligenceAsk({
         onError: (d: string) => void;
       },
       signal: AbortSignal,
+      history: ChatTurn[] = [],
     ) =>
       dashboardAPI
-        .streamIntelligence(tenants, question, active || undefined, handlers, signal, days)
+        .streamIntelligence(tenants, question, active || undefined, handlers, signal, days,
+                            history)
         .catch(async (err) => {
           if ((err as Error)?.name === 'AbortError') return;
           // Streaming is delivery, not the answer. If a proxy buffers SSE the batch route still
           // produces the identical payload, so a question is never lost to transport.
           const result = await dashboardAPI.askIntelligence(
-            tenants, question, active || undefined, days);
+            tenants, question, active || undefined, days, history);
           if (result) handlers.onAnswer(result);
           else handlers.onError('The agent could not be reached.');
         }),

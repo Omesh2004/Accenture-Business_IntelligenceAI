@@ -78,6 +78,11 @@ class Context:
     #: The window this answer is scored over, in days. The caller's default until the question
     #: names one of its own.
     window_days: int = 7
+    #: How the turn was read: analysis, greeting, thanks, help or other. Set once, before
+    #: planning, so tool selection cannot contradict it.
+    turn_kind: str = "analysis"
+    #: Metrics the conversation resolved a follow-up to, when the words alone name none.
+    matched_from_history: list[str] = field(default_factory=list)
 
     @property
     def profile(self):
@@ -307,6 +312,13 @@ def governed(ids: list[str] | tuple[str, ...]) -> list[str]:
 
 
 def matched_metrics(ctx: Context) -> tuple[str, ...]:
+    """Metrics this turn is about. The conversation wins when it resolved a reference."""
+    if ctx.matched_from_history:
+        return tuple(ctx.matched_from_history)
+    return _matched_by_words(ctx)
+
+
+def _matched_by_words(ctx: Context) -> tuple[str, ...]:
     """Metrics the question's vocabulary reaches, GOVERNED ones preferred.
 
     "loan" reaches both loan contracts and eight auto-discovered event series (`loan.page.view`,
@@ -344,10 +356,17 @@ def candidates(ctx: Context,
     scored.sort(key=lambda t: (-t[0], t[1].priority, t[1].name))
     # A salutation is a whole intent. Pairing it with a variance report answers a question
     # nobody asked and buries the greeting.
+    #
+    # But the turn has already been read, and a turn read as ANALYSIS is never a salutation
+    # however politely it opens. Scoring on words alone sent "thanks, now why did revenue fall
+    # over the last 30 days" to the greeting tool, because "thanks" outscored everything else in
+    # a sentence that was plainly a question.
     conversational = [t for t in scored if t[1].intent in ("greeting", "help")]
+    keyword = [t for t in scored if t[1].intent not in ("greeting", "help")]
+    if ctx.turn_kind == "analysis":
+        conversational = []
     if conversational and scored and conversational[0][0] >= scored[0][0]:
         return conversational[:1]
-    keyword = [t for t in scored if t[1].intent not in ("greeting", "help")]
 
     reading = comprehend(ctx)
     if not reading.is_investigation:

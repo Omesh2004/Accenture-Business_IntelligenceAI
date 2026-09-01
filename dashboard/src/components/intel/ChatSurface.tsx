@@ -26,7 +26,7 @@ import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from '
 import { useQuery } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'framer-motion';
 import { ArrowUp, Database, Loader2, Maximize2, Minimize2, Sparkles, Trash2, X } from 'lucide-react';
-import { dashboardAPI } from '@/lib/api';
+import { dashboardAPI, type ChatTurn } from '@/lib/api';
 import AgentConsole from '../AgentConsole';
 import { TimeSeriesPanel } from './panels';
 import Select from './Select';
@@ -281,6 +281,7 @@ function ChatSurface({
       onError: (d: string) => void;
     },
     signal: AbortSignal,
+    history: ChatTurn[],
   ) => Promise<void>;
   /** A question typed on the page before the overlay existed. Sent once, then cleared. */
   seed?: string;
@@ -390,6 +391,11 @@ function ChatSurface({
             onError: setError,
           },
           controller.signal,
+          // The turns so far, so a follow-up like "what about the others?" has a subject. The
+          // user turn just pushed is excluded; it is the question being asked.
+          messages.slice(-8).map((m) => ({
+            role: m.role, text: m.text, kpi_id: m.answer?.kpi_id || undefined,
+          })),
         );
       } catch (err) {
         if ((err as Error)?.name !== 'AbortError') {
@@ -400,7 +406,7 @@ function ChatSurface({
         setPending([]);
       }
     },
-    [onAsk, running],
+    [onAsk, running, messages],
   );
 
   // The question typed on the page is sent here, once. Guarded by a ref rather than by clearing

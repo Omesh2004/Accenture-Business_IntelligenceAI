@@ -153,7 +153,7 @@ class Result:
 
 
 def _build_context(tenant_id: str, question: str, persona: str, trace: Trace,
-                   window_days: int = 0) -> planner.Context:
+                   window_days: int = 0, history=None) -> planner.Context:
     """Memory the planner reasons over: which metrics exist and which one is in play.
 
     This is context assembly, not a step of a workflow -- the planner is free to ignore it, call
@@ -171,7 +171,17 @@ def _build_context(tenant_id: str, question: str, persona: str, trace: Trace,
     moved_ids = sorted({r["kpi_id"] for r in rows if r.get("anomaly_id")})
     ctx = planner.Context(tenant_id, question, persona, metric_ids, moved_ids=moved_ids,
                           window_days=window_days)
-    ctx.focus_metric = planner.resolve_metric(question, metric_ids, profile, moved_ids)
+    # What the words themselves name comes first; only a message that names nothing gets its
+    # subject from the conversation.
+    named = list(planner.matched_metrics(ctx))
+    referenced = llm_chat.resolve_references(question, history, metric_ids, named) if history else []
+    if referenced:
+        # "the others" and "that one" only mean something against what was already said, so the
+        # conversation decides here and the word-matching resolver is not consulted.
+        ctx.matched_from_history = referenced
+        ctx.focus_metric = referenced[0]
+    else:
+        ctx.focus_metric = planner.resolve_metric(question, metric_ids, profile, moved_ids)
     trace.add("Resolve what the question is about", "reader.list_insights",
               "%d metric(s) visible to %s, %d currently outside band%s"
               % (len(metric_ids), profile.label, len(moved_ids),
@@ -415,7 +425,7 @@ def _rail_for(observations: list[planner.Observation], verified: bool | None,
 
 
 def run(tenant_id: str, question: str, persona: str, engine: str = "auto", emit=None,
-        window_days: int = 0) -> Result:
+        window_days: int = 0, history=None) -> Result:
     """Answer a question. `emit`, when given, receives each trace step as it happens.
 
     `window_days` is the caller's standing choice, normally the dashboard's range dropdown. A
@@ -443,17 +453,24 @@ def run(tenant_id: str, question: str, persona: str, engine: str = "auto", emit=
                                          config.WINDOW_CHOICES)
     trace.add("Settle the period", "planner.resolve_window",
               "answering over the last %d days" % window_days, kind="reason")
-    ctx = _build_context(tenant_id, question, persona, trace, window_days)
+    ctx = _build_context(tenant_id, question, persona, trace, window_days, history)
 
     # A courtesy is not a question. "nice, thank you" used to reach the greeting tool and come
     # back as the full capability spiel, which is what made the agent read as a form rather than
     # an assistant. Answer it as a person would and stop; no tool, no claim set, no numbers.
-    social = llm_chat.looks_social(question)
+    turn_kind = llm_chat.classify(question, history)
+    trace.add("Read the turn", "llm_chat.classify",
+              "read as %s%s" % (turn_kind, ", in the context of %d earlier turn(s)" % len(history)
+                                if history else ""),
+              kind="reason")
+    ctx.turn_kind = turn_kind
+    social = "" if turn_kind in ("analysis", "other") else turn_kind
     if social:
         profile = personas.get(persona)
         flagged = [tools.pretty_name(k) for k in ctx.moved_ids][:3]
-        fallback = (profile.greeting if social in ("greeting", "help")
-                    else "Happy to help. Ask whenever you want to look at something.")
+        # Only reached when no model is up. It says what is true and nothing more, rather than
+        # standing in as a scripted answer.
+        fallback = "I am here. Ask about any metric you are watching."
         text, tin, tout = llm_chat.reply(
             social, question, profile.label, profile.remit, flagged,
             profile.examples[0] if profile.examples else "", fallback)

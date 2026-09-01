@@ -799,16 +799,24 @@ def _greet(tenant_id: str, persona: str, window_days: int = 0, **_) -> ToolResul
 
 
 def _render_greet(res: ToolResult, persona: str) -> str:
+    """Phrased by the model from the same facts, so two greetings are not the same paragraph.
+
+    This used to concatenate four fixed strings, which is why "hii" and "ok thank you" came back
+    word for word identical. The facts are unchanged; only the wording is the model's.
+    """
+    from api.intelligence.stages import llm_chat
     profile = personas.get(persona)
+    flagged = [f.strip() for f in (res.facts.get("flagged") or "").split(",") if f.strip()]
     parts = [profile.greeting, profile.remit]
     if res.facts.get("any_flagged") == "yes":
         parts.append("Currently flagged: %s." % res.facts["flagged"])
     else:
         parts.append("Nothing is currently outside its expected band.")
-    if profile.examples:
-        parts.append("Ask me anything about them. For example: “%s”."
-                     % profile.examples[0])
-    return " ".join(parts)
+    plain = " ".join(parts)
+    text, _tin, _tout = llm_chat.reply(
+        "greeting", "hello", profile.label, profile.remit, flagged,
+        profile.examples[0] if profile.examples else "", plain)
+    return text
 
 
 def _run_localized_search(tenant_id: str, persona: str, kpi_id: str = "", window_days: int = 0,

@@ -481,6 +481,9 @@ function prettyKpi(id: string): string {
 }
 
 /** The window the engine actually scored, so a chart marks it rather than guessing. */
+/** One prior turn, sent so a follow-up like "what about the others?" can be resolved. */
+export interface ChatTurn { role: 'user' | 'assistant'; text: string; kpi_id?: string }
+
 export interface MovedWindow {
   start: string; end: string; direction: number; severity: string;
   /** The expected range the movement was scored against, when one was recorded. */
@@ -986,11 +989,13 @@ export const dashboardAPI = {
    *  because RBACMiddleware reads tenant from the query string, not the body. */
   async askIntelligence(
     tenants: string[], question: string, persona?: string, days?: number,
+    history?: ChatTurn[],
   ): Promise<AgentAnswer | null> {
     try {
       const response = await apiClient.post<AgentAnswer>(
         `/intelligence/ask?tenants=${encodeURIComponent(tenants.join(','))}`,
-        { question, ...(persona ? { persona } : {}), ...(days ? { days } : {}) });
+        { question, ...(persona ? { persona } : {}), ...(days ? { days } : {}),
+          ...(history?.length ? { history } : {}) });
       return response.data;
     } catch (error) {
       console.error('Failed to ask the intelligence agent', error);
@@ -1036,6 +1041,7 @@ export const dashboardAPI = {
     },
     signal?: AbortSignal,
     days?: number,
+    history?: ChatTurn[],
   ): Promise<void> {
     const headers = { 'Content-Type': 'application/json', ...(await rbacHeaders()) };
     const url =
@@ -1044,7 +1050,8 @@ export const dashboardAPI = {
       method: 'POST',
       headers,
       body: JSON.stringify(
-        { question, ...(persona ? { persona } : {}), ...(days ? { days } : {}) }),
+        { question, ...(persona ? { persona } : {}), ...(days ? { days } : {}),
+          ...(history?.length ? { history } : {}) }),
       signal,
     });
     if (!response.ok || !response.body) {
