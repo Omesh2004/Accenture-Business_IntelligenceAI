@@ -22,22 +22,13 @@ import axios from "axios";
 const router = express.Router();
 
 const ANALYTICS_API_URL = process.env.ANALYTICS_API_URL || "http://analytics-api:8001";
+// A10 (TRACK_A_B_SYNC): fast-mode seeding calls the pipeline service's /dev/seed directly.
+// The pipeline owns extract, transforms, and seeding logic — not ingestion.
+const PIPELINE_URL = process.env.PIPELINE_URL || "http://pipeline:8003";
 // Round 2 is one bank. The Prisma tenant id is `bank_a`; analytics calls it `nexabank`.
 const TENANT_ALIAS_MAP: Record<string, string> = { bank_a: "nexabank" };
 const GLOBAL_ANALYTICS_TENANTS = "nexabank";
 const GLOBAL_LOCAL_TENANTS = ["bank_a"];
-
-function normalizeToggleKey(rawKey: string): string {
-  const key = String(rawKey || "").trim().toLowerCase();
-  if (!key) return key;
-
-  return key
-    .replace(/_page[._]view$/i, ".page.view")
-    .replace(/\.page_view$/i, ".page.view")
-    .replace(/_dashboard[._]view$/i, ".dashboard.view")
-    .replace(/\.dashboard_view$/i, ".dashboard.view")
-    .replace(/\.{2,}/g, ".");
-}
 
 function toAnalyticsTenant(tenantId: string): string {
   const key = String(tenantId || "").toLowerCase();
@@ -613,17 +604,15 @@ router.post(
     // testing the intelligence layer on volume. Measured: 2,000 users x 45 days in ~3s, against
     // hours for the same shape through the pipeline.
     //
-    // Proxied, not implemented here: NexaBank has no ClickHouse client and must not grow one
-    // (docs/ARCHITECTURE.md). The ingestion service already owns writing events_raw directly on
-    // its fallback path, so the direct write stays where that responsibility already lives.
+    // A10 (TRACK_A_B_SYNC): calls the pipeline service's POST /dev/seed directly. Seeding is
+    // pipeline-service territory (it writes bronze.* and runs the real silver/gold transforms);
+    // NexaBank has no ClickHouse client and must not grow one (docs/ARCHITECTURE.md).
     const mode = String((req.body as { mode?: unknown })?.mode || "slow").toLowerCase();
     if (mode === "fast") {
-      const base = (process.env.INGESTION_API_URL || "http://localhost:8000/events")
-        .replace(/\/events\/?$/, "");
       try {
         const analyticsTenant = toAnalyticsTenant(tenantId);
         const started = Date.now();
-        const r = await axios.post(`${base}/dev/seed`, {
+        const r = await axios.post(`${PIPELINE_URL}/dev/seed`, {
           tenant_id: analyticsTenant,
           users: Number.isFinite(rawCount) ? Math.max(1, Math.min(Math.floor(rawCount), 5000)) : 100,
           days: Number.isFinite(rawDays) ? Math.max(1, Math.min(Math.floor(rawDays), 365)) : 30,

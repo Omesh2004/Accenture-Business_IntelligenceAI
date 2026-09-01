@@ -310,6 +310,8 @@ services:
       - PORT=5000
       - FRONTEND_URL=http://localhost:3002
       - INGESTION_API_URL=http://ingestion-api:8000/events
+      # A10 (TRACK_A_B_SYNC): fast-mode seeding calls the pipeline service directly.
+      - PIPELINE_URL=http://pipeline:8003
       # Shared secret for the batch extract; the endpoints refuse to serve without it.
       - EXTRACT_API_TOKEN=${EXTRACT_API_TOKEN:-local-dev-extract-token}
     volumes:
