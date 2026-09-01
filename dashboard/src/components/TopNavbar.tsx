@@ -114,7 +114,8 @@ function TopNavbar() {
     }));
 
     const indexed = new Map<string, AvailableTenant>();
-    [...defaults, ...availableTenants].forEach((tenant) => {
+    [...defaults, ...(Array.isArray(availableTenants) ? availableTenants : [])]
+      .forEach((tenant) => {
       if (scopedTenantIds.includes(tenant.id)) {
         indexed.set(tenant.id, {
           ...tenant,

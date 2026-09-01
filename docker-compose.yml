@@ -278,7 +278,7 @@ services:
       - ANALYTICS_API_HOST=analytics-api
       - INGESTION_API_HOST=ingestion-api
       - NEXT_PUBLIC_ANALYTICS_WS_URL=ws://analytics-api:8001
-      - NEXT_MODE=${NEXT_MODE:-development}
+      - NEXT_MODE=${NEXT_MODE:-production}
     env_file:
       - ./dashboard/.env.local
     volumes:
@@ -328,7 +328,7 @@ services:
     ports:
       - "3002:3002"
     environment:
-      - NEXT_MODE=${NEXT_MODE:-development}
+      - NEXT_MODE=${NEXT_MODE:-production}
       - NEXT_PUBLIC_API_URL=http://localhost:5000/api
     volumes:
       # Hot-reload: mount source directories

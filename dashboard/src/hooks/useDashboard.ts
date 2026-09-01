@@ -169,8 +169,8 @@ export function useDashboardData() {
       };
     },
     // Keep data responsive while avoiding noisy re-fetching.
-    staleTime: 15 * 1000,
-    refetchInterval: 15 * 1000,
+    staleTime: 60 * 1000,
+    refetchInterval: 60 * 1000,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,
     retry: 1,

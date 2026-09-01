@@ -447,6 +447,31 @@ function toKpiCard(k: KpiFromApi): KPIMetric {
   };
 }
 
+
+/** Track B returns envelopes, not arrays. Adapt at the boundary so no component sees the shape. */
+interface TrafficEnvelope { dates?: string[]; txn_total?: number[]; txn_failed?: number[] }
+
+function toAvailableTenants(data: unknown): AvailableTenant[] {
+  if (Array.isArray(data)) return data as AvailableTenant[];
+  const ids = (data as { tenants?: unknown })?.tenants;
+  if (!Array.isArray(ids)) return [];
+  return ids.map((t) =>
+    typeof t === 'string'
+      ? { id: t, name: t, eventCount: 0, uniqueUsers: 0 }
+      : (t as AvailableTenant));
+}
+
+function toTrafficRows(data: unknown): Record<string, string | number>[] {
+  if (Array.isArray(data)) return data as Record<string, string | number>[];
+  const e = (data || {}) as TrafficEnvelope;
+  const dates = Array.isArray(e.dates) ? e.dates : [];
+  return dates.map((d, i) => ({
+    date: d,
+    total: Number(e.txn_total?.[i] ?? 0),
+    failed: Number(e.txn_failed?.[i] ?? 0),
+  }));
+}
+
 export const dashboardAPI = {
   /** Fetch KPI metrics for the dashboard header */
   /** The five governed KPIs. The API returns fundamentals; the card shape is built here. */
@@ -475,7 +500,10 @@ export const dashboardAPI = {
   /** Fetch traffic overview time series data */
   async getTrafficData(tenants: string[], range: string): Promise<TimeSeriesDataPoint[]> {
     try {
-      const response = await apiClient.get<Record<string, string | number>[]>(`/metrics/traffic?tenants=${tenants.join(',')}&range=${range}`);
+      const days = Number(String(range).replace(/[^0-9]/g, '')) || 30;
+      const raw = await apiClient.get<TrafficEnvelope | Record<string, string | number>[]>(
+        `/metrics/traffic?tenants=${tenants.join(',')}&days=${days}`);
+      const response = { data: toTrafficRows(raw.data) };
       return response.data.map((r: Record<string, string | number>) => {
         const point: Record<string, string | number> = { date: String(r.date) };
         for (const key of Object.keys(r)) {
@@ -575,8 +603,9 @@ export const dashboardAPI = {
   async getTenants(tenants?: string[], range: string = '7d'): Promise<Tenant[]> {
     try {
       const params = tenants && tenants.length > 0 ? `?tenants=${tenants.join(',')}&range=${range}` : `?range=${range}`;
-      const response = await apiClient.get<Tenant[]>(`/tenants${params}`);
-      return response.data;
+      const response = await apiClient.get<{ tenants?: string[] } | Tenant[]>(`/tenants${params}`);
+      const list = toAvailableTenants(response.data);
+      return list as unknown as Tenant[];
     } catch {
       return [];
     }
@@ -584,8 +613,9 @@ export const dashboardAPI = {
 
   async getAvailableTenants(range: string = '90d'): Promise<AvailableTenant[]> {
     try {
-      const response = await apiClient.get<AvailableTenant[]>(`/tenants/available?range=${range}`);
-      return response.data;
+      const response = await apiClient.get<{ tenants?: string[] } | AvailableTenant[]>(
+        `/tenants/available?range=${range}`);
+      return toAvailableTenants(response.data);
     } catch (error) {
       console.error('Failed to fetch available tenants', error);
       return [
