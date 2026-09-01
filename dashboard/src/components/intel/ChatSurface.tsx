@@ -102,6 +102,16 @@ function AssistantTurn({
   });
   const lead = answer?.sections?.length ? answer.sections[0].text : message.text;
   const analytical = Boolean(answer?.sections?.some((s) => s.kind === 'findings'));
+  // Whether the console would actually render anything here. Embedded, it shows the sections
+  // after the lead, the tool calls, the tables and the charts, and nothing else. A greeting has
+  // none of those, and an empty panel offering to explain a derivation that does not exist is
+  // worse than no panel.
+  const hasDerivation = Boolean(
+    (answer?.sections?.length ?? 0) > 1
+    || (answer?.datasets?.length ?? 0) > 0
+    || (answer?.visuals?.length ?? 0) > 0
+    || answer?.trace?.some((t) => t.kind === 'act'),
+  );
   const sources = useMemo(() => {
     const seen = new Set<string>();
     return (answer?.citations || []).filter((c) => {
@@ -193,7 +203,7 @@ function AssistantTurn({
         </motion.div>
       )}
 
-      {typed && answer && (analytical || (answer.trace?.length ?? 0) > 0) && (
+      {typed && answer && hasDerivation && (
         <motion.div
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}

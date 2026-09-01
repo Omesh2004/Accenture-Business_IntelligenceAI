@@ -9,6 +9,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from api.intelligence import levers as lever_lib
+from api.intelligence import phrasing
 from api.intelligence.stages import causal_did
 from api.intelligence.ids import effect_id, rec_id, round6
 
@@ -182,7 +183,10 @@ def run_decide(ctx, anomaly: dict, causes: list[dict], causal: CausalResult) -> 
 
     driver = ""
     if causes:
-        driver = ", ".join(f"{k}={v}" for k, v in sorted(causes[0]["dimensions"].items()))
+        # The readable phrase, the same one the prose uses. `txn_type=PAYMENT` is a cell key,
+        # not something to put in front of a person who has to act on it.
+        driver = phrasing.cell_phrase(causes[0]["dimensions"]) or ", ".join(
+            f"{k}={v}" for k, v in sorted(causes[0]["dimensions"].items()))
 
     # A lever needs a localized driver and evidence past mere association. Without that the
     # honest move is to investigate, not to propose an action nobody can justify.
@@ -194,8 +198,8 @@ def run_decide(ctx, anomaly: dict, causes: list[dict], causal: CausalResult) -> 
             chosen, spec = name, cand
             break
 
-    action = (f"{spec.get('label', chosen.replace('_', ' '))} — {driver}" if driver
-              else spec.get("label", chosen.replace("_", " ")))
+    label = spec.get("label", chosen.replace("_", " "))
+    action = f"{label}, for {driver}" if driver else label
 
     # The gap this driver actually explains, scaled by the lever's declared recovery range.
     recoverable = abs(float(anomaly.get("magnitude", 0.0))) * (

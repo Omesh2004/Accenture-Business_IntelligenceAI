@@ -513,25 +513,62 @@ def _get_recommendations(tenant_id: str, persona: str, kpi_id: str = "", window_
     mine = [r for r in recs if personas.owns(persona, r.get("owner_role", ""))]
     theirs = [r for r in recs if r not in mine]
     claims, facts = [], {}
+    rate_kpi = _is_rate((row or {}).get("kpi_id", ""))
     for rec in mine:
+        high = float((rec.get("expected_impact") or {}).get("high", 0.0))
+        # A rate's recoverable impact is stated in percentage points, so it is CLAIMED in
+        # percentage points. A figure shown in one unit and stored in another does not trace,
+        # and the verifier is right to reject it.
         claims.append(_claim("impact_%s" % rec["rec_id"],
-                             (rec.get("expected_impact") or {}).get("high", 0.0),
-                             "count", "recommendations", "recoverable impact"))
+                             high * 100.0 if rate_kpi else high,
+                             "percentage_points" if rate_kpi else "count",
+                             "recommendations", "recoverable impact",
+                             1 if rate_kpi else 2))
         facts["lever_%s" % rec["rec_id"]] = "%s (%s)" % (rec["lever"], rec["owner_role"])
     if theirs:
         claims.append(_claim("referred_actions", len(theirs), "count", "recommendations",
                              "actions owned elsewhere", 0))
     return ToolResult(True, summary="%d owned, %d referred" % (len(mine), len(theirs)),
-                      claims=claims, facts=facts, data={"mine": mine, "theirs": theirs},
+                      claims=claims, facts=facts,
+                      data={"mine": mine, "theirs": theirs,
+                            "kpi_id": (row or {}).get("kpi_id", "")},
                       citation="recommendations")
+
+
+def _is_rate(kpi_id: str) -> bool:
+    """Whether the contract declares this KPI a ratio. The loader exposes it as `is_ratio`."""
+    try:
+        from api.intelligence.contracts import load_declared
+        contract = load_declared().get(kpi_id)
+    except Exception:                                               # noqa: BLE001
+        return False
+    return bool(getattr(contract, "is_ratio", False))
+
+
+def _trim(value: float) -> str:
+    """The claim, printed exactly as it was stored so the verifier can trace it."""
+    return ("%.1f" % float(value)).rstrip("0").rstrip(".") or "0"
 
 
 def _render_recommendations(res: ToolResult, persona: str) -> str:
     mine, theirs = res.data["mine"], res.data["theirs"]
     by_id = {c["claim_id"]: c["value"] for c in res.claims}
-    lines = ["%s -- lever %s, owner %s, worth up to %.2f if fully recovered"
-             % (r["action"], r["lever"], r["owner_role"], by_id["impact_%s" % r["rec_id"]])
-             for r in mine]
+    kpi_id = res.data.get("kpi_id", "")
+    measure, cadence, _proxy = phrasing.scored_measure(kpi_id)
+    lines = []
+    for r in mine:
+        worth = by_id["impact_%s" % r["rec_id"]]
+        owner = str(r["owner_role"]).replace("_", " ")
+        # A bare 0.05 against a rate reads as five percent when it means five percentage POINTS.
+        # An impact with no unit at all reads as a score, so it is always said in the metric.
+        if worth and _is_rate(kpi_id):
+            gain = " worth up to %s percentage points if fully recovered" % _trim(worth)
+        elif worth:
+            gain = " worth up to %s if fully recovered" % phrasing.quantity(worth, measure, cadence)
+        else:
+            gain = ""
+        lines.append("%s (lever %s, owner %s)%s"
+                     % (r["action"], str(r["lever"]).replace("_", " "), owner, gain))
     text = ("Proposed, pending approval: %s. Nothing is executed automatically." % "; ".join(lines)
             if lines else "No lever here is yours to pull.")
     if theirs:
