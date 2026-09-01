@@ -475,11 +475,12 @@ function toTrafficRows(data: unknown): Record<string, string | number>[] {
 export const dashboardAPI = {
   /** Fetch KPI metrics for the dashboard header */
   /** The five governed KPIs. The API returns fundamentals; the card shape is built here. */
-  async getKPIMetrics(tenants: string[], range: string): Promise<KPIMetric[]> {
+  async getKPIMetrics(tenants: string[], range: string, persona?: string): Promise<KPIMetric[]> {
     const days = Number(String(range).replace(/[^0-9]/g, '')) || 30;
+    const p = persona ? `&persona=${encodeURIComponent(persona)}` : '';
     try {
       const response = await apiClient.get<KpiEnvelope>(
-        `/metrics/kpi?tenants=${tenants.join(',')}&days=${days}`);
+        `/metrics/kpi?tenants=${tenants.join(',')}&days=${days}${p}`);
       return (response.data?.kpis || []).map(toKpiCard);
     } catch (error) {
       console.error('Failed to fetch KPI metrics', error);

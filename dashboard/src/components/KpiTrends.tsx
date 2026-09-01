@@ -64,7 +64,10 @@ function anomalyStart(points: Point[]): string | undefined {
   return undefined;
 }
 
-export default function KpiTrends({ tenant = 'nexabank', days = 30 }: { tenant?: string; days?: number }) {
+export default function KpiTrends(
+  { tenant = 'nexabank', days = 30, persona = 'analyst' }:
+  { tenant?: string; days?: number; persona?: string },
+) {
   const [series, setSeries] = useState<Record<string, Series>>({});
 
   useEffect(() => {
@@ -75,7 +78,19 @@ export default function KpiTrends({ tenant = 'nexabank', days = 30 }: { tenant?:
       const iso = (d: Date) => d.toISOString().slice(0, 10);
       const headers = await rbacHeaders();
       const out: Record<string, Series> = {};
-      await Promise.all(KPIS.map(async (k) => {
+      // Ask the server which KPIs this persona may see, so a hidden one is never
+      // requested rather than requested and hidden.
+      let visible: string[] = KPIS.map((k) => k.id);
+      try {
+        const r = await fetch(
+          `${API_BASE_URL}/metrics/kpi?tenants=${tenant}&days=${days}&persona=${persona}`,
+          { headers });
+        if (r.ok) {
+          const d = await r.json();
+          if (Array.isArray(d?.kpis)) visible = d.kpis.map((x: { kpi_id: string }) => x.kpi_id);
+        }
+      } catch { /* fall back to all five */ }
+      await Promise.all(KPIS.filter((k) => visible.includes(k.id)).map(async (k) => {
         try {
           const res = await fetch(
             `${API_BASE_URL}/metric/kpi/series?tenant=${tenant}&kpi_id=${k.id}` +
@@ -89,11 +104,12 @@ export default function KpiTrends({ tenant = 'nexabank', days = 30 }: { tenant?:
       if (!cancelled) setSeries(out);
     })();
     return () => { cancelled = true; };
-  }, [tenant, days]);
+  }, [tenant, days, persona]);
 
   return (
     <div className="reveal-stagger grid grid-cols-1 lg:grid-cols-2 gap-4">
-      {KPIS.map((k) => {
+      {KPIS.filter((k) => series[k.id] !== undefined || Object.keys(series).length === 0)
+        .map((k) => {
         const s = series[k.id];
         const pts = s?.points || [];
         const last = pts.length ? pts[pts.length - 1].value : 0;

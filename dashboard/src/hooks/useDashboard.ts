@@ -35,7 +35,7 @@ function timeRangeToParam(tr: TimeRange): string {
  * Central dashboard hook. Single source of truth for tenants + timeRange.
  * All pages MUST use this hook, never derive tenant arrays locally.
  */
-export function useDashboardData() {
+export function useDashboardData(persona?: string) {
   const dispatch = useAppDispatch();
   const queryClient = useQueryClient();
   const dashboardState = useAppSelector((state) => state.dashboard);
@@ -130,7 +130,7 @@ export function useDashboardData() {
 
   // ─── Core dashboard data (React Query) ───
   const { data: dashboardData, isLoading, isFetching } = useQuery({
-    queryKey: ['dashboardData', tenantsParam, rangeParam, role],
+    queryKey: ['dashboardData', tenantsParam, rangeParam, role, persona],
     queryFn: async () => {
       const [
         kpiMetrics,
@@ -142,7 +142,7 @@ export function useDashboardData() {
         realTimeUsersData,
         dimensionProvenance,
       ] = await Promise.all([
-        dashboardAPI.getKPIMetrics(tenantsParam, rangeParam),
+        dashboardAPI.getKPIMetrics(tenantsParam, rangeParam, persona),
         dashboardAPI.getSecondaryKPIMetrics(tenantsParam, rangeParam),
         dashboardAPI.getTrafficData(tenantsParam, rangeParam),
         dashboardAPI.getTopFeatures(tenantsParam, rangeParam),
@@ -255,6 +255,7 @@ export function useDashboardData() {
     realTimeUsers: dashboardData?.realTimeUsers || 0,
     realTimeUsersTimestampIST: dashboardData?.realTimeUsersTimestampIST || null,
     dimensionProvenance: dashboardData?.dimensionProvenance || {},
+    persona,
     aiInsights: aiInsightsData || [],
     isLoading,
     isFetching,
