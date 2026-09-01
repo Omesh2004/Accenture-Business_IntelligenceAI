@@ -1116,7 +1116,9 @@ REGISTRY: dict[str, ToolSpec] = {
                  "List the metrics investigated for this tenant, marking which are governed "
                  "contracts and which are currently outside their band.",
                  "catalog", dict(_TENANT), _list_metrics,
-                 selectors=("kpis", "metrics do you", "track", "cover", "list", "contracts"),
+                 selectors=("kpis", "metrics do you", "metrics", "measuring", "measure",
+                            "track", "tracking", "cover", "list", "contracts", "watching",
+                            "monitor", "what all"),
                  render=_render_list, priority=2),
         ToolSpec("get_insight",
                  "The recorded finding for a metric: whether it moved, its observed and expected "

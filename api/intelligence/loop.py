@@ -537,6 +537,12 @@ def run(tenant_id: str, question: str, persona: str, engine: str = "auto", emit=
     rounds_allowed = min(MAX_ROUNDS, profile.max_rounds)
     for round_n in range(rounds_allowed):
         plan = brain.plan(ctx, observations, round_n)
+        # Whatever chose the plan, an investigation about a metric does not also report the
+        # catalogue and introduce itself. The rule planner already excluded those; the LLM
+        # planner did not, so "why are signups increasing" came back with the finding, the full
+        # metric list and "I am the analytics agent for this platform".
+        plan = planner.drop_meta_calls(plan, ctx)
+        plan = planner.ensure_chain(plan, ctx, observations)
         last_thought = plan.thought
         trace.add("Plan round %d" % (round_n + 1), "planner.%s" % plan.engine,
                   plan.thought, kind="reason")

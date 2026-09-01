@@ -117,8 +117,15 @@ def complete_text(prompt: str, max_tokens: int | None = None,
         return "", 0, 0
 
 
-def complete_json(prompt: str, max_tokens: int | None = None) -> tuple[dict | None, int, int]:
-    """Returns (parsed_object, tokens_in, tokens_out). None means "decide without me"."""
+def complete_json(prompt: str, max_tokens: int | None = None,
+                  temperature: float | None = None) -> tuple[dict | None, int, int]:
+    """Returns (parsed_object, tokens_in, tokens_out). None means "decide without me".
+
+    Callers that make a DECISION pass temperature 0. Sampling a plan means the same question
+    picks different capabilities on different runs -- one asking for causes and a recommendation,
+    the next answering with the reading alone -- which is indefensible when the answer is
+    supposed to be reproducible evidence.
+    """
     ok, model = available()
     if not ok:
         return None, 0, 0
@@ -128,7 +135,7 @@ def complete_json(prompt: str, max_tokens: int | None = None) -> tuple[dict | No
         "stream": False,
         # Determinism as far as the server allows. Correctness never depends on it: every number
         # is re-checked against the claim set regardless.
-        "temperature": config.LLM_TEMPERATURE,
+        "temperature": config.LLM_TEMPERATURE if temperature is None else temperature,
         "seed": config.LLM_SEED,
         "max_tokens": _budget(prompt, max_tokens or config.LLM_MAX_TOKENS),
     }

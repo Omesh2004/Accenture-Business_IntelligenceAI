@@ -1,28 +1,27 @@
 'use client';
 
-/** The dashboard: who is reading, what each KPI reads now, how it moved, and where it leaked. */
+/** The dashboard: who is reading, what each KPI reads now, how it moved, and what needs them first. */
 
 import React, { useMemo, useState } from 'react';
 import { useDashboardData } from '@/hooks/useDashboard';
 import { useKpiSeries } from '@/hooks/useKpiSeries';
 import { DashboardSkeleton } from '@/components/Skeletons';
 import KPICard from '@/components/KPICard';
-import AIInsightsPanel from '@/components/AIInsightsPanel';
-import JourneyFunnelInsights from '@/components/JourneyFunnelInsights';
 import KpiTrends from '@/components/KpiTrends';
 import MetricTable from '@/components/MetricTable';
+import RangePosition from '@/components/RangePosition';
 import PersonaLens, { type PersonaId } from '@/components/PersonaLens';
 
 export default function DashboardContent() {
   // The lens the whole page is read through. Server-validated on every request.
   const [persona, setPersona] = useState<PersonaId>('analyst');
-  const { isLoading, kpiMetrics, aiInsights, funnelData, timeRange } = useDashboardData(persona);
+  const { isLoading, kpiMetrics, timeRange } = useDashboardData(persona);
 
   // The range selector drives every panel, charts included.
   const rangeDays = Number(String(timeRange).replace(/[^0-9]/g, '')) || 30;
 
-  // One fetch of the five series, shared by the cards, the charts and the table, so a sparkline
-  // can never disagree with the chart underneath it.
+  // One fetch of the five series, shared by the cards, the charts, the table and the range
+  // panel, so a sparkline can never disagree with the chart underneath it.
   const { data: seriesData, isLoading: seriesLoading } =
     useKpiSeries('nexabank', rangeDays, persona);
   const series = useMemo(() => seriesData?.series || {}, [seriesData]);
@@ -45,21 +44,20 @@ export default function DashboardContent() {
         </div>
       </section>
 
+      <section className="rise" aria-label="Where each metric sits against its range">
+        <RangePosition series={series} allowed={allowed} />
+      </section>
+
       <section className="rise" id="kpi-trends" aria-label="How each KPI moved">
-        <h3 className="mb-3.5">How each KPI moved</h3>
+        <h3 className="mb-1">How each KPI moved</h3>
+        <p className="mb-3.5 text-[12.5px] text-slate-400">
+          Daily, over the last {rangeDays} days, against the range each was scored on.
+        </p>
         <KpiTrends series={series} allowed={allowed} loading={seriesLoading} />
       </section>
 
       <section className="rise" aria-label="Every metric at a glance">
         <MetricTable series={series} allowed={allowed} days={rangeDays} />
-      </section>
-
-      <section className="rise" id="funnel-section" aria-label="Onboarding funnel">
-        <JourneyFunnelInsights data={funnelData} />
-      </section>
-
-      <section className="rise" id="insights-section" aria-label="AI insights">
-        <AIInsightsPanel insights={aiInsights} />
       </section>
     </div>
   );

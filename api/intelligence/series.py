@@ -36,9 +36,15 @@ def _layer() -> ClickHouseMetricLayer:
 
 
 def _window(days: int, end: datetime | None = None) -> Window:
-    """Half-open and bounded at BOTH ends -- a lower-bound-only window biases every comparison."""
+    """Half-open, bounded at BOTH ends, and ending at the last COMPLETE day.
+
+    The window used to run to tomorrow midnight, so the final point was the day in progress. A
+    reader asking about signups at 10am was told the metric "read 2 per day" -- two accounts had
+    been opened so far today, against a real level near ninety. The figure was true of a few
+    hours and false of the metric, which is the worst kind of wrong number to put in front of
+    someone. A partial day is not a daily value, so it is not offered as one.
+    """
     end = (end or datetime.utcnow()).replace(hour=0, minute=0, second=0, microsecond=0)
-    end += timedelta(days=1)
     return Window(end - timedelta(days=days), end)
 
 

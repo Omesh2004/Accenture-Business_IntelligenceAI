@@ -132,26 +132,11 @@ export function useDashboardData(persona?: string) {
   const { data: dashboardData, isLoading, isFetching } = useQuery({
     queryKey: ['dashboardData', tenantsParam, rangeParam, role, persona],
     queryFn: async () => {
-      const [
-        kpiMetrics,
-        trafficData,
-        funnelData,
-        tenants,
-      ] = await Promise.all([
-        dashboardAPI.getKPIMetrics(tenantsParam, rangeParam, persona),
-        dashboardAPI.getTrafficData(tenantsParam, rangeParam),
-        dashboardAPI.getFunnelData(tenantsParam, rangeParam),
-        dashboardAPI.getTenants(tenantsParam, rangeParam),
-        // Same gate as locations/devices: it describes those charts, so it must not be
-        // reachable where they are not.
-      ]);
-
-      return {
-        kpiMetrics,
-        trafficData,
-        funnelData,
-        tenants,
-      };
+      // Only what the page still reads. Traffic, the funnel and the tenant roll-up were fetched
+      // on every load for panels that no longer exist, which is three round trips a reader waits
+      // on and never sees.
+      const kpiMetrics = await dashboardAPI.getKPIMetrics(tenantsParam, rangeParam, persona);
+      return { kpiMetrics };
     },
     // Keep data responsive while avoiding noisy re-fetching.
     staleTime: 60 * 1000,
@@ -159,12 +144,6 @@ export function useDashboardData(persona?: string) {
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,
     retry: 1,
-  });
-
-  const { data: aiInsightsData } = useQuery({
-    queryKey: ['aiInsights', tenantsParam, rangeParam],
-    queryFn: () => dashboardAPI.getAIInsights(tenantsParam, rangeParam),
-    staleTime: 10 * 60 * 1000,
   });
 
   // ─── WebSocket for real-time metrics ───
@@ -232,34 +211,11 @@ export function useDashboardData(persona?: string) {
     rangeParam,
     // React Query data
     kpiMetrics: dashboardData?.kpiMetrics || [],
-    trafficData: dashboardData?.trafficData || [],
-    funnelData: dashboardData?.funnelData || [],
-    tenants: dashboardData?.tenants || [],
     persona,
-    aiInsights: aiInsightsData || [],
     isLoading,
     isFetching,
     // Actions
     changeTimeRange,
     changeTenant: changeTenants,
   };
-}
-
-export function useAIInsights() {
-  const { funnelData = [] } = useDashboardData();
-
-  const generateInsights = useCallback(() => {
-    const insights: string[] = [];
-
-    funnelData.forEach((step) => {
-      if (step.dropOff >= 40) {
-        insights.push(`${step.dropOff}% drop-off at ${step.label} step`);
-      }
-    });
-
-
-    return insights;
-  }, [funnelData]);
-
-  return { generateInsights };
 }

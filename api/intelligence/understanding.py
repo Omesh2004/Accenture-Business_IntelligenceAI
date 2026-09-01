@@ -114,11 +114,17 @@ def _hits(question: str, vocabulary: frozenset) -> list[str]:
 
 
 def read(question: str, names_metric: bool, conversational: bool,
-         matched: tuple[str, ...] | list[str] = ()) -> Reading:
+         matched: tuple[str, ...] | list[str] = (), capability: str = "") -> Reading:
     """Classify the question. Deterministic, dependency-free, and explainable.
 
     `names_metric`, `conversational` and `matched` are passed in rather than recomputed so this
     module stays free of the tool registry -- the planner already knows all three.
+
+    `capability` is the capability the question matched most strongly, when it matched one at
+    all. It is the last resort before refusing: "what are you measuring?" names no metric and
+    uses no business vocabulary, so every cue test above misses it, and it was being refused as
+    unintelligible while the catalogue capability sat scoring top of the list. A question that
+    plainly reaches for a capability is a question, not noise.
 
     `matched` is every metric whose vocabulary the question uses. More than one is NOT a failure to
     understand: "what about loan data" names two loan KPIs, and a reader who does not know the
@@ -187,6 +193,12 @@ def read(question: str, names_metric: bool, conversational: bool,
             reason="read as a follow-up about the most material movement, wanting %s"
                    % _describe(wants),
             cues=sorted(set(wants_why + wants_action)))
+
+    if capability:
+        return Reading(
+            "lookup", wants=(ASSURANCE,), chain=(),
+            reason="read as a request the %s capability answers" % capability.replace("_", " "),
+            cues=[capability])
 
     return Reading("unmatched", reason="the question names no metric and uses no vocabulary "
                                        "about this business")

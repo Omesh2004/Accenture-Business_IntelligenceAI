@@ -293,11 +293,21 @@ def comprehend(ctx: Context) -> understanding.Reading:
         scored = sorted(((score_tool(ctx.question, s), s) for s in catalogue),
                         key=lambda t: -t[0])
         top = scored[0] if scored else (0.0, None)
-        conversational = bool(top[1]) and top[1].intent in ("greeting", "help") \
-            and top[0] >= MIN_SELECT_SCORE
+        # The turn has already been read once, in context, before planning began. Letting word
+        # scoring reach a second, contradictory verdict is what produced "read as a salutation
+        # rather than a question about the business. no capability answers it" in reply to
+        # "what are you measuring?" -- a real question, refused because two parts of the
+        # planner disagreed about what kind of question it was.
+        conversational = (ctx.turn_kind != "analysis"
+                          and bool(top[1]) and top[1].intent in ("greeting", "help")
+                          and top[0] >= MIN_SELECT_SCORE)
+        # The capability the words reach for, when they reach for one clearly. Passed in so a
+        # question that matches a capability but no metric is answered rather than refused.
+        wanted = top[1].name if (top[1] and top[0] >= MIN_SELECT_SCORE
+                                 and top[1].intent not in ("greeting", "help")) else ""
         ctx.reading = understanding.read(
             ctx.question, _mentions_metric(ctx), conversational,
-            matched=matched_metrics(ctx))
+            matched=matched_metrics(ctx), capability=wanted)
     return ctx.reading
 
 
@@ -386,10 +396,15 @@ def candidates(ctx: Context,
     for spec in chain:
         ordered.append((1.0, spec))
         seen.add(spec.name)
+    # Capabilities that describe the PLATFORM rather than the movement. They are real answers to
+    # their own questions and pure noise inside an investigation: "why are signups increasing"
+    # was coming back with the finding, then the full metric catalogue, then "I am the analytics
+    # agent for this platform" -- three answers to two questions nobody asked.
     for value, spec in keyword:
-        if spec.name not in seen:
-            ordered.append((value, spec))
-            seen.add(spec.name)
+        if spec.name in seen or spec.intent in _META_INTENTS:
+            continue
+        ordered.append((value, spec))
+        seen.add(spec.name)
     return ordered
 
 
@@ -547,7 +562,9 @@ class LLMPlanner:
             return self._fallback.plan(ctx, observations, round_n)
 
         prompt = self._prompt(ctx, observations, round_n)
-        obj, t_in, t_out = llm_client.complete_json(prompt)
+        # A plan is a decision, not prose. Sampled at temperature the same question
+        # picked different capabilities on different runs.
+        obj, t_in, t_out = llm_client.complete_json(prompt, temperature=0.0)
         self.tokens_in += t_in
         self.tokens_out += t_out
         if not isinstance(obj, dict):
@@ -638,6 +655,64 @@ class LLMPlanner:
             "tool would help. Use only tool names from the list. Reply with JSON only:\n"
             + PLAN_SCHEMA_HINT
         )
+
+
+def ensure_chain(plan, ctx, observations):
+    """Add any capability the READING asked for that the plan left out.
+
+    Comprehension decides what a question wants; the planner decides how to get it. When the two
+    disagree the reading wins, because it is the part that read the question. "What should we do
+    about transaction failures" was coming back with the finding and its causes and no
+    recommendation at all -- the planner simply did not pick the capability, and the one thing
+    the reader actually asked for was the one thing missing.
+
+    Only capabilities the persona may use, and only ones not already run.
+    """
+    reading = comprehend(ctx)
+    if not reading.is_investigation or plan.done:
+        return plan
+    ran = {o.tool for o in observations} | {c.tool for c in plan.calls}
+    by_intent: dict[str, tools.ToolSpec] = {}
+    for spec in tools.catalogue(ctx.persona):
+        by_intent.setdefault(spec.intent, spec)
+    for intent in reading.chain:
+        slot = understanding.slot_for(intent)
+        if slot and slot not in reading.wants:
+            continue
+        spec = by_intent.get(intent)
+        if spec is None or spec.name in ran:
+            continue
+        args = {"tenant_id": ctx.tenant_id}
+        if "kpi_id" in spec.params and ctx.focus_metric:
+            args["kpi_id"] = ctx.focus_metric
+        plan.calls.append(Call(tool=spec.name, args=args,
+                               why="%s stage the question asked for" % intent))
+        ran.add(spec.name)
+    return plan
+
+
+def drop_meta_calls(plan, ctx):
+    """Strip platform-describing calls from an investigation, whichever planner proposed them.
+
+    `catalog`, `identity` and `capabilities` answer questions about the assistant. Inside an
+    answer about a metric they are noise, and they read as findings because they arrive in the
+    same paragraph. A turn that IS about the platform keeps them: the reading decides, not the
+    tool.
+    """
+    reading = comprehend(ctx)
+    if not reading.is_investigation:
+        return plan
+    kept = [c for c in plan.calls
+            if getattr(tools.REGISTRY.get(c.tool), "intent", "") not in _META_INTENTS]
+    if len(kept) == len(plan.calls):
+        return plan
+    plan.calls = kept
+    return plan
+
+
+#: Capabilities about the platform itself. Answers to their own questions, noise inside an
+#: investigation about a metric.
+_META_INTENTS = frozenset({"catalog", "greeting", "help", "cost"})
 
 
 def choose(engine: str = "auto"):

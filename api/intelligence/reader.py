@@ -125,13 +125,15 @@ def list_insights(tenant_id: str, persona: str = "analyst", limit: int = 20,
         f"                    magnitude, baseline, observed "
         f"             FROM {DB}.anomalies FINAL WHERE tenant_id = %(t)s) AS a "
         f"    ON i.anomaly_id = a.anomaly_id "
-        # The band the movement was scored against. A chart can then mark the DAYS that fell
-        # outside it, instead of shading the whole scored window and saying nothing.
-        f"  LEFT JOIN (SELECT kpi_id, as_of, horizon_days, argMax(lower, as_of) AS lower, "
+        # The band the metric was scored against, keyed on the metric and the window LENGTH
+        # rather than on the anomaly's start date. Joining on the anomaly meant a quiet KPI got
+        # no band at all, and a chart with no band has no way to say which days sat outside it --
+        # so it marked the whole window instead, which is the opposite of the truth.
+        f"  LEFT JOIN (SELECT kpi_id, horizon_days, argMax(lower, as_of) AS lower, "
         f"                    argMax(upper, as_of) AS upper "
         f"             FROM {DB}.forecasts FINAL WHERE tenant_id = %(t)s "
-        f"             GROUP BY kpi_id, as_of, horizon_days) AS f "
-        f"    ON f.kpi_id = i.kpi_id AND f.as_of = a.window_start "
+        f"             GROUP BY kpi_id, horizon_days) AS f "
+        f"    ON f.kpi_id = i.kpi_id AND f.horizon_days = i.window_days "
         f"  WHERE i.tenant_id = %(t)s AND i.persona = %(p)s"
         + ("  AND i.window_days = %(w)s " if window_days else "")
         + f") ORDER BY kpi_id ASC, live DESC, generated_at DESC, insight_id ASC "

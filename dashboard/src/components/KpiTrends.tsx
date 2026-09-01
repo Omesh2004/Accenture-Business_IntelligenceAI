@@ -28,17 +28,21 @@ export function fmt(unit: string, v: number): string {
 }
 
 /**
- * Split the series so the part that actually moved is drawn in its own colour. Both parts keep
- * the boundary point, otherwise the two lines meet with a visible gap.
+ * Split the series so the days outside the expected range are drawn in their own colour.
+ *
+ * With no usable band nothing is marked. An earlier version fell back to colouring the whole
+ * scored window, so a metric that simply had no forecast on record came out entirely crimson --
+ * "every day was outside", which is the opposite of what an absent band means.
+ *
+ * Both parts keep the boundary point, otherwise the two lines meet with a visible gap.
  */
 export function markWindow(points: SeriesPoint[], win?: MovedWindow): Marked[] {
-  const hasBand = win && win.lower != null && win.upper != null && win.upper > win.lower;
-  const inRange = (d: string) =>
-    Boolean(win?.start) && d >= win!.start && (!win!.end || d < win!.end);
-  const breaches = (p: SeriesPoint) =>
-    hasBand ? (p.value < win!.lower! || p.value > win!.upper!) && inRange(p.date) : inRange(p.date);
+  const lower = win?.lower;
+  const upper = win?.upper;
+  const hasBand = lower != null && upper != null && upper > lower;
+  if (!hasBand) return points.map((p) => ({ ...p, normal: p.value, inWindow: null }));
 
-  if (!win?.start) return points.map((p) => ({ ...p, normal: p.value, inWindow: null }));
+  const breaches = (p: SeriesPoint) => p.value < lower! || p.value > upper!;
   return points.map((p, i) => {
     const here = breaches(p);
     const near = (i > 0 && breaches(points[i - 1]))
@@ -47,27 +51,26 @@ export function markWindow(points: SeriesPoint[], win?: MovedWindow): Marked[] {
   });
 }
 
-/** The first and last day that actually breached, for the shaded band and the caption. */
-export function breachSpan(points: Marked[]): [string, string] | null {
-  const hit = points.filter((p) => p.inWindow != null && p.normal == null);
-  return hit.length ? [hit[0].date, hit[hit.length - 1].date] : null;
+/** How many days sat outside, for the caption. */
+export function breachCount(points: Marked[]): number {
+  return points.filter((p) => p.inWindow != null && p.normal == null).length;
 }
 
 function Legend() {
   return (
     <div className="mb-3.5 flex flex-wrap items-center gap-x-6 gap-y-2 text-[11.5px] text-slate-500">
       <span className="inline-flex items-center gap-2">
+        <span className="inline-block h-3 w-6 rounded border"
+              style={{ background: 'rgb(91 33 224 / 0.08)', borderColor: 'rgb(91 33 224 / 0.28)' }} />
+        The expected range
+      </span>
+      <span className="inline-flex items-center gap-2">
         <span className="inline-block h-0.5 w-6 rounded" style={{ background: INSIDE }} />
-        Inside the expected range
+        Inside it
       </span>
       <span className="inline-flex items-center gap-2">
         <span className="inline-block h-0.5 w-6 rounded" style={{ background: OUTSIDE }} />
-        Days outside the expected range
-      </span>
-      <span className="inline-flex items-center gap-2">
-        <span className="inline-block h-3 w-6 rounded"
-              style={{ background: 'rgb(248 39 104 / 0.10)' }} />
-        The days it was outside
+        Outside it
       </span>
     </div>
   );
@@ -81,7 +84,7 @@ export default function KpiTrends(
     () => KPI_SPECS.filter((k) => allowed.includes(k.id)).map((k) => {
       const s = series[k.id];
       const pts = markWindow(s?.points || [], s?.window);
-      return { spec: k, pts, win: s?.window, span: breachSpan(pts) };
+      return { spec: k, pts, win: s?.window, outside: breachCount(pts) };
     }),
     [series, allowed],
   );
@@ -89,13 +92,17 @@ export default function KpiTrends(
   return (
     <>
       <Legend />
-      <div className="rise-stagger grid grid-cols-1 gap-4 lg:grid-cols-2 xl:grid-cols-4">
-        {cards.map(({ spec: k, pts, win, span }) => {
+      {/* Two per row. Four across made every chart too narrow to read a date off, which is the
+          one thing a reader needs from a daily series. */}
+      <div className="rise-stagger grid grid-cols-1 gap-4 xl:grid-cols-2">
+        {cards.map(({ spec: k, pts, win, outside }) => {
           const last = pts.length ? pts[pts.length - 1].value : 0;
-          const onScreen = Boolean(win?.start && span);
+          const lower = win?.lower;
+          const upper = win?.upper;
+          const hasBand = lower != null && upper != null && upper > lower;
           return (
             <div key={k.id} className="surface lift-card p-5">
-              <div className="mb-3 flex items-baseline justify-between gap-3">
+              <div className="mb-1 flex items-baseline justify-between gap-3">
                 <span className="truncate text-[10.5px] font-semibold uppercase
                                  tracking-[0.13em] text-slate-500">
                   {k.label}
@@ -106,22 +113,32 @@ export default function KpiTrends(
                 </span>
               </div>
 
-              <div style={{ height: 128 }}>
+              <p className="mb-3 text-[11.5px]"
+                 style={{ color: outside ? OUTSIDE : 'var(--color-slate-400)' }}>
+                {!hasBand
+                  ? 'No expected range on record for this window'
+                  : outside === 0
+                    ? `Every day inside ${fmt(k.unit, lower!)} to ${fmt(k.unit, upper!)}`
+                    : `${outside} of ${pts.length} days outside `
+                      + `${fmt(k.unit, lower!)} to ${fmt(k.unit, upper!)}`}
+              </p>
+
+              <div style={{ height: 190 }}>
                 {pts.length ? (
                   <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={pts} margin={{ top: 4, right: 4, left: 0, bottom: 0 }}>
+                    <AreaChart data={pts} margin={{ top: 6, right: 8, left: 0, bottom: 0 }}>
                       <defs>
                         <linearGradient id={`fill-${k.id}`} x1="0" y1="0" x2="0" y2="1">
-                          <stop offset="0%" stopColor={INSIDE} stopOpacity={0.20} />
+                          <stop offset="0%" stopColor={INSIDE} stopOpacity={0.18} />
                           <stop offset="100%" stopColor={INSIDE} stopOpacity={0} />
                         </linearGradient>
                       </defs>
                       <CartesianGrid strokeDasharray="2 5" stroke="#f0f0f6" vertical={false} />
-                      <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#9b95ad' }}
-                             tickFormatter={(d: string) => d.slice(5)} minTickGap={24}
+                      <XAxis dataKey="date" tick={{ fontSize: 10.5, fill: '#9b95ad' }}
+                             tickFormatter={(d: string) => d.slice(5)} minTickGap={30}
                              axisLine={false} tickLine={false} />
-                      <YAxis tick={{ fontSize: 10, fill: '#9b95ad' }} width={42}
-                             axisLine={false} tickLine={false}
+                      <YAxis tick={{ fontSize: 10.5, fill: '#9b95ad' }} width={48}
+                             axisLine={false} tickLine={false} domain={['auto', 'auto']}
                              tickFormatter={(v: number) => (k.unit === 'rate'
                                ? `${Math.round(v * 100)}%`
                                : v >= 1000 ? `${Math.round(v / 1000)}k` : `${Math.round(v)}`)} />
@@ -130,14 +147,18 @@ export default function KpiTrends(
                           n === 'inWindow' ? 'Outside the range' : 'Inside the range']}
                         contentStyle={{ borderRadius: 12, border: '1px solid var(--hairline)',
                                         fontSize: 12, boxShadow: 'var(--shadow-card)' }} />
-                      {onScreen && (
-                        <ReferenceArea x1={span![0]} x2={span![1]} fill={OUTSIDE}
-                                       fillOpacity={0.07} />
+
+                      {/* The range itself, drawn as the region it is. A reader can then SEE the
+                          line leave it, instead of being told in a caption which days did. */}
+                      {hasBand && (
+                        <ReferenceArea y1={lower!} y2={upper!} fill={INSIDE} fillOpacity={0.08}
+                                       stroke={INSIDE} strokeOpacity={0.22} strokeDasharray="3 4" />
                       )}
-                      <Area type="monotone" dataKey="normal" strokeWidth={2} connectNulls={false}
-                            stroke={INSIDE} fill={`url(#fill-${k.id})`}
+
+                      <Area type="monotone" dataKey="normal" strokeWidth={2.2}
+                            connectNulls={false} stroke={INSIDE} fill={`url(#fill-${k.id})`}
                             isAnimationActive animationDuration={800} />
-                      <Area type="monotone" dataKey="inWindow" strokeWidth={2.4}
+                      <Area type="monotone" dataKey="inWindow" strokeWidth={2.6}
                             connectNulls={false} stroke={OUTSIDE} fill="none"
                             isAnimationActive animationDuration={800} />
                     </AreaChart>
@@ -148,23 +169,6 @@ export default function KpiTrends(
                   </div>
                 )}
               </div>
-
-              {onScreen ? (
-                <motion.p initial={{ opacity: 0 }} animate={{ opacity: 1 }}
-                          transition={{ delay: 0.5 }}
-                          className="mt-2 text-[11.5px]" style={{ color: OUTSIDE }}>
-                  Outside the expected range
-                  {win!.lower != null && win!.upper != null
-                    ? ` of ${fmt(k.unit, win!.lower)} to ${fmt(k.unit, win!.upper)}`
-                    : ''}
-                  {span![0] === span![1] ? ` on ${span![0]}` : ` from ${span![0]} to ${span![1]}`}
-                </motion.p>
-              ) : win?.start ? (
-                <p className="mt-2 text-[11.5px] text-slate-400">
-                  Movement recorded over {String(win.start).slice(0, 10)} to{' '}
-                  {String(win.end).slice(0, 10)}, but no day in this view breached the range
-                </p>
-              ) : null}
             </div>
           );
         })}
