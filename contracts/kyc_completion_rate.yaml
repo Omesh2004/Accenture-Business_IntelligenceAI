@@ -98,6 +98,9 @@ quality:
       signature: "kyc_completed == 0 for a full window while submissions continue"
       verdict: ambiguous
 
+# What a movement here is worth to the bank; Materiality ranks by it.
+strategic_weight: 0.75
+
 detection:
   direction: both
   band_source: robust_baseline

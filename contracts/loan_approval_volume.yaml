@@ -91,6 +91,9 @@ quality:
       signature: "loans_approved flat while kyc_started rises sharply"
       verdict: ambiguous
 
+# What a movement here is worth to the bank; Materiality ranks by it.
+strategic_weight: 0.85
+
 detection:
   direction: both
   band_source: robust_baseline

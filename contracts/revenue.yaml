@@ -110,6 +110,9 @@ quality:
       signature: "a channel with transactions but no fee-schedule row"
       verdict: ambiguous
 
+# What a movement here is worth to the bank; Materiality ranks by it.
+strategic_weight: 1.0
+
 detection:
   direction: both
   band_source: robust_baseline

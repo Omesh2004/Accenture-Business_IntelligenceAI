@@ -134,6 +134,14 @@ class Contract:
         return int((self.raw.get("quality") or {}).get("provisional_window_minutes", 0))
 
     @property
+    def strategic_weight(self) -> float:
+        """Business impact, 0..1. Absent means middling rather than unimportant."""
+        try:
+            return max(0.0, min(1.0, float(self.raw.get("strategic_weight", 0.5))))
+        except (TypeError, ValueError):
+            return 0.5
+
+    @property
     def allowed_levers(self) -> list[str]:
         return list((self.raw.get("decision") or {}).get("allowed_levers") or ["investigate"])
 

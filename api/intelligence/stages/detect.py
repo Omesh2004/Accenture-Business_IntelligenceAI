@@ -55,20 +55,28 @@ def robust_z(value: float, history: list[float]) -> float:
 
 
 def materiality(observed: float, baseline: float, critical_pct: float,
-                affected: float, total: float, breaching: int, min_windows: int) -> float:
-    """effect x reach x persistence, each in [0,1]. docs/PIPELINE_CONTRACT.md section 4.
+                affected: float, total: float, breaching: int, min_windows: int,
+                strategic_weight: float = 0.5) -> float:
+    """Ranking score: strength x reach x business weight. What to surface first."""
+    return round6(strength(observed, baseline, critical_pct, breaching, min_windows)
+                  * (min(1.0, affected / total) if total > EPSILON else 1.0)
+                  * max(0.0, min(1.0, strategic_weight)))
 
-    `reach` is the share of the KPI's own population the movement touches. Detect scores the whole
-    window, so that share is 1.0 and callers pass total = 0. It was previously the KPI's share of
-    the tenant's raw event volume, which made every business KPI structurally immaterial -- loan
-    approvals are a few hundred events beside tens of thousands of page views, so a 37% collapse
-    scored 0.05 and was suppressed. Triviality is guarded by `config.MIN_KPI_VOLUME` instead.
+
+def strength(observed: float, baseline: float, critical_pct: float,
+             breaching: int, min_windows: int) -> float:
+    """How big and how persistent the movement is, before business weighting.
+
+    Severity reads this, not materiality: weighting severity by importance meant a KPI weighted
+    0.7 could never cross the 0.75 urgent threshold however far it moved.
     """
     denom = max(abs(baseline), EPSILON)
-    effect = min(1.0, abs(observed - baseline) / denom / max(critical_pct / 100.0, EPSILON))
-    reach = min(1.0, affected / total) if total > EPSILON else 1.0
+    ratio = abs(observed - baseline) / denom / max(critical_pct / 100.0, EPSILON)
+    # Saturating rather than capped: a hard min(1.0, ..) scored every real movement exactly 1.0,
+    # so nothing could be ranked against anything else.
+    effect = ratio / (ratio + 1.0)
     persistence = min(1.0, breaching / max(min_windows, 1))
-    return round6(effect * reach * persistence)
+    return round6(effect * persistence)
 
 
 def severity_for(score: float) -> str:
@@ -127,7 +135,7 @@ def run(ctx, series_values: list[float], band: dict | None, kpi_volume: float,
         return DetectResult(False, "below_effect_floor")
 
     score = materiality(observed, baseline, critical_pct, kpi_volume, tenant_volume,
-                        breaching, min_windows)
+                        breaching, min_windows, ctx.contract.strategic_weight)
     if score < config.MATERIALITY_FLOOR:
         return DetectResult(False, "immaterial", materiality=score)
 
@@ -146,7 +154,8 @@ def run(ctx, series_values: list[float], band: dict | None, kpi_volume: float,
         "observed": round6(observed),
         "forecast_id": (band or {}).get("forecast_id", ""),
         "materiality": score,
-        "severity": severity_for(score),
+        "severity": severity_for(strength(observed, baseline, critical_pct,
+                                          breaching, min_windows)),
         "status": "open",
         "engine_type": "stats",
     }, score)

@@ -89,6 +89,9 @@ quality:
       signature: "txn_failed == 0 across a full window on every channel"
       verdict: ambiguous
 
+# What a movement here is worth to the bank; Materiality ranks by it.
+strategic_weight: 0.7
+
 detection:
   direction: up
   band_source: robust_baseline

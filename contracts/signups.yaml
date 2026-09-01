@@ -74,6 +74,9 @@ quality:
       signature: "accounts_opened == 0 for a window that previously had volume"
       verdict: fail
 
+# What a movement here is worth to the bank; Materiality ranks by it.
+strategic_weight: 0.6
+
 detection:
   direction: both
   band_source: robust_baseline
