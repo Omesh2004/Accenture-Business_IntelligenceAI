@@ -10,6 +10,103 @@ to something the brief asks for. If a task does not map to the brief, we do not 
 
 ---
 
+## How to work on this repo
+
+Read this section first. It says where every document is, the rules for changing the repo, and the
+commands you will actually use. The product invariants — the golden rule, abstain-on-thin-evidence,
+plant-anomalies-first — are section 14; this section is about the work itself.
+
+### Where the documentation is
+
+Markdown lives only in `docs/`. `CLAUDE.md` and `README.md` are the only root markdown files.
+
+| Location | What it holds |
+|---|---|
+| `CLAUDE.md` (this file) | The brief, the rules, the KPIs and personas, the tech, the folder structure, the four-track split. Governs everything. |
+| `docs/SOLUTION.md` | What the product does and why, in plain English. |
+| `docs/ARCHITECTURE.md` | How the pieces fit, how data flows, and the traps that have cost real time. |
+| `docs/DATA_MODEL.md` | Bronze / Silver / Gold — what lives in each layer and who may read it; the Signal Store. |
+| `docs/INTELLIGENCE.md` | The agent, its six tools, the narrator, the verifier, entitlement. |
+| `contracts/*.yaml` | One KPI / semantic contract per KPI, plus `levers.yaml`. The narrator uses these definitions and nothing else. |
+| `docs/audit/` | The Track B rebuild: `TRACK_B_CURRENT_VS_PROPOSED.md` (audit), `TRACK_B_PHASED_PLAN.md` (the 8-phase plan + decisions D1–D8), `TRACK_A_B_SYNC.md` (the A⇄B interface contract). Committed and shared. |
+| `docs/execution/` | Personal working checklists. **Gitignored** — never rely on a teammate having one, or on it being current. The shared truth is `docs/audit/`. |
+| `README.md` | How to run the stack and the service/port map. |
+
+**Read before you start, by track (section 13):**
+
+| Working on | Read |
+|---|---|
+| `nexabank/` (Track A) | sections 4–6, 13 · `ARCHITECTURE.md` · `docs/audit/TRACK_A_B_SYNC.md` |
+| `ingestion/` `pipeline/` `warehouse/` `api/` Metric API (Track B) | sections 6, 11–12 · `DATA_MODEL.md` · `ARCHITECTURE.md` · all of `docs/audit/` |
+| `api/intelligence/` `contracts/` (Track C) | sections 2, 8–10, 14 · `INTELLIGENCE.md` · `DATA_MODEL.md` "Signal Store" |
+| `dashboard/` (Track D) | sections 7–8 · `INTELLIGENCE.md` "Personas and entitlement" |
+
+### Rules for changing the repo
+
+1. **Scope is the brief.** Every change maps to a row in section 3. No extra KPIs, no fourth
+   persona, no third data source, no bandits, no fine-tuning. When unsure, cut rather than add.
+2. **Stay in your track's folders** (section 13). A change that crosses a track boundary goes
+   through an interface document or `docs/audit/TRACK_A_B_SYNC.md` first — never a surprise edit in
+   another track's directory.
+3. **Branch off `develop`.** Never commit to `main` directly; open a PR into `main`. Commit or
+   push only when explicitly asked.
+4. **Docker only.** No host `.venv`, no host `node`, no `npm run` — those environments drift from
+   the images with no warning. Every command below goes through `docker compose`.
+5. **Edits are not live.** Rebuild the Python services after a change (`--build`); restart the
+   Node services. `tsc --noEmit` passing proves the bind mount is current and proves nothing about
+   the running process.
+6. **A pytest `SKIP` is a failure** until you have read its reason. A guard that skipped is not a
+   guard that passed.
+7. **Verify a metric by running the function, not by reading the code.** Most failures here are
+   silent renames, not exceptions.
+8. **Never commit a secret.** Rotate any credential that appears in a diff. Config is read from
+   the environment, never from source.
+9. **Keep the docs honest.** If you change how a piece works, update the core document that
+   describes it in the same change. Stale documentation is worse than none.
+
+### Key commands
+
+All through `docker compose`.
+
+```bash
+# Bring the stack up (the narrator model is opt-in: add --profile gpu)
+docker compose up -d
+
+# Rebuild a Python service after an edit  (ingestion-api | analytics-api | processor-worker — source is baked in)
+docker compose up -d --build analytics-api
+
+# Restart a Node service after an edit  (nexabank-backend | nexabank-frontend | dashboard)
+docker compose restart nexabank-backend
+
+# Warehouse migrations
+docker compose exec -T ingestion-api python warehouse/migrate.py            # apply pending
+docker compose exec -T ingestion-api python warehouse/migrate.py --status   # list only
+
+# Query the warehouse  (database is feature_intelligence today; bronze/silver/gold after the rebuild)
+docker compose exec clickhouse clickhouse-client --password clickhouse --query "SELECT 1"
+
+# Operator tooling runs in the `tools` image (profile tools; pytest + node are installed there).
+# Its default command is verify_data_quality.py; override it to run any script:
+docker compose --profile tools run --rm tools python scripts/seed_data.py --scenario all      # slow-mode seed + fixtures/planted_truth.json
+docker compose --profile tools run --rm tools python scripts/run_intelligence_gates.py        # score against planted ground truth
+docker compose --profile tools run --rm tools python scripts/verify_data_quality.py           # data-quality + taxonomy checks
+
+# Type-check a TypeScript project without touching host node_modules
+docker compose exec dashboard npx tsc --noEmit
+docker compose exec nexabank-backend npx tsc --noEmit
+
+# Is Kafka carrying events, or is ingestion silently on the ClickHouse fallback?
+curl -s localhost:8000/health          # ingest_path: kafka | clickhouse_fallback
+```
+
+There is no automated test suite yet. When one lands it runs in the `tools` image — a pytest
+`SKIP` is a failure until you have read its reason (rule 6).
+
+The warehouse is mid-migration from a single `feature_intelligence` database to `bronze` /
+`silver` / `gold` (see `docs/audit/`). Commands that name a database or table change with it.
+
+---
+
 ## 1. What we are building, in one paragraph
 
 A KPI intelligence-to-action engine for a bank. It watches banking activity, notices when an
@@ -94,14 +191,18 @@ two personas. That still satisfies every minimum expectation.
 
 ## 6. The two data sources (different cadences, as the brief requires)
 
-- Real-time clickstream: user events, streamed through Kafka, per-event grain. Drives signups, KYC
-  completion, transaction failures.
-- Daily banking snapshot: loan, account, and ledger state, extracted once a day from NexaBank's
-  Postgres, daily grain. Drives loan approval volume and revenue.
+- Daily banking snapshot: loan, account, transaction and ledger state, extracted once a day from
+  NexaBank's Postgres, daily grain. **Produces every KPI value** (`docs/DATA_MODEL.md` §"The five
+  KPIs, and where each number comes from", commit `d5c8ff1`) — signups, KYC completion, loan
+  approval volume, revenue, transaction failure rate.
+- Real-time clickstream: user events, streamed through Kafka, per-event grain. **Behavioural
+  context only** — funnel stage detail (`gold.funnel_daily`) and journey reconstruction. Never a
+  figure a reader sees as a KPI. The clickstream carries dimensions the producer invented; the
+  snapshot carries dimensions the bank recorded.
 
-The two cadences are the point. The Trust Gate and the freshness rule must reconcile them: when a
-KPI combines a real-time number and a daily number, we compute against the oldest common data time,
-and if they are too far apart we say so or abstain.
+The two cadences are still the point. The Trust Gate and the freshness rule reconcile them per
+source: each source has its own SLA, and a KPI is not narrated until its snapshot source is fresh
+enough, else the engine says so or abstains.
 
 ## 7. The personas (same chain, different lens)
 
@@ -226,20 +327,27 @@ FinInsights/
       events/                event tracking and the taxonomy, in one place
       simulate/              the simulate engine and anomaly templates
   ingestion/                 FastAPI service on 8000
-  pipeline/                  kafka consumer and the bronze to silver to gold transforms
+  pipeline/                  kafka consumer, the bronze to silver to gold transforms, the extract
+    worker.py                kafka consumer -> bronze.events
+    extract/                 core_banking.py reference.py freshness.py  -> bronze.core_banking
+    transforms/              silver_facts.py silver_events.py silver_sessions.py gold_kpi.py gold_funnel.py
+    taxonomy/                the ONE canonicalisation vocabulary (aliases.yaml), rejects
+    dev/                     seed.py  (fast-mode mock data, gated POST /dev/seed)
+    service.py               the batch scheduler
   warehouse/
+    migrate.py               applies the layered DDL in bronze -> silver -> gold order
     clickhouse/
-      bronze/                raw table DDL
-      silver/                cleaned table DDL and materialized views
-      gold/                  KPI rollups and the signal store DDL
-  api/                       FastAPI service on 8001 (the Metric API and endpoints)
-    intelligence/            the agent, tools, narrator, signal store, personas
+      bronze/ silver/ gold/  the authoritative layered DDL
+      migrations/            post-baseline numbered deltas (starts 0002)
+  api/                       FastAPI service on 8001
+    metric_api/              the ONLY doorway: reads.py (named reads), main.py (router), client.py
+    dashboard_api/           the KPI / funnel / persona / evidence endpoints
+    contracts_loader.py      loads contracts/*.yaml; resolves kpi_id -> gold fundamentals
+    middleware.py            persona resolution + the Ops-hides-revenue filter
+    intelligence/            the agent, tools, narrator, signal store, personas (Track C)
       orchestrator.py
-      tools/                 trust_gate.py detect.py localize.py forecast.py materiality.py decide.py
-      narrator.py
-      verifier.py
-      signal_store.py
-      personas.py
+      tools.py               trust_gate detect localize forecast materiality decide
+      narrator.py  verifier.py  signal_store.py  personas.py
   dashboard/                 Next.js app
 ```
 

@@ -78,24 +78,6 @@ const PLAN: Batch[] = [
                 loans: { applicationMultiplier: 3.5, approvalRate: 0.24 },
                 mix: { deviceWeights: { mobile: 4 } } },
   },
-  { createAccounts: true, phase: 1, label: "safexbank baseline a", tenantId: "bank_b", count: 75, days: 55,
-    behavior: { windowDays: 55, ...HIGH_VOLUME } },
-  { createAccounts: true, phase: 1, label: "safexbank baseline b", tenantId: "bank_b", count: 75, days: 55,
-    behavior: { windowDays: 55, ...HIGH_VOLUME } },
-  {
-    phase: 2, label: "safexbank recent: KYC drop-off rises",
-    tenantId: "bank_b", count: 30, days: 12,
-    behavior: { windowDays: 7,
-                kyc: { startRate: 0.9, progressMultiplier: 3.0, successRate: 0.35 },
-                loans: { applicationMultiplier: 3.5, approvalRate: 0.72 } },
-  },
-  {
-    phase: 2, label: "safexbank recent: second degraded cohort",
-    tenantId: "bank_b", count: 30, days: 12,
-    behavior: { windowDays: 7,
-                kyc: { startRate: 0.9, progressMultiplier: 3.0, successRate: 0.30 },
-                loans: { applicationMultiplier: 3.5, approvalRate: 0.72 } },
-  },
 ];
 
 async function ensureOperator(): Promise<void> {

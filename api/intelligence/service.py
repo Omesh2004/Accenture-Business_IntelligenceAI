@@ -16,7 +16,6 @@ from datetime import datetime, timedelta
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
 from api.intelligence import config
-from api.intelligence import loaders
 from api.intelligence.contracts import load_all
 from api.intelligence.metrics import ClickHouseMetricLayer, Window
 from api.intelligence.orchestrator import Orchestrator
@@ -83,40 +82,14 @@ async def run_investigation_sweep(interval_minutes: int = None) -> None:
         await asyncio.sleep((interval_minutes or config.SWEEP_INTERVAL_MIN) * 60)
 
 
-async def run_batch_loaders(interval_minutes: int = None) -> None:
-    """Sources 2 and 3. Idempotent, so a retry after a partial failure is safe."""
-    while True:
-        # One try per source. Sharing a block meant a core-banking failure aborted CRM and
-        # market_ops too, and none of the three recorded that anything had gone wrong.
-        for source_id, label, run in (
-            ("nexabank_core", "core banking", lambda: loaders.load_core_banking()),
-            ("nexabank_crm", "crm", lambda: loaders.load_crm()),
-            ("market_ops", "market ops", lambda: loaders.load_market_ops(TENANTS)),
-        ):
-            try:
-                logger.info("%s batch: %s", label, run())
-            except Exception as exc:
-                logger.exception("%s batch failed", label)
-                loaders.mark_source_failed(source_id, TENANTS, exc)
-        try:
-            loaders.record_clickstream_freshness(TENANTS)
-        except Exception as exc:
-            logger.exception("clickstream freshness failed")
-            loaders.mark_source_failed("nexabank_clickstream", TENANTS, exc)
-        try:
-            # Reference data is weekly, but re-seeding is a no-op, so it rides the same loop.
-            loaders.seed_reference_data(TENANTS)
-        except Exception as exc:
-            logger.exception("reference data seed failed")
-            loaders.mark_source_failed("reference_data", TENANTS, exc)
-        await asyncio.sleep((interval_minutes or config.BATCH_INTERVAL_MIN) * 60)
+# Batch extract + transforms moved to `pipeline/service.py` (plan Phase 3): the pipeline
+# service owns bronze/silver/gold and runs its own scheduled extract + transform loops.
 
 
 async def main() -> None:
     logger.info("intelligence service starting: tenants=%s window=%dd dataset=%s",
                 TENANTS, config.WINDOW_DAYS, DATASET)
     await asyncio.gather(
-        run_batch_loaders(),
         run_forecast_batch(),
         run_investigation_sweep(),
     )

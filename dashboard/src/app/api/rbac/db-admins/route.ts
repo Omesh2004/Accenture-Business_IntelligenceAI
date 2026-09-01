@@ -26,7 +26,7 @@ function resolveByWalkingUp(relativePath: string, maxLevels = 8) {
   return { path: attempted[0], attempted };
 }
 
-async function queryTenantAdmins(tenantApp: 'nexabank' | 'safexbank'): Promise<string[]> {
+async function queryTenantAdmins(tenantApp: 'nexabank'): Promise<string[]> {
   const scriptResolution = resolveByWalkingUp('scripts/nexbank_user_lookup.py');
   const scriptPath = scriptResolution.path;
 
@@ -81,15 +81,8 @@ export async function GET(req: Request) {
   }
 
   try {
-    const [nexabankAdmins, safexbankAdmins] = await Promise.all([
-      queryTenantAdmins('nexabank'),
-      queryTenantAdmins('safexbank'),
-    ]);
-
-    return NextResponse.json({
-      nexabank: nexabankAdmins,
-      safexbank: safexbankAdmins,
-    });
+    const nexabankAdmins = await queryTenantAdmins('nexabank');
+    return NextResponse.json({ nexabank: nexabankAdmins });
   } catch (error: any) {
     console.error('[DB-ADMINS] Error:', error);
     return NextResponse.json({ error: error.message }, { status: 500 });

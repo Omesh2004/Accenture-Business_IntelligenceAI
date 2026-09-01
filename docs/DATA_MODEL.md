@@ -1,5 +1,14 @@
 # Data model — Bronze, Silver, Gold
 
+> **Track B rebuild status (2026-09-01).** This is the target design and it is built: Phases 1–7
+> of [`docs/audit/TRACK_B_PHASED_PLAN.md`](audit/TRACK_B_PHASED_PLAN.md) landed the three databases,
+> the layered DDL under `warehouse/clickhouse/{bronze,silver,gold}/`, `pipeline/` transforms, and
+> the Metric API. Per-phase detail + deviations: [`docs/execution/`](execution/). Deltas from the
+> tables below: `fact_cards` / `fact_campaign_interactions` / `dim_macro_environment` are **not
+> built** (not in the 5-KPI chain); `silver.fact_*` are rebuilt wholesale each run (`TRUNCATE` +
+> re-derive from bronze); the gold rollups are `ReplacingMergeTree` recomputed per window, not an
+> `AggregatingMergeTree` MV.
+
 Three layers in ClickHouse, one database per layer. A table belongs to exactly one layer, and the
 layer decides who may read it.
 

@@ -86,29 +86,6 @@ export const APP_REGISTRY: Record<string, AppConfig> = {
       { pattern: '/admin*',           featureName: 'admin.dashboard.view',         category: 'system' },
     ],
   },
-  safexbank: {
-    appId: 'safexbank',
-    displayName: 'SafexBank',
-    description: 'Secure digital banking platform',
-    tenantId: 'safexbank',
-    icon: 'shield',
-    color: '#3B82F6',
-    appUrl: process.env.NEXT_PUBLIC_SAFEXBANK_URL || 'http://localhost:3003',
-    // Safex uses the same canonical taxonomy consumed by /funnels.
-    funnelSteps: [
-      'login.auth.success',
-      'dashboard.page.view',
-      'transaction.pay_now.success',
-    ],
-    routes: [
-      { pattern: '/login',            featureName: 'auth.login.view',              category: 'navigation',    funnel: 1 },
-      { pattern: '/dashboard',        featureName: 'core.dashboard.view',          category: 'navigation',    funnel: 2 },
-      { pattern: '/accounts',         featureName: 'core.accounts.view',           category: 'navigation' },
-      { pattern: '/transfers',        featureName: 'core.transfers.view',          category: 'navigation',    funnel: 3 },
-      { pattern: '/approvals',        featureName: 'core.approvals.view',          category: 'navigation',    funnel: 4 },
-      { pattern: '/cards',            featureName: 'core.cards.view',              category: 'navigation' },
-    ],
-  },
 };
 
 export const APP_SUITES: AppSuiteConfig[] = [
@@ -116,7 +93,7 @@ export const APP_SUITES: AppSuiteConfig[] = [
     id: 'nexabank',
     displayName: 'NexaBank',
     description: 'NexaBank tenants and analytics views',
-    tenantIds: ['nexabank', 'safexbank'],
+    tenantIds: ['nexabank'],
     primaryAppId: 'nexabank',
     color: APP_REGISTRY.nexabank.color,
     appUrl: APP_REGISTRY.nexabank.appUrl,
@@ -125,24 +102,19 @@ export const APP_SUITES: AppSuiteConfig[] = [
 
 export const TENANT_LABELS: Record<string, string> = {
   nexabank: 'NexaBank',
-  safexbank: 'SafexBank',
 };
 
 export const TENANT_TO_APP: Record<string, 'nexabank'> = {
   nexabank: 'nexabank',
-  safexbank: 'nexabank',
 };
 
 export const TENANT_TO_APP_NAME: Record<string, 'Nexabank'> = {
   nexabank: 'Nexabank',
-  safexbank: 'Nexabank',
 };
 
 export const TENANT_CANONICAL_MAP: Record<string, string> = {
   nexabank: 'nexabank',
-  safexbank: 'safexbank',
   bank_a: 'nexabank',
-  bank_b: 'safexbank',
 };
 
 export const ALL_TENANT_IDS = APP_SUITES.flatMap((suite) => suite.tenantIds);

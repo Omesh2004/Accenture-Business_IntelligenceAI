@@ -4,18 +4,13 @@ import bcrypt from "bcryptjs";
 const prisma = new PrismaClient();
 
 // ─── Configuration from Environment ─────────────────────────────
+// Round 2 is one bank.
 const TENANTS = [
   {
     id: process.env.TENANT_A_ID || "bank_a",
     name: process.env.TENANT_A_NAME || "NexaBank",
     ifscPrefix: process.env.TENANT_A_IFSC || "NEXA",
     branchCode: process.env.TENANT_A_BRANCH || "0001"
-  },
-  {
-    id: process.env.TENANT_B_ID || "bank_b",
-    name: process.env.TENANT_B_NAME || "SafeX Bank",
-    ifscPrefix: process.env.TENANT_B_IFSC || "SAFX",
-    branchCode: process.env.TENANT_B_BRANCH || "0001"
   }
 ];
 
@@ -39,10 +34,6 @@ const FEATURE_TOGGLES = [
   { key: "kyc", tenantId: TENANTS[0].id },
   { key: "loan_module", tenantId: TENANTS[0].id },
   { key: "pro_features", tenantId: TENANTS[0].id },
-  { key: "emi_calculator", tenantId: TENANTS[1].id },
-  { key: "kyc", tenantId: TENANTS[1].id },
-  { key: "loan_module", tenantId: TENANTS[1].id },
-  { key: "pro_features", tenantId: TENANTS[1].id },
 ];
 
 // ─── Helper: Generate secure random password ────────────────────
