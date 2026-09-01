@@ -93,7 +93,9 @@ export default function AnswerCards(
 
   const what = bySlot.what_changed;
   const why = bySlot.why || bySlot.cause;
-  const action = bySlot.action;
+  // The agent names this slot `what_now`; `action` is accepted so an older payload
+  // still renders the card rather than dropping it silently.
+  const action = bySlot.what_now || bySlot.action;
   if (!what && !why && !action && !where) return null;
 
   return (

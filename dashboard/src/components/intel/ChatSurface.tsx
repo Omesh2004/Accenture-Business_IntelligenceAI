@@ -441,10 +441,15 @@ function ChatSurface({
         className="flex shrink-0 items-center gap-3 px-5 py-3"
         style={{ borderBottom: `1px solid ${INK.hairline}`, background: INK.surface }}
       >
-        <Sparkles className="h-4 w-4" style={{ color: INK.accent }} />
-        <span className="text-[13px] font-semibold" style={{ color: INK.text, fontFamily: FONT.sans }}>
-          Analyst
+        <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg"
+              style={{ background: 'var(--brand-grad)' }}>
+          <Sparkles className="h-3.5 w-3.5 text-white" />
         </span>
+        <span className="text-[13.5px] font-semibold"
+              style={{ color: INK.text, fontFamily: FONT.sans }}>
+          AI Analyst
+        </span>
+        <span className="chip chip-brand">Evidence-bound</span>
         {choices && choices.personas.length > 1 && (
           <Select
             testId="persona-select"
@@ -463,12 +468,15 @@ function ChatSurface({
           {messages.length > 0 && (
             <button
               onClick={wipe}
-              title="Clear this conversation"
-              aria-label="Clear this conversation"
-              className="cursor-pointer rounded-lg p-1.5"
-              style={{ color: INK.textFaint }}
+              title="Start a new conversation"
+              aria-label="Start a new conversation"
+              className="mr-1 flex cursor-pointer items-center gap-1.5 rounded-full px-3 py-1.5
+                         text-[12px] font-medium text-white transition-transform duration-200
+                         hover:scale-[1.03]"
+              style={{ background: 'var(--brand-grad)' }}
             >
               <Trash2 className="h-3.5 w-3.5" />
+              New chat
             </button>
           )}
           <button
