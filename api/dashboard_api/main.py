@@ -131,6 +131,40 @@ def intelligence_insight(request: Request, tenants: str = Query(None),
     return filter_revenue(p, body)
 
 
+@app.post("/intelligence/rescore")
+def intelligence_rescore(tenants: str = Query(None), days: int = Query(0, ge=0, le=365),
+                         all_windows: bool = Query(False)):
+    """Re-run the investigation sweep now, for one window or for all of them.
+
+    The service sweeps on a timer. This is for the moment a movement has just been planted in
+    NexaBank and pushed through the pipeline: without it the engine keeps answering from the last
+    tick, and an anomaly that already exists in the data reads as "no material movement" until the
+    clock comes round.
+    """
+    from api.intelligence import config as icfg
+    from api.intelligence.orchestrator import Orchestrator
+    from api.intelligence.service import current_window
+    from api.metric_api.client import MetricAPIClient
+
+    tenant = _tenant(tenants)
+    # One window by default. Sweeping all three takes minutes and times the request out; the
+    # window on screen is the one a demo needs back immediately.
+    windows = ([days] if days
+               else list(icfg.WINDOW_CHOICES) if all_windows
+               else [icfg.WINDOW_DAYS])
+    orch = Orchestrator(MetricAPIClient())
+    out = []
+    for span in windows:
+        try:
+            results = orch.sweep(tenant, current_window(span), dataset=icfg.DATASET,
+                                 run_forecast=True)
+            out.append({"window_days": span, "investigations": len(results),
+                        "anomalies": sum(1 for r in results if r.get("anomaly"))})
+        except Exception as exc:                                    # noqa: BLE001
+            out.append({"window_days": span, "error": str(exc)})
+    return {"tenant_id": tenant, "swept": out}
+
+
 @app.get("/intelligence/insights")
 def intelligence_insights(request: Request, tenants: str = Query(None),
                           limit: int = Query(20, ge=1, le=100),

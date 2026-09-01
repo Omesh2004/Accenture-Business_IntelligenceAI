@@ -137,7 +137,8 @@ WINDOW_DAYS = _i("INTELLIGENCE_WINDOW_DAYS", 7)
 BASELINE_DAYS = _i("INTELLIGENCE_BASELINE_DAYS", 28)
 DATASET = _s("INTELLIGENCE_DATASET", "seeded")
 FORECAST_INTERVAL_MIN = _i("INTELLIGENCE_FORECAST_INTERVAL_MIN", 60)
-SWEEP_INTERVAL_MIN = _i("INTELLIGENCE_SWEEP_INTERVAL_MIN", 15)
+# A planted movement should surface while someone is still looking at the screen.
+SWEEP_INTERVAL_MIN = _i("INTELLIGENCE_SWEEP_INTERVAL_MIN", 3)
 # Source 2 refreshes hourly; source 3 weekly but re-seeding is a no-op.
 BATCH_INTERVAL_MIN = _i("INTELLIGENCE_BATCH_INTERVAL_MIN", 60)
 # Bounds a sweep so thousands of series cannot make one run unbounded.
