@@ -23,12 +23,13 @@
  */
 
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'framer-motion';
 import { ArrowUp, Database, Loader2, Maximize2, Minimize2, Sparkles, Trash2, X } from 'lucide-react';
-import { dashboardAPI, type ChatTurn } from '@/lib/api';
+import type { ChatTurn } from '@/lib/api';
 import AgentConsole from '../AgentConsole';
-import { TimeSeriesPanel } from './panels';
+import AnswerCards from './AnswerCards';
+import Chart from './Charts';
+import InsightRail from './InsightRail';
 import Select from './Select';
 import ShinyText from './ShinyText';
 import TextType from './TextType';
@@ -87,19 +88,9 @@ function AssistantTurn({
   const answer = message.answer;
   const [typed, setTyped] = useState(!live);
 
-  // The answer carries its OWN chart, for the metric it actually resolved to.
-  //
-  // Without this the only chart on screen was the page's, which is bound to the most material
-  // STANDING movement. Ask about a quiet metric and you got "loan approval rate stayed inside its
-  // expected range, it read 0.59" beside a line climbing to 3.8M -- because that line was fee
-  // revenue. Two correct figures about two different metrics, with nothing on screen saying so.
-  const { data: series } = useQuery({
-    queryKey: ['chatSeries', tenants.join(','), answer?.kpi_id],
-    queryFn: () => dashboardAPI.getKpiSeries(tenants, answer!.kpi_id, 30),
-    enabled: Boolean(typed && answer?.kpi_id),
-    staleTime: 60 * 1000,
-    retry: 1,
-  });
+  // The answer carries its own charts now: `get_trend` reads the series through the Metric API
+  // and the payload arrives with it. Fetching a second copy here was two reads of a moving table,
+  // which is exactly what a chart beside a quoted figure must not be.
   const lead = answer?.sections?.length ? answer.sections[0].text : message.text;
   const analytical = Boolean(answer?.sections?.some((s) => s.kind === 'findings'));
   // Whether the console would actually render anything here. Embedded, it shows the sections
@@ -182,25 +173,18 @@ function AssistantTurn({
         )}
       </div>
 
-      {typed && series && series.points?.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.4, ease: EASE }}
-        >
-          <TimeSeriesPanel
-            title={series.name}
-            subtitle={`${series.days}-day path · ${
-              series.unit === 'ratio' ? 'rate' : `counting ${series.measure || 'events'}`
-            }`}
-            points={series.points}
-            isRate={series.unit === 'ratio'}
-            band={series.forecast}
-            bandWithheld={series.forecast_withheld}
-            source={series.source}
-            height={190}
-          />
-        </motion.div>
+      {/* The four questions a reader arrives with, then everything the run could honestly draw. */}
+      {typed && answer && (
+        <>
+          <AnswerCards answer={answer} visuals={answer.visuals || []} />
+          {(answer.visuals?.length ?? 0) > 0 && (
+            <div className="grid grid-cols-1 gap-3 xl:grid-cols-2">
+              {answer.visuals!.map((v, i) => (
+                <Chart key={`${v.tool}-${v.kind}-${i}`} visual={v} />
+              ))}
+            </div>
+          )}
+        </>
       )}
 
       {typed && answer && hasDerivation && (
@@ -429,10 +413,20 @@ function ChatSurface({
     onSeedConsumed?.();
   }, [seed, submit, onSeedConsumed]);
 
-  const suggestions = useMemo(
-    () => choices?.personas.find((p) => p.id === persona)?.examples ?? [],
-    [choices, persona],
-  );
+  // Once an answer has landed the agent's own follow-ups are better than the persona's stock
+  // examples: they are about the metric actually on screen.
+  const latestAnswer = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'assistant' && messages[i].answer) return messages[i].answer!;
+    }
+    return null;
+  }, [messages]);
+
+  const suggestions = useMemo(() => {
+    const fromAnswer = latestAnswer?.suggestions ?? [];
+    const stock = choices?.personas.find((p) => p.id === persona)?.examples ?? [];
+    return (fromAnswer.length ? fromAnswer : stock).slice(0, 4);
+  }, [latestAnswer, choices, persona]);
 
   const wipe = () => {
     clearChat(tenantKey, persona);
@@ -500,7 +494,8 @@ function ChatSurface({
         </div>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
+      <div className="flex min-h-0 flex-1">
+       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
         <div className="mx-auto max-w-4xl space-y-6">
           {messages.map((m) =>
             m.role === 'user' ? (
@@ -562,11 +557,19 @@ function ChatSurface({
 
           <div ref={endRef} />
         </div>
+       </div>
+
+       {/* Only shown once there is something to summarise, and only for the newest answer. */}
+       {latestAnswer && !running && (
+         <div className="hidden min-h-0 xl:flex">
+           <InsightRail answer={latestAnswer} />
+         </div>
+       )}
       </div>
 
       <div className="shrink-0 px-5 pb-5" style={{ background: INK.canvas }}>
         <div className="mx-auto max-w-3xl">
-          {messages.length === 0 && suggestions.length > 0 && (
+          {!running && suggestions.length > 0 && (
             <div className="mb-3 flex flex-wrap gap-1.5">
               {suggestions.map((s, i) => (
                 <motion.button

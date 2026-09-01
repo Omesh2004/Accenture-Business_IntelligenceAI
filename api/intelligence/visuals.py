@@ -88,27 +88,157 @@ def _from_ranking(data: dict) -> dict | None:
     }
 
 
+def _waterfall(data: dict, claims: list[dict]) -> dict | None:
+    """How the drivers add up from the expected level to the observed one.
+
+    The ranked bars say which segment is biggest; this says whether they ACCOUNT for the
+    movement. A set of drivers that sums to a third of the gap looks convincing on a bar chart
+    and is plainly incomplete here, which is the honest reading.
+    """
+    causes = (data.get("shown") or data.get("causes") or [])[:MAX_BARS]
+    by_id = {c["claim_id"]: c["value"] for c in claims}
+    if not causes or "baseline" not in by_id or "observed" not in by_id:
+        return None
+    baseline = float(by_id["baseline"])
+    observed = float(by_id["observed"])
+    gap = observed - baseline
+    if abs(gap) < 1e-12:
+        return None
+
+    steps = [{"label": "Expected", "value": round(baseline, 6), "role": "start"}]
+    running = baseline
+    explained = 0.0
+    for cause in causes:
+        share = float(cause.get("contribution") or 0.0)
+        step = gap * share
+        explained += share
+        running += step
+        steps.append({"label": _cell_label(cause), "value": round(step, 6),
+                      "at": round(running, 6), "role": "step"})
+    rest = gap * max(0.0, 1.0 - explained)
+    if abs(rest) > abs(gap) * 0.01:
+        running += rest
+        steps.append({"label": "Not localised", "value": round(rest, 6),
+                      "at": round(running, 6), "role": "rest"})
+    steps.append({"label": "Observed", "value": round(observed, 6), "role": "end"})
+
+    return {
+        "kind": "waterfall",
+        "title": "How the drivers add up",
+        "subtitle": "from the expected level to the observed one",
+        "unit": data.get("measure") or "",
+        "series": steps,
+        "source": "root_causes",
+        "gate": "localize",
+    }
+
+
+def _band(data: dict, claims: list[dict]) -> dict | None:
+    """The forecast band, and where the reading fell against it."""
+    by_id = {c["claim_id"]: c["value"] for c in claims}
+    if "forecast_point" not in by_id:
+        return None
+    lower = by_id.get("forecast_lower")
+    upper = by_id.get("forecast_upper")
+    if lower is None or upper is None:
+        return None
+    return {
+        "kind": "band",
+        "title": "Against the expected range",
+        "subtitle": "the band this reading was scored against",
+        "unit": data.get("measure") or "",
+        "series": [
+            {"label": "Lower", "value": float(lower)},
+            {"label": "Forecast", "value": float(by_id["forecast_point"])},
+            {"label": "Upper", "value": float(upper)},
+        ],
+        "observed": by_id.get("observed"),
+        "source": "forecasts",
+        "gate": "forecast",
+    }
+
+
+def _explained(data: dict, _claims: list[dict]) -> dict | None:
+    """How much of the movement the localisation actually accounts for."""
+    causes = data.get("causes") or []
+    if not causes:
+        return None
+    covered = float(causes[0].get("explained_pct") or 0.0)
+    if covered <= 0:
+        return None
+    covered = min(1.0, covered)
+    return {
+        "kind": "donut",
+        "title": "How much is explained",
+        "subtitle": "share of the movement the named segments account for",
+        "unit": "%",
+        "series": [
+            {"label": "Localised", "value": round(covered * 100, 1)},
+            {"label": "Unaccounted", "value": round((1 - covered) * 100, 1)},
+        ],
+        "source": "root_causes",
+        "gate": "localize",
+    }
+
+
+def _trend(data: dict, _claims: list[dict]) -> dict | None:
+    """The metric's daily path, with the scored window and the expected band marked.
+
+    Built from the series the tool actually read, never re-queried here: a chart that fetches its
+    own data and a sentence that quotes a stored figure are two reads of a moving table, and the
+    mismatch between them is invisible because both look authoritative.
+    """
+    points = data.get("points") or []
+    if len(points) < 2:
+        return None
+    return {
+        "kind": "trend",
+        "title": "How it moved",
+        "subtitle": "daily, over the window this answer covers",
+        "unit": "ratio" if data.get("is_ratio") else "",
+        "series": [{"label": str(p["date"]), "value": float(p["value"])} for p in points],
+        "window_start": data.get("window_start") or "",
+        "window_end": data.get("window_end") or "",
+        "lower": data.get("lower"),
+        "upper": data.get("upper"),
+        "source": "gold.kpi_daily",
+        "gate": "detect",
+    }
+
+
+#: A tool may contribute more than one chart. They are drawn in the order listed.
 _BUILDERS = {
-    "get_causes": lambda d, c: _from_causes(d),
-    "get_insight": _from_insight,
-    "rank_movements": lambda d, c: _from_ranking(d),
+    "get_causes": [lambda d, c: _from_causes(d), _waterfall, _explained],
+    "get_insight": [_from_insight],
+    "get_forecast": [_band],
+    "get_trend": [_trend],
+    "rank_movements": [lambda d, c: _from_ranking(d)],
 }
 
 
 def build(observations) -> list[dict]:
     """Every chart the run can honestly draw, in the order the finding is told."""
     out: list[dict] = []
+    # Claims pooled across the run. A chart often needs figures from two capabilities -- the
+    # waterfall needs the level from Detect and the shares from Localize -- and every one of them
+    # is still a claim the verifier checked, so pooling widens what can be drawn without
+    # loosening what may be stated.
+    pool: list[dict] = []
     for obs in observations:
-        builder = _BUILDERS.get(obs.tool)
-        if not builder or not obs.ok:
+        if obs.ok:
+            pool.extend(getattr(obs, "claims", None) or [])
+    for obs in observations:
+        builders = _BUILDERS.get(obs.tool)
+        if not builders or not obs.ok:
             continue
-        try:
-            spec = builder(getattr(obs, "data", None) or {}, getattr(obs, "claims", None) or [])
-        except Exception:                                           # noqa: BLE001
-            spec = None
-        if spec:
-            spec["tool"] = obs.tool
-            out.append(spec)
+        for builder in builders:
+            try:
+                spec = builder(getattr(obs, "data", None) or {}, pool)
+            except Exception:                                       # noqa: BLE001
+                spec = None
+            if spec:
+                spec["tool"] = obs.tool
+                out.append(spec)
     return out
 
 

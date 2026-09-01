@@ -45,16 +45,53 @@
    `@theme` — it compiles to a literal. Overriding the generated classes is the only way to move
    them without touching every call site, and it keeps the migration in one reversible block. */
 :root {
-  /* Accenture: core purple #A100FF, deepening to #7500C0 and #460073. The deep violet carries
-     large areas -- the bright purple is a highlight, and reads as neon if it fills a panel. */
-  --accent: #7500c0;
-  --accent-strong: #460073;
-  --accent-bright: #a100ff;
-  --accent-soft: #f4ecff;
-  --accent-line: #e3d4f7;
-  --accent-grad: linear-gradient(120deg, #a100ff 0%, #7500c0 55%, #460073 100%);
-  --shadow-violet: 0 14px 34px -14px rgb(70 0 115 / 0.28), 0 4px 12px -8px rgb(70 0 115 / 0.20);
+  /* Sampled from the reference designs in `public/`, not chosen by eye. The hero runs
+     #4014cc to #4e1bda across its width with a magenta corner; the rails are near-black;
+     the page sits on an off-white that is very slightly violet. */
+  --brand: #5b21e0;
+  --brand-strong: #4014cc;
+  --brand-deep: #2d0b96;
+  --brand-bright: #7c3aed;
+  --brand-magenta: #a855f7;
+  --brand-soft: #f1ecfe;
+  --brand-line: #e4dbfb;
+
+  /* The hero. The wave overlay in `public/dashboard-card-overlay.png` sits on top of this. */
+  --hero-grad: linear-gradient(105deg, #3d12c9 0%, #4a19d4 38%, #4e1bda 62%, #6d28e6 88%,
+                               #8b3af0 100%);
+  --brand-grad: linear-gradient(120deg, #7c3aed 0%, #5b21e0 55%, #4014cc 100%);
+
+  /* The rails. Two shades: the dashboard rail is darker than the chat rail in the designs. */
+  --rail: #0b0a12;
+  --rail-raised: #16141f;
+  --rail-line: #23202f;
+  --rail-text: #a9a3bd;
+  --rail-text-strong: #f5f3fb;
+  --rail-active: #351970;
+
+  --surface: #ffffff;
+  --surface-sunken: #fafafd;
+  --hairline: #ececf3;
+
+  /* Direction. Red is the pink-leaning crimson from the reference, not a fire-engine red. */
+  --rise: #0f9d76;
+  --fall: #f82768;
+  --warn: #e8912a;
+
+  --shadow-card: 0 1px 2px rgb(16 8 40 / 0.04), 0 8px 24px -16px rgb(16 8 40 / 0.16);
+  --shadow-lift: 0 2px 6px rgb(16 8 40 / 0.06), 0 18px 40px -20px rgb(45 11 150 / 0.26);
+  --shadow-hero: 0 18px 44px -22px rgb(45 11 150 / 0.55);
+
+  /* Kept: ~120 call sites still name these. They now resolve to the new brand. */
+  --accent: var(--brand);
+  --accent-strong: var(--brand-strong);
+  --accent-bright: var(--brand-bright);
+  --accent-soft: var(--brand-soft);
+  --accent-line: var(--brand-line);
+  --accent-grad: var(--brand-grad);
+  --shadow-violet: var(--shadow-lift);
 }
+
 
 .bg-\[\#1a73e8\]      { background-color: var(--accent) !important; }
 .text-\[\#1a73e8\]    { color: var(--accent) !important; }
@@ -499,4 +536,113 @@ a[href] {
 button:disabled,
 [aria-disabled="true"] {
   cursor: not-allowed;
+}
+
+/* ─────────────── Surfaces from the reference design ───────────────
+   Written as component classes rather than repeated utility strings, so the card in the KPI row
+   and the card in the chat answer are the same object and stay that way. */
+
+.surface {
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: 16px;
+  box-shadow: var(--shadow-card);
+}
+
+/* The hero band. The wave is a real image so the curve matches the reference exactly; the
+   gradient underneath carries the colour so the image can stay a light overlay. */
+.hero-band {
+  position: relative;
+  overflow: hidden;
+  border-radius: 20px;
+  background: var(--hero-grad);
+  box-shadow: var(--shadow-hero);
+  isolation: isolate;
+}
+.hero-band::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: url('/dashboard-card-overlay.png');
+  background-size: cover;
+  background-position: center right;
+  opacity: 0.55;
+  mix-blend-mode: soft-light;
+  pointer-events: none;
+  z-index: -1;
+}
+
+/* The icon tile beside a KPI name. */
+.icon-tile {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: var(--brand-soft);
+  color: var(--brand);
+  flex: none;
+}
+
+/* Direction chips. */
+.delta { display: inline-flex; align-items: center; gap: 3px; font-variant-numeric: tabular-nums; }
+.delta-up { color: var(--rise); }
+.delta-down { color: var(--fall); }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  border: 1px solid var(--hairline);
+  background: var(--surface-sunken);
+  color: var(--color-slate-600);
+  white-space: nowrap;
+}
+.chip-brand { background: var(--brand-soft); border-color: var(--brand-line); color: var(--brand-strong); }
+.chip-warn  { background: #fff6e8; border-color: #f6dfba; color: #a8630c; }
+.chip-high  { background: #ffeef3; border-color: #fbd3de; color: #c01a4c; }
+
+/* ─────────────── Motion ───────────────
+   Deliberately small. Everything is transform/opacity only, so it composites on the GPU and adds
+   no layout work; a page of forty cards animating position would cost a frame budget the demo
+   cannot spare. `prefers-reduced-motion` turns the lot off. */
+
+@keyframes rise-in { from { opacity: 0; transform: translate3d(0, 10px, 0); } to { opacity: 1; transform: none; } }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes sheen { from { transform: translate3d(-120%, 0, 0); } to { transform: translate3d(220%, 0, 0); } }
+
+.rise { animation: rise-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.rise-stagger > * { animation: rise-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.rise-stagger > *:nth-child(1) { animation-delay: 0.02s; }
+.rise-stagger > *:nth-child(2) { animation-delay: 0.06s; }
+.rise-stagger > *:nth-child(3) { animation-delay: 0.10s; }
+.rise-stagger > *:nth-child(4) { animation-delay: 0.14s; }
+.rise-stagger > *:nth-child(5) { animation-delay: 0.18s; }
+.rise-stagger > *:nth-child(6) { animation-delay: 0.22s; }
+.rise-stagger > *:nth-child(n + 7) { animation-delay: 0.26s; }
+
+/* Hover lift. Shadow and transform only. */
+.lift-card { transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.28s ease; will-change: transform; }
+.lift-card:hover { transform: translate3d(0, -3px, 0); box-shadow: var(--shadow-lift); }
+
+/* One pass of light across the hero, once, on mount. */
+.sheen-once { position: relative; overflow: hidden; }
+.sheen-once::before {
+  content: '';
+  position: absolute;
+  top: 0; bottom: 0; left: 0;
+  width: 40%;
+  background: linear-gradient(100deg, transparent, rgb(255 255 255 / 0.16), transparent);
+  animation: sheen 1.5s cubic-bezier(0.4, 0, 0.2, 1) 0.35s both;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rise, .rise-stagger > *, .sheen-once::before { animation: none !important; }
+  .lift-card { transition: none; }
+  .lift-card:hover { transform: none; }
 }

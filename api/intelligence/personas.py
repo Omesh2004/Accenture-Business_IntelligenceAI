@@ -59,7 +59,7 @@ REGISTRY: dict[str, Persona] = {
         # should we do" was told nothing at all; the useful answer is the commercial lever plus
         # the name of whoever owns the rest, and `owner_roles` below already draws that line.
         intents=frozenset({"cause", "action", "forecast", "trust", "cost", "freshness", "status",
-                           "catalog", "definition", "ranking", "greeting", "help"}),
+                           "catalog", "definition", "ranking", "trend", "greeting", "help"}),
         owner_roles=frozenset({"revenue_ops", "retail_banking", "marketing_ops",
                                "product_marketing", "growth_analytics"}),
         lead_in={
@@ -82,7 +82,7 @@ REGISTRY: dict[str, Persona] = {
         remit="Day-to-day operational levers, segment concentration and remediation.",
         greeting="Good to see you. I report on where operations moved and what can be done.",
         intents=frozenset({"cause", "action", "trust", "freshness", "status",
-                           "catalog", "definition", "ranking", "greeting", "help"}),
+                           "catalog", "definition", "ranking", "trend", "greeting", "help"}),
         owner_roles=frozenset({"lending_ops", "digital_channels", "growth_analytics",
                                "retail_banking", "analytics"}),
         lead_in={
@@ -106,7 +106,7 @@ REGISTRY: dict[str, Persona] = {
         greeting="Good to see you. I have the full investigation record, method detail included.",
         intents=frozenset({"cause", "factor", "forecast", "action", "trust", "cost",
                            "freshness", "status", "catalog", "definition", "ranking",
-                           "greeting", "help"}),
+                           "trend", "greeting", "help"}),
         owner_roles=frozenset(),          # empty == every owner
         lead_in={
             "cause": "Attribution:",
@@ -128,7 +128,7 @@ REGISTRY: dict[str, Persona] = {
         remit="Onboarding and credit exposure: KYC integrity, approval discipline, auditability.",
         greeting="Good to see you. I report on onboarding and credit exposure, and what is provable.",
         intents=frozenset({"cause", "action", "trust", "forecast", "freshness", "status",
-                           "catalog", "definition", "ranking", "greeting", "help"}),
+                           "catalog", "definition", "ranking", "trend", "greeting", "help"}),
         owner_roles=frozenset({"lending_ops", "retail_banking", "growth_analytics"}),
         lead_in={
             "cause": "Risk position:",

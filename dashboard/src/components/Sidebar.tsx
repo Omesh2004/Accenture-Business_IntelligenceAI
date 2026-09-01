@@ -1,171 +1,150 @@
 'use client';
 
 /**
- * Sidebar navigation component.
- * Role-based navigation:
- *   super_admin  → Full detailed analytics pages (Dashboard, Features, Funnel, etc.)
- *   company_admin → Only Global Admin overview
- *   user         → Never sees this (blocked by AuthGuard)
+ * The dark navigation rail from the reference design.
+ *
+ * Role decides what is in it: an app admin gets their app's Dashboard and Intelligence, a super
+ * admin gets the global overview, and an ordinary user never reaches this component at all.
  */
 
 import React, { memo } from 'react';
 import { usePathname } from 'next/navigation';
 import Image from 'next/image';
-import {
-  LayoutDashboard,
-  BarChart3,
-  Users,
-  Settings,
-  Shield,
-  ChevronLeft,
-  ChevronRight,
-  Cloud,
-  Eye,
-  FileText,
-  Key,
-  TrendingUp,
-  Brain,
-} from 'lucide-react';
+import Link from 'next/link';
+import { motion } from 'framer-motion';
+import { Brain, ChevronLeft, ChevronRight, Cloud, LayoutDashboard } from 'lucide-react';
+import { useSession } from 'next-auth/react';
 import { useAppDispatch, useAppSelector } from '@/lib/store';
 import { toggleSidebar } from '@/lib/dashboardSlice';
-import Link from 'next/link';
-import { useSession } from 'next-auth/react';
-import { buildAppScopedPath, resolveAppIdFromPathname, resolvePrimaryAppIdFromAdminApps } from '@/lib/feature-map';
+import {
+  buildAppScopedPath,
+  resolveAppIdFromPathname,
+  resolvePrimaryAppIdFromAdminApps,
+} from '@/lib/feature-map';
 
-/** Maps icon string identifiers to Lucide icon components */
-const iconMap: Record<string, React.ElementType> = {
+const ICONS: Record<string, React.ElementType> = {
   'layout-dashboard': LayoutDashboard,
-  'bar-chart-3': BarChart3,
-  users: Users,
-  settings: Settings,
-  shield: Shield,
-  cloud: Cloud,
-  eye: Eye,
-  'file-text': FileText,
-  key: Key,
-  'trending-up': TrendingUp,
   brain: Brain,
+  cloud: Cloud,
 };
 
-interface SidebarProps { }
-
-function Sidebar(_props: SidebarProps) {
+function Sidebar() {
   const dispatch = useAppDispatch();
   const { sidebarCollapsed } = useAppSelector((state) => state.dashboard);
   const pathname = usePathname();
-
   const { data: session } = useSession();
-  const userName = session?.user?.name || session?.user?.email?.split('@')[0] || 'Admin';
+
   const role = session?.user?.role || 'user';
-  const activeAppId = resolveAppIdFromPathname(pathname) || resolvePrimaryAppIdFromAdminApps(session?.user?.adminApps || []) || 'nexabank';
+  const email = session?.user?.email || '';
+  const name = session?.user?.name || email.split('@')[0] || 'Admin';
+  const appId =
+    resolveAppIdFromPathname(pathname)
+    || resolvePrimaryAppIdFromAdminApps(session?.user?.adminApps || [])
+    || 'nexabank';
 
-  // Build nav items based on role
   let navItems: { id: string; label: string; icon: string; href: string }[] = [];
-
   if (role === 'app_admin') {
-    // App admin sees full detailed analytics for their app
     navItems = [
-      { id: 'dashboard', label: 'Dashboard', icon: 'layout-dashboard', href: buildAppScopedPath(activeAppId, '/dashboard') },
-      { id: 'intelligence', label: 'Intelligence', icon: 'brain', href: buildAppScopedPath(activeAppId, '/intelligence') },
+      { id: 'dashboard', label: 'Dashboard', icon: 'layout-dashboard',
+        href: buildAppScopedPath(appId, '/dashboard') },
+      { id: 'intelligence', label: 'Intelligence', icon: 'brain',
+        href: buildAppScopedPath(appId, '/intelligence') },
     ];
   } else if (role === 'super_admin') {
-    // Super admin sees only the Global Admin view
-    navItems = [
-      { id: 'admin', label: 'Global Overview', icon: 'cloud', href: '/admin' },
-    ];
+    navItems = [{ id: 'admin', label: 'Global Overview', icon: 'cloud', href: '/admin' }];
   }
-  // Normal users: no nav items (they shouldn't even reach the dashboard)
+
+  const initial = (name[0] || 'A').toUpperCase();
 
   return (
     <aside
-      className={`fixed left-0 top-0 h-screen bg-white border-r border-gray-100 z-30 flex flex-col transition-all duration-300 ${sidebarCollapsed ? 'w-16' : 'w-56'
-        }`}
+      className={`fixed left-0 top-0 z-30 flex h-screen flex-col transition-[width] duration-300
+                  ${sidebarCollapsed ? 'w-[76px]' : 'w-[236px]'}`}
+      style={{ background: 'var(--rail)' }}
     >
-      {/* Logo / Brand */}
-      <div className={`flex items-center gap-2 border-b border-gray-100 h-16 ${sidebarCollapsed ? 'justify-center' : 'px-6'}`}>
-        <Link href="/" className="relative w-10 h-10 shrink-0 transition-transform duration-300">
-          <Image
-            src="/logo1.png"
-            alt="FinInsightsLogo"
-            fill
-            className="object-contain"
-            priority
-            sizes="40px"
-          />
-        </Link>
+      <Link
+        href="/"
+        className={`flex h-[74px] items-center gap-2.5 ${sidebarCollapsed ? 'justify-center' : 'px-5'}`}
+      >
+        <span className="relative h-9 w-9 shrink-0">
+          <Image src="/logo1.png" alt="FinInsights" fill sizes="36px" priority
+                 className="object-contain" />
+        </span>
         {!sidebarCollapsed && (
-          <span className="text-[18px] font-bold text-gray-900 tracking-tight">
-            <span className='text-[#1a73e8] font-bold'>Fin</span>Insights
+          <span className="text-[19px] font-semibold tracking-[-0.02em]"
+                style={{ color: 'var(--rail-text-strong)' }}>
+            <span style={{ color: 'var(--brand-bright)' }}>Fin</span>Insights
           </span>
         )}
-      </div>
+      </Link>
 
-      {/* Role Badge */}
-      {!sidebarCollapsed && (
-        <div className="px-4 py-3 border-b border-gray-100">
-          <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${role === 'app_admin'
-            ? 'bg-orange-50 text-orange-700 border border-orange-200'
-            : 'bg-blue-50 text-blue-700 border border-blue-200'
-            }`}>
-            {role === 'app_admin' ? (
-              <>App Admin</>
-            ) : (
-              <>Super Admin</>
-            )}
-          </div>
+      {!sidebarCollapsed && role !== 'user' && (
+        <div className="px-5 pb-4">
+          <span
+            className="inline-flex rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em]"
+            style={{ background: 'rgb(91 33 224 / 0.16)', color: '#b9a0fa' }}
+          >
+            {role === 'app_admin' ? 'App Admin' : 'Super Admin'}
+          </span>
         </div>
       )}
 
-      {/* Navigation Items */}
-      <nav className="flex-1 py-4 space-y-1 overflow-y-auto custom-scrollbar">
+      <nav className="flex-1 space-y-1.5 px-3">
         {navItems.map((item) => {
-          const IconComponent = iconMap[item.icon] || LayoutDashboard;
-          const isActive = pathname === item.href || (item.id === 'dashboard' && pathname === '/');
-
+          const Icon = ICONS[item.icon] || LayoutDashboard;
+          const active = pathname === item.href
+            || (item.id === 'dashboard' && pathname === '/');
           return (
             <Link
               key={item.id}
               href={item.href}
-              className={`flex items-center gap-3 py-2.5 mx-3 rounded-lg text-[13px] font-medium transition-all duration-200 group
-      ${sidebarCollapsed
-                  ? 'justify-center px-0 text-gray-600 bg-transparent hover:bg-transparent'
-                  : isActive
-                    ? 'bg-[#f1f3f4] text-[#1a73e8] px-3'
-                    : 'text-gray-600 px-3 hover:bg-gray-100'
-                }`}
               title={sidebarCollapsed ? item.label : undefined}
+              className={`relative flex items-center gap-3 rounded-xl py-2.5 text-[13.5px] font-medium
+                          transition-colors duration-200
+                          ${sidebarCollapsed ? 'justify-center px-0' : 'px-3.5'}`}
+              style={{ color: active ? 'var(--rail-text-strong)' : 'var(--rail-text)' }}
             >
-              <IconComponent
-                className={`w-[18px] h-[18px] shrink-0 transition-colors
-        ${sidebarCollapsed
-                    ? isActive
-                      ? 'text-[#1a73e8]'
-                      : 'text-gray-500 group-hover:text-gray-700'
-                    : isActive
-                      ? 'text-[#1a73e8]'
-                      : 'text-gray-500 group-hover:text-gray-700'
-                  }`}
-              />
-
-              {!sidebarCollapsed && (
-                <span className="truncate">{item.label}</span>
+              {/* The active pill is a shared layout element, so switching pages slides it rather
+                  than cross-fading two separate backgrounds. */}
+              {active && (
+                <motion.span
+                  layoutId="rail-active"
+                  transition={{ type: 'spring', stiffness: 420, damping: 34 }}
+                  className="absolute inset-0 rounded-xl"
+                  style={{ background: 'var(--rail-active)' }}
+                />
               )}
+              <Icon className="relative z-10 h-[18px] w-[18px] shrink-0" />
+              {!sidebarCollapsed && <span className="relative z-10 truncate">{item.label}</span>}
             </Link>
           );
         })}
       </nav>
 
-      {/* Collapse Toggle */}
+      {!sidebarCollapsed && (
+        <div className="mx-3 mb-3 flex items-center gap-2.5 rounded-xl px-3 py-2.5"
+             style={{ background: 'var(--rail-raised)' }}>
+          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-[12px] font-semibold text-white"
+                style={{ background: 'var(--brand-grad)' }}>
+            {initial}
+          </span>
+          <span className="min-w-0">
+            <span className="block truncate text-[12.5px] font-medium"
+                  style={{ color: 'var(--rail-text-strong)' }}>{name}</span>
+            <span className="block truncate text-[10.5px]" style={{ color: 'var(--rail-text)' }}>
+              {email}
+            </span>
+          </span>
+        </div>
+      )}
+
       <button
         onClick={() => dispatch(toggleSidebar())}
-        className="mx-3 mb-4 cursor-pointer p-2 rounded-lg border border-gray-200 text-gray-400 hover:text-gray-600 hover:bg-gray-100 transition-colors flex items-center justify-center"
         aria-label={sidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+        className="mx-3 mb-4 flex cursor-pointer items-center justify-center rounded-xl py-2 transition-colors duration-200"
+        style={{ background: 'var(--rail-raised)', color: 'var(--rail-text)' }}
       >
-        {sidebarCollapsed ? (
-          <ChevronRight className="w-4 h-4" />
-        ) : (
-          <ChevronLeft className="w-4 h-4" />
-        )}
+        {sidebarCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
       </button>
     </aside>
   );

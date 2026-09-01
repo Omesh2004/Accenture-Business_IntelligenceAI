@@ -856,6 +856,90 @@ def _render_greet(res: ToolResult, persona: str) -> str:
     return text
 
 
+def _get_trend(tenant_id: str, persona: str, kpi_id: str = "", window_days: int = 0,
+        **_) -> ToolResult:
+    """The metric's daily path over the window, read through the Metric API.
+
+    A movement is only legible as a shape, and until now the agent could state that a rate fell
+    without ever having looked at the line. This reads the same named series the dashboard plots,
+    so the chart beside an answer and the figures inside it come from one read.
+
+    The points are DATA, not claims: the narrator may not quote a day off this series. What it
+    licenses is the picture.
+    """
+    from datetime import timedelta
+
+    from api.intelligence.metrics import Window
+    from api.metric_api.client import MetricAPIClient
+
+    row = reader.latest_insight(tenant_id, persona, kpi_id or None, window_days)
+    kpi = kpi_id or (row or {}).get("kpi_id", "")
+    if not kpi:
+        return ToolResult(False, reason="no metric to draw a trend for")
+
+    contract = None
+    try:
+        from api.intelligence.contracts import load_declared
+        contract = load_declared().get(kpi)
+    except Exception:                                               # noqa: BLE001
+        contract = None
+
+    days = window_days or config.WINDOW_DAYS
+    metrics = MetricAPIClient()
+    try:
+        end = metrics.watermark(tenant_id)
+    except Exception:                                               # noqa: BLE001
+        end = None
+    end = (end or datetime.utcnow()).replace(hour=0, minute=0, second=0, microsecond=0)
+    window = Window(end - timedelta(days=days), end)
+
+    # A ratio is plotted from its two counts, never re-aggregated from a stored rate.
+    numerator = getattr(contract, "numerator", None)
+    num_spec = numerator() if callable(numerator) else None
+    fundamentals = getattr(contract, "fundamentals", None) or []
+    spec = num_spec or (fundamentals[0] if fundamentals else None)
+    if spec is None:
+        return ToolResult(False, reason="this metric declares no fundamental to plot")
+
+    try:
+        series = metrics.fundamental_series(tenant_id, spec, window)
+        points = [{"date": str(day), "value": float(v)} for day, v in sorted(series.points.items())]
+        denominator = getattr(contract, "denominator", None)
+        den_spec = denominator() if callable(denominator) else None
+        if den_spec is not None:
+            den = metrics.fundamental_series(tenant_id, den_spec, window)
+            by_day = {str(k): float(v) for k, v in den.points.items()}
+            points = [{"date": p["date"],
+                       "value": (p["value"] / by_day[p["date"]]) if by_day.get(p["date"]) else 0.0}
+                      for p in points]
+    except Exception as exc:                                        # noqa: BLE001
+        return ToolResult(False, reason="the series could not be read: %s" % exc)
+
+    if len(points) < 2:
+        return ToolResult(False, reason="too few days on record to draw a path")
+
+    anomaly = (row or {}).get("anomaly") or {}
+    band = [c for c in ((row or {}).get("evidence") or [])
+            if c["claim_id"] in ("forecast_lower", "forecast_upper")]
+    by_id = {c["claim_id"]: c["value"] for c in band}
+    return ToolResult(
+        True,
+        summary="%d days on record for %s" % (len(points), kpi),
+        facts={"trend_days": str(len(points))},
+        data={"kpi_id": kpi, "points": points, "days": days,
+              "is_ratio": bool(getattr(contract, "is_ratio", False)),
+              "window_start": str(anomaly.get("window_start") or ""),
+              "window_end": str(anomaly.get("window_end") or ""),
+              "lower": by_id.get("forecast_lower"), "upper": by_id.get("forecast_upper")},
+        citation="gold.kpi_daily")
+
+
+def _render_trend(res: ToolResult, persona: str) -> str:
+    pts = res.data.get("points") or []
+    return ("Its daily path over the last %d days is on record, %d points from gold.kpi_daily."
+            % (int(res.data.get("days", len(pts))), len(pts)))
+
+
 def _run_localized_search(tenant_id: str, persona: str, kpi_id: str = "", window_days: int = 0,
         **_) -> ToolResult:
     """Agentic Tool: Execute Stage 03 localization unconditionally to find high-variance segments."""
@@ -1060,6 +1144,13 @@ REGISTRY: dict[str, ToolSpec] = {
                  selectors=("forecast", "outlook", "expect", "predict", "projection", "next week",
                             "trend"),
                  needs_metric=True, render=_render_forecast, priority=3),
+        ToolSpec("get_trend",
+                 "The metric's daily path over the window, so the shape of a movement can be "
+                 "seen rather than only described.",
+                 "trend", {**_TENANT, **_KPI}, _get_trend,
+                 selectors=("trend", "path", "over time", "chart", "graph", "plot", "shape",
+                            "daily", "history", "show me", "visual", "look like"),
+                 needs_metric=True, render=_render_trend, priority=2),
         ToolSpec("get_recommendations",
                  "Proposed actions from the metric contract's closed lever list, scoped to the "
                  "levers this persona owns.",
