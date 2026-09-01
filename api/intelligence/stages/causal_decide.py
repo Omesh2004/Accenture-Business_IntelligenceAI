@@ -1,12 +1,16 @@
 """Stage 05 Causal and Stage 06 Decide.
 
-Causal labels the rung of evidence and never claims more than the assumptions support.
+Causal estimates the effect where the data supports one and labels the rung honestly where it
+does not. It never claims more than the assumptions it tested.
 Decide proposes from the contract's CLOSED lever list and never invents one.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+from api.intelligence import levers as lever_lib
+from api.intelligence import phrasing
+from api.intelligence.stages import causal_did
 from api.intelligence.ids import effect_id, rec_id, round6
 
 RUNGS = ["association", "attribution", "corroborated_cause", "estimated_effect"]
@@ -22,17 +26,24 @@ class CausalResult:
     method: str
     assumptions_met: bool
     degraded_reason: str = ""
+    #: what the treated segment would have done absent the movement, and what it actually did
+    counterfactual: float = 0.0
+    observed: float = 0.0
+    placebo_effect: float = 0.0
+    control_cells: int = 0
 
 
-def run_causal(ctx, anomaly: dict, causes: list[dict], upstream_anomaly: dict | None = None
-               ) -> CausalResult:
+def run_causal(ctx, anomaly: dict, causes: list[dict], upstream_anomaly: dict | None = None,
+               metric_layer=None) -> CausalResult:
     """Climb only as far as the evidence allows.
 
     association          -- something moved
     attribution          -- we know WHERE it moved (Localize returned cells)
     corroborated_cause   -- a declared upstream KPI moved first, in a consistent direction
-    estimated_effect     -- requires an intervention and a counterfactual; Phase 1 rules-first
-                            does not manufacture one
+    estimated_effect     -- a counterfactual was actually built and its assumption held: the
+                            unaffected segments give the trend the localized segment would have
+                            followed, difference-in-differences gives the effect, and a placebo
+                            run on an earlier window confirms the two were not already diverging
     """
     contract = ctx.contract
     cfg = contract.causal_cfg
@@ -45,6 +56,29 @@ def run_causal(ctx, anomaly: dict, causes: list[dict], upstream_anomaly: dict | 
     top = causes[0]["contribution"] if causes else 0.0
     spread = abs(magnitude) * (1.0 - min(top, 1.0)) if causes else abs(magnitude)
 
+    # Try for a real effect first. Attribution is only the ceiling when no counterfactual holds.
+    did = None
+    if causes and metric_layer is not None and "estimated_effect" in allowed:
+        fundamental = contract.numerator() or (contract.fundamentals[0]
+                                               if contract.fundamentals else None)
+        if fundamental is not None:
+            did = causal_did.estimate(ctx, metric_layer, fundamental,
+                                      causes[0].get("dimensions") or {})
+
+    # An interval that spans zero is not an effect, however clean the estimate looks: the data
+    # cannot rule out that nothing happened to this segment. Keep the number, drop the claim.
+    significant = (did is not None and did.ok
+                   and (did.lower > 0 or did.upper < 0))
+
+    if did is not None and did.ok and did.parallel_trends and significant:
+        seg = ", ".join(f"{k}={v}" for k, v in (causes[0].get("dimensions") or {}).items())
+        return CausalResult(
+            rung="estimated_effect", intervention=f"segment:{seg}",
+            point=round6(did.effect), lower=round6(did.lower), upper=round6(did.upper),
+            method="difference_in_differences", assumptions_met=True, degraded_reason="",
+            counterfactual=round6(did.counterfactual), observed=round6(did.observed),
+            placebo_effect=round6(did.placebo_effect), control_cells=did.control_cells)
+
     if upstream_anomaly is not None:
         rung = "corroborated_cause"
         intervention = f"upstream:{upstream_anomaly.get('kpi_id', '')}"
@@ -53,7 +87,13 @@ def run_causal(ctx, anomaly: dict, causes: list[dict], upstream_anomaly: dict | 
     elif causes:
         rung = "attribution"
         intervention = "none_declared"
-        reason = "no intervention declared for this window; attribution is the honest ceiling"
+        if did is not None and did.ok and did.parallel_trends and not significant:
+            reason = ("counterfactual built, but its interval spans zero -- the segment's "
+                      "movement is not separable from the movement of the rest")
+        elif did is not None and did.reason:
+            reason = did.reason
+        else:
+            reason = "no counterfactual available for this window; attribution is the ceiling"
         met = False
     else:
         rung = "association"
@@ -74,13 +114,17 @@ def run_causal(ctx, anomaly: dict, causes: list[dict], upstream_anomaly: dict | 
         rung=rung, intervention=intervention,
         point=round6(magnitude), lower=round6(magnitude - spread),
         upper=round6(magnitude + spread), method="rule",
+        counterfactual=round6(did.counterfactual) if did is not None and did.ok else 0.0,
+        observed=round6(did.observed) if did is not None and did.ok else 0.0,
+        placebo_effect=round6(did.placebo_effect) if did is not None and did.ok else 0.0,
+        control_cells=did.control_cells if did is not None and did.ok else 0,
         assumptions_met=met, degraded_reason=reason,
     )
 
 
 def to_effect_row(ctx, anomaly: dict, res: CausalResult) -> dict:
     return {
-        "effect_id": effect_id(anomaly["anomaly_id"], res.intervention),
+        "effect_id": effect_id(anomaly["anomaly_id"]),
         "investigation_id": ctx.investigation_id,
         "anomaly_id": anomaly["anomaly_id"],
         "tenant_id": ctx.tenant_id,
@@ -93,7 +137,11 @@ def to_effect_row(ctx, anomaly: dict, res: CausalResult) -> dict:
         "method": res.method,
         "assumptions_met": int(res.assumptions_met),
         "degraded_reason": res.degraded_reason,
-        "engine_type": "rule",
+        "counterfactual": res.counterfactual,
+        "observed": res.observed,
+        "placebo_effect": res.placebo_effect,
+        "control_cells": res.control_cells,
+        "engine_type": "stats" if res.method != "rule" else "rule",
     }
 
 
@@ -111,44 +159,58 @@ LEVER_HINTS = {
 
 @dataclass
 class DecideResult:
+    driver: str
     action: str
     lever: str
     owner_role: str
     impact_low: float
     impact_high: float
+    confidence: float
+    monitoring: dict
+
+
+def _confidence(anomaly: dict, causes: list[dict], causal: CausalResult) -> float:
+    """How much to trust this recommendation: evidence rung x how much the driver explains."""
+    rung = {"association": 0.35, "attribution": 0.6,
+            "corroborated_cause": 0.85, "estimated_effect": 0.95}.get(causal.rung, 0.35)
+    share = float(causes[0].get("contribution", 0.0)) if causes else 0.0
+    return round6(max(0.05, min(0.95, rung * (0.4 + 0.6 * min(1.0, share)))))
 
 
 def run_decide(ctx, anomaly: dict, causes: list[dict], causal: CausalResult) -> DecideResult:
     contract = ctx.contract
-    levers = contract.allowed_levers
+    candidates = lever_lib.for_kpi(ctx.kpi_id, contract.allowed_levers)
 
-    # Pick from the closed list only. Match the lever to the localized cause where possible;
-    # otherwise fall back to `investigate`, which every contract allows.
-    chosen = "investigate"
-    if causes and causal.rung in {"attribution", "corroborated_cause", "estimated_effect"}:
-        kpi = ctx.kpi_id.lower()
-        for lever in levers:
-            token = LEVER_HINTS.get(lever, ("", ""))[0]
-            if token and token in kpi:
-                chosen = lever
-                break
-        else:
-            chosen = levers[0] if levers else "investigate"
-    if chosen not in levers:
-        chosen = "investigate" if "investigate" in levers else (levers[0] if levers else "investigate")
-
-    segment = ""
+    driver = ""
     if causes:
-        segment = ", ".join(f"{k}={v}" for k, v in sorted(causes[0]["dimensions"].items()))
+        # The readable phrase, the same one the prose uses. `txn_type=PAYMENT` is a cell key,
+        # not something to put in front of a person who has to act on it.
+        driver = phrasing.cell_phrase(causes[0]["dimensions"]) or ", ".join(
+            f"{k}={v}" for k, v in sorted(causes[0]["dimensions"].items()))
 
-    action = (f"{chosen.replace('_', ' ')} for {segment}" if segment
-              else f"{chosen.replace('_', ' ')} for {ctx.kpi_id}")
+    # A lever needs a localized driver and evidence past mere association. Without that the
+    # honest move is to investigate, not to propose an action nobody can justify.
+    chosen, spec = "investigate", lever_lib.load_levers().get("investigate", {})
+    if causes and causal.rung in {"attribution", "corroborated_cause", "estimated_effect"}:
+        for name, cand in candidates:
+            if name == "investigate":
+                continue
+            chosen, spec = name, cand
+            break
 
-    # Recovering the localized share is the optimistic bound; zero is the pessimistic one.
+    label = spec.get("label", chosen.replace("_", " "))
+    action = f"{label}, for {driver}" if driver else label
+
+    # The gap this driver actually explains, scaled by the lever's declared recovery range.
     recoverable = abs(float(anomaly.get("magnitude", 0.0))) * (
-        causes[0]["contribution"] if causes else 0.0)
-    return DecideResult(action=action, lever=chosen, owner_role=contract.owner_role,
-                        impact_low=round6(0.0), impact_high=round6(recoverable))
+        float(causes[0].get("contribution", 0.0)) if causes else 0.0)
+    low, high = lever_lib.impact_range(spec, recoverable)
+
+    return DecideResult(driver=driver or ctx.kpi_id, action=action, lever=chosen,
+                        owner_role=contract.owner_role,
+                        impact_low=round6(low), impact_high=round6(high),
+                        confidence=_confidence(anomaly, causes, causal),
+                        monitoring=lever_lib.monitoring(spec, ctx.kpi_id))
 
 
 def to_rec_row(ctx, anomaly: dict, res: DecideResult) -> dict:
@@ -157,10 +219,13 @@ def to_rec_row(ctx, anomaly: dict, res: DecideResult) -> dict:
         "investigation_id": ctx.investigation_id,
         "anomaly_id": anomaly["anomaly_id"],
         "tenant_id": ctx.tenant_id,
+        "driver": res.driver,
         "action": res.action,
         "lever": res.lever,
         "owner_role": res.owner_role,
         "expected_impact": {"low": res.impact_low, "high": res.impact_high},
+        "confidence": res.confidence,
+        "monitoring": res.monitoring,
         "status": "proposed",
         "engine_type": "rule",
     }

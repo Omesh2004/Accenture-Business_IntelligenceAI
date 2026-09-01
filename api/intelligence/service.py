@@ -18,6 +18,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 from api.intelligence import config
 from api.intelligence.contracts import load_all
 from api.intelligence.metrics import ClickHouseMetricLayer, Window
+from api.metric_api.client import MetricAPIClient
 from api.intelligence.orchestrator import Orchestrator
 
 logging.basicConfig(level=logging.INFO)
@@ -43,7 +44,7 @@ async def run_forecast_batch(interval_minutes: int = None) -> None:
     """Stage 04, ahead of Detect. History ends where the scored window begins."""
     while True:
         try:
-            ml = ClickHouseMetricLayer()
+            ml = MetricAPIClient()
             orch = Orchestrator(ml)
             for tenant in TENANTS:
                 win = current_window()
@@ -60,7 +61,7 @@ async def run_investigation_sweep(interval_minutes: int = None) -> None:
     """Stages 01-07 per KPI."""
     while True:
         try:
-            ml = ClickHouseMetricLayer()
+            ml = MetricAPIClient()
             orch = Orchestrator(ml)
             for tenant in TENANTS:
                 # Refit the band inside the sweep rather than trusting the hourly batch.
@@ -72,11 +73,15 @@ async def run_investigation_sweep(interval_minutes: int = None) -> None:
                 # movement to explain" -- the verdict came from one run and the band from the
                 # next. A decision and the band it was made against have to come from the same
                 # read, and the only way to guarantee that is to take both here.
-                results = orch.sweep(tenant, current_window(), dataset=DATASET,
-                                     run_forecast=True)
-                fired = sum(1 for r in results if r.get("anomaly"))
-                logger.info("sweep: tenant=%s investigations=%d anomalies=%d",
-                            tenant, len(results), fired)
+                # One pass per offered window. The same movement looks different over a week
+                # and over a quarter, and a reader who picks 90 days is owed a finding that was
+                # actually scored over 90 days.
+                for days in config.WINDOW_CHOICES:
+                    results = orch.sweep(tenant, current_window(days), dataset=DATASET,
+                                         run_forecast=True)
+                    fired = sum(1 for r in results if r.get("anomaly"))
+                    logger.info("sweep: tenant=%s window=%dd investigations=%d anomalies=%d",
+                                tenant, days, len(results), fired)
         except Exception:
             logger.exception("investigation sweep failed")
         await asyncio.sleep((interval_minutes or config.SWEEP_INTERVAL_MIN) * 60)

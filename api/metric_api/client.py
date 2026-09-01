@@ -64,6 +64,24 @@ class MetricAPIClient:
                 out[(value_key,)] = float(v)
         return out
 
+    def leaf_cells(self, tenant_id, spec, window, baseline, min_volume=0):
+        """Multi-dimensional leaves: (dims, {cell_tuple: (value, baseline)}). For PSqueeze."""
+        d = _get("/metric/kpi/cells", {
+            "tenant": tenant_id, "kpi_id": spec["kpi_id"], "fundamental": spec["fundamental"],
+            "baseline_start": baseline.start.date().isoformat(),
+            "baseline_end": baseline.end.date().isoformat(),
+            "min_volume": min_volume, **_win(window)})
+        rows = d.get("cells", [])
+        if not rows:
+            return [], {}
+        dims = list(rows[0].get("dims") or [])
+        out = {}
+        for r in rows:
+            if list(r.get("dims") or []) != dims:
+                continue
+            out[tuple(r.get("vals") or [])] = (float(r["value"]), float(r["baseline"]))
+        return dims, out
+
     def cell_deltas(self, tenant_id, spec, dims, window, baseline, min_volume=0) -> dict:
         d = _get("/metric/kpi/cell_deltas", {
             "tenant": tenant_id, "kpi_id": spec["kpi_id"], "fundamental": spec["fundamental"],

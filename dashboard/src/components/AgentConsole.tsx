@@ -119,8 +119,9 @@ function HeroFinding({
       <div className="mt-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
         <Counter
           value={observed.value}
-          className="text-[42px] leading-none tracking-tight"
-          style={{ color: INK.text, fontFamily: FONT.mono, fontVariantNumeric: 'tabular-nums' }}
+          className="leading-none"
+          style={{ color: INK.text, fontSize: 'var(--step-3)', fontWeight: 600,
+                   letterSpacing: '-0.02em', fontVariantNumeric: 'tabular-nums' }}
         />
         {pct !== null && (
           <motion.span
@@ -129,11 +130,11 @@ function HeroFinding({
             transition={{ delay: 0.5, duration: 0.34, ease: EASE }}
             className="rounded-full px-2.5 py-1 text-[12.5px] font-semibold"
             style={{
-              color: rose ? INK.positive : INK.danger,
-              background: rose ? INK.positiveSoft : INK.dangerSoft,
+              color: rose ? 'var(--rise)' : 'var(--fall)',
+              background: rose ? 'rgb(15 157 118 / 0.10)' : 'rgb(248 39 104 / 0.10)',
             }}
           >
-            {rose ? '▲' : '▼'} {Math.abs(pct)}%
+            {rose ? '▲' : '▼'} {Math.abs(pct).toFixed(1)}%
           </motion.span>
         )}
       </div>
@@ -952,8 +953,10 @@ function AgentConsole({
               : undefined
           }
         >
-          <GateRail gates={gates} active={active} pad={pad} />
-          <Reasoning steps={steps} running={running} pending={pending} showHeader={!embedded} />
+          {!embedded && <GateRail gates={gates} active={active} pad={pad} />}
+          {(!embedded || running) && (
+            <Reasoning steps={steps} running={running} pending={pending} showHeader={!embedded} />
+          )}
 
           {toolSteps.length > 0 && (
             <section className={`${pad} pt-5`}>

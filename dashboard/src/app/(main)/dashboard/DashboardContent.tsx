@@ -1,63 +1,63 @@
 'use client';
 
-/** The dashboard the brief asks for: the KPIs, the funnel, and the AI insight. */
+/** The dashboard: who is reading, what each KPI reads now, how it moved, and what needs them first. */
 
-import React from 'react';
+import React, { useMemo, useState } from 'react';
 import { useDashboardData } from '@/hooks/useDashboard';
+import { useKpiSeries } from '@/hooks/useKpiSeries';
 import { DashboardSkeleton } from '@/components/Skeletons';
 import KPICard from '@/components/KPICard';
-import TrafficChart from '@/components/TrafficChart';
-import AIInsightsPanel from '@/components/AIInsightsPanel';
-import JourneyFunnelInsights from '@/components/JourneyFunnelInsights';
+import KpiTrends from '@/components/KpiTrends';
+import MetricTable from '@/components/MetricTable';
+import RangePosition from '@/components/RangePosition';
+import PersonaLens, { type PersonaId } from '@/components/PersonaLens';
 
 export default function DashboardContent() {
-  const {
-    isLoading,
-    kpiMetrics,
-    secondaryKpiMetrics,
-    trafficData,
-    aiInsights,
-    funnelData,
-    timeRange,
-    changeTimeRange,
-  } = useDashboardData();
+  // The lens the whole page is read through. Server-validated on every request.
+  const [persona, setPersona] = useState<PersonaId>('analyst');
+  const { isLoading, kpiMetrics, timeRange } = useDashboardData(persona);
 
-  if (isLoading && kpiMetrics.length === 0) {
-    return <DashboardSkeleton />;
-  }
+  // The range selector drives every panel, charts included.
+  const rangeDays = Number(String(timeRange).replace(/[^0-9]/g, '')) || 30;
+
+  // One fetch of the five series, shared by the cards, the charts, the table and the range
+  // panel, so a sparkline can never disagree with the chart underneath it.
+  const { data: seriesData, isLoading: seriesLoading } =
+    useKpiSeries('nexabank', rangeDays, persona);
+  const series = useMemo(() => seriesData?.series || {}, [seriesData]);
+  const allowed = useMemo(
+    () => seriesData?.allowed || kpiMetrics.map((m) => m.id),
+    [seriesData, kpiMetrics],
+  );
+
+  if (isLoading && kpiMetrics.length === 0) return <DashboardSkeleton />;
 
   return (
-    <div className="animate-in fade-in duration-500 space-y-6 relative">
-      <section id="kpi-section" aria-label="Key Performance Indicators">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+    <div className="relative space-y-8">
+      <PersonaLens persona={persona} onChange={setPersona} />
+
+      <section id="kpi-section" aria-label="Key performance indicators">
+        <div className="rise-stagger grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           {kpiMetrics.map((metric) => (
-            <KPICard key={metric.id} metric={metric} />
+            <KPICard key={metric.id} metric={metric} spark={series[metric.id]?.points} />
           ))}
         </div>
       </section>
 
-      <section id="traffic-section" aria-label="Traffic Analytics">
-        <TrafficChart
-          data={trafficData}
-          timeRange={timeRange}
-          onTimeRangeChange={changeTimeRange}
-        />
+      <section className="rise" aria-label="Where each metric sits against its range">
+        <RangePosition series={series} allowed={allowed} />
       </section>
 
-      <section id="funnel-section" aria-label="Onboarding Funnel">
-        <JourneyFunnelInsights data={funnelData} />
+      <section className="rise" id="kpi-trends" aria-label="How each KPI moved">
+        <h3 className="mb-1">How each KPI moved</h3>
+        <p className="mb-3.5 text-[12.5px] text-slate-400">
+          Daily, over the last {rangeDays} days, against the range each was scored on.
+        </p>
+        <KpiTrends series={series} allowed={allowed} loading={seriesLoading} />
       </section>
 
-      <section id="insights-section" aria-label="AI Insights">
-        <AIInsightsPanel insights={aiInsights} />
-      </section>
-
-      <section id="secondary-kpi-section" aria-label="Secondary Metrics">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {secondaryKpiMetrics.map((metric) => (
-            <KPICard key={metric.id} metric={metric} />
-          ))}
-        </div>
+      <section className="rise" aria-label="Every metric at a glance">
+        <MetricTable series={series} allowed={allowed} days={rangeDays} />
       </section>
     </div>
   );

@@ -7,6 +7,17 @@ formula: kyc_completed / kyc_started
 unit: ratio
 additivity: non-additive     # the RATE is not additive; its two counts are
 
+# How a person refers to this metric. Without these the agent cannot tell that
+# "new account opening" means signups, and answers about something else entirely.
+aliases:
+  - kyc
+  - kyc completion
+  - kyc rate
+  - identity verification
+  - verification rate
+  - onboarding completion
+  - know your customer
+
 grain:
   time: daily
   entity: application
@@ -37,25 +48,23 @@ identity:
   application_id: required
   customer_id: hashed
 
+# Addressed as (kpi_id, fundamental) against gold.kpi_daily -- see
+# docs/INTERFACES/kpi_rollups.md. The table/event forms are no longer supported.
 fundamentals:
-  - metric: kyc_completed
-    table: fact_loan_applications
-    measure: "1"
-    aggregation: count
-    filter:
-      kyc_step: 3
+  - kpi_id: kyc_completion_rate
+    fundamental: kyc_completed
     additivity: additive
     engine_type: sql
-  - metric: kyc_started
-    table: fact_loan_applications
-    measure: "1"
-    aggregation: count
+    role: numerator
+  - kpi_id: kyc_completion_rate
+    fundamental: kyc_started
     additivity: additive
     engine_type: sql
+    role: denominator
 
 dimensions:
   # Every one is a measured column on the fact, not a per-session fabrication.
-  allowed: [region, country, branch_code, risk_segment, loan_type]
+  allowed: [loan_type, risk_segment, region, branch_code]
   max_depth: 2
   min_segment_volume: 15
   availability:
@@ -98,6 +107,9 @@ quality:
       signature: "kyc_completed == 0 for a full window while submissions continue"
       verdict: ambiguous
 
+# What a movement here is worth to the bank; Materiality ranks by it.
+strategic_weight: 0.75
+
 detection:
   direction: both
   band_source: robust_baseline
@@ -119,7 +131,10 @@ forecast:
 
 causal:
   enabled: true
-  evidence_rungs: [association, attribution, corroborated_cause]
+  # estimated_effect is reachable because this KPI counts an additive event over segments that
+  # give a control group. Localize names the treated cells, the unaffected cells give the trend
+  # they would have followed, and a placebo window tests that assumption before any claim.
+  evidence_rungs: [association, attribution, corroborated_cause, estimated_effect]
   interventions: [campaign, kyc_vendor_change, document_policy_change]
   control_dimensions: [loan_type, risk_segment]
   degrade_to: attribution

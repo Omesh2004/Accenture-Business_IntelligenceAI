@@ -56,12 +56,15 @@ export function parseParams(req: Request) {
  * the last row of the previous page — permanently, because the cursor has already moved past it.
  * Comparing the id as a tiebreaker is what makes the page boundary exact.
  */
-export function keysetWhere(timeField: string, since: Date, sinceId: string): object {
+// `idField` because the tiebreaker is the table's own key: Account is keyed on accNo, not id,
+// and Prisma rejects a filter on a field the model does not have.
+export function keysetWhere(timeField: string, since: Date, sinceId: string,
+                            idField = "id"): object {
   if (!sinceId) return { [timeField]: { gt: since } };
   return {
     OR: [
       { [timeField]: { gt: since } },
-      { AND: [{ [timeField]: since }, { id: { gt: sinceId } }] },
+      { AND: [{ [timeField]: since }, { [idField]: { gt: sinceId } }] },
     ],
   };
 }

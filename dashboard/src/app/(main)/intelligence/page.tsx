@@ -167,7 +167,9 @@ function Empty({ children }: { children: React.ReactNode }) {
 }
 
 export default function IntelligencePage() {
-  const { tenantsParam } = useDashboardData();
+  const { tenantsParam, timeRange } = useDashboardData();
+  // The header range is the agent's default period, until a question names its own.
+  const rangeDays = Number(String(timeRange).replace(/[^0-9]/g, '')) || 7;
   // Empty means "whatever the server resolves from my role"; a switch only ever narrows.
   const [persona, setPersona] = useState('');
   const [auditOpen, setAuditOpen] = useState(false);
@@ -254,7 +256,8 @@ export default function IntelligencePage() {
             </p>
           </Card>
         </motion.section>
-        <IntelligenceAsk tenants={tenantsParam} persona={persona} onPersonaChange={setPersona} />
+        <IntelligenceAsk tenants={tenantsParam} persona={persona} onPersonaChange={setPersona}
+                         days={rangeDays} />
       </div>
     );
   }
@@ -355,7 +358,8 @@ export default function IntelligencePage() {
           title="Ask the analyst"
           description="The agent reads the question, chooses which pipeline stages to run, and answers only from recorded findings. Where the evidence does not support an answer, it abstains rather than estimating."
         />
-        <IntelligenceAsk tenants={tenantsParam} persona={persona} onPersonaChange={setPersona} />
+        <IntelligenceAsk tenants={tenantsParam} persona={persona} onPersonaChange={setPersona}
+                         days={rangeDays} />
       </section>
 
       {/* ── Attribution ───────────────────────────────────────────────────────────────── */}

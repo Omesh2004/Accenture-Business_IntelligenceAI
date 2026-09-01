@@ -14,30 +14,30 @@
    indigo accent instead of fighting it. Lightness steps are unchanged, so every existing
    foreground/background pairing keeps the contrast it was designed with. */
 @theme {
-  --color-slate-50:  #f7f8fa;
-  --color-slate-100: #eff1f5;
-  --color-slate-200: #e7e8ef;
-  --color-slate-300: #d6d8e3;
-  --color-slate-400: #8b8fa3;
-  --color-slate-500: #6b7085;
-  --color-slate-600: #4a4d5e;
-  --color-slate-700: #33364a;
-  --color-slate-800: #1f2233;
-  --color-slate-900: #12131a;
-  --color-slate-950: #0a0b11;
+  --color-slate-50: #faf8fd;
+  --color-slate-100: #f3eff9;
+  --color-slate-200: #e8e2f1;
+  --color-slate-300: #d3cae3;
+  --color-slate-400: #8d86a1;
+  --color-slate-500: #6c6581;
+  --color-slate-600: #4b4661;
+  --color-slate-700: #342f49;
+  --color-slate-800: #201c34;
+  --color-slate-900: #141020;
+  --color-slate-950: #0a0714;
 
   /* Gray is used interchangeably with slate across the codebase; keeping them in step stops a
      card border and the divider inside it being two different greys. */
-  --color-gray-50:  #f7f8fa;
-  --color-gray-100: #eff1f5;
-  --color-gray-200: #e7e8ef;
-  --color-gray-300: #d6d8e3;
-  --color-gray-400: #8b8fa3;
-  --color-gray-500: #6b7085;
-  --color-gray-600: #4a4d5e;
-  --color-gray-700: #33364a;
-  --color-gray-800: #1f2233;
-  --color-gray-900: #12131a;
+  --color-gray-50: #faf8fd;
+  --color-gray-100: #f3eff9;
+  --color-gray-200: #e8e2f1;
+  --color-gray-300: #d3cae3;
+  --color-gray-400: #8d86a1;
+  --color-gray-500: #6c6581;
+  --color-gray-600: #4b4661;
+  --color-gray-700: #342f49;
+  --color-gray-800: #201c34;
+  --color-gray-900: #141020;
 }
 
 /* The accent. `#1a73e8` is written as a Tailwind ARBITRARY value in ~120 places
@@ -45,10 +45,53 @@
    `@theme` — it compiles to a literal. Overriding the generated classes is the only way to move
    them without touching every call site, and it keeps the migration in one reversible block. */
 :root {
-  --accent: #4338ca;
-  --accent-strong: #3730a3;
-  --accent-soft: #eef0fd;
+  /* Sampled from the reference designs in `public/`, not chosen by eye. The hero runs
+     #4014cc to #4e1bda across its width with a magenta corner; the rails are near-black;
+     the page sits on an off-white that is very slightly violet. */
+  --brand: #5b21e0;
+  --brand-strong: #4014cc;
+  --brand-deep: #2d0b96;
+  --brand-bright: #7c3aed;
+  --brand-magenta: #a855f7;
+  --brand-soft: #f1ecfe;
+  --brand-line: #e4dbfb;
+
+  /* The hero. The wave overlay in `public/dashboard-card-overlay.png` sits on top of this. */
+  --hero-grad: linear-gradient(105deg, #3d12c9 0%, #4a19d4 38%, #4e1bda 62%, #6d28e6 88%,
+                               #8b3af0 100%);
+  --brand-grad: linear-gradient(120deg, #7c3aed 0%, #5b21e0 55%, #4014cc 100%);
+
+  /* The rails. Two shades: the dashboard rail is darker than the chat rail in the designs. */
+  --rail: #0b0a12;
+  --rail-raised: #16141f;
+  --rail-line: #23202f;
+  --rail-text: #a9a3bd;
+  --rail-text-strong: #f5f3fb;
+  --rail-active: #351970;
+
+  --surface: #ffffff;
+  --surface-sunken: #fafafd;
+  --hairline: #ececf3;
+
+  /* Direction. Red is the pink-leaning crimson from the reference, not a fire-engine red. */
+  --rise: #0f9d76;
+  --fall: #f82768;
+  --warn: #e8912a;
+
+  --shadow-card: 0 1px 2px rgb(16 8 40 / 0.04), 0 8px 24px -16px rgb(16 8 40 / 0.16);
+  --shadow-lift: 0 2px 6px rgb(16 8 40 / 0.06), 0 18px 40px -20px rgb(45 11 150 / 0.26);
+  --shadow-hero: 0 18px 44px -22px rgb(45 11 150 / 0.55);
+
+  /* Kept: ~120 call sites still name these. They now resolve to the new brand. */
+  --accent: var(--brand);
+  --accent-strong: var(--brand-strong);
+  --accent-bright: var(--brand-bright);
+  --accent-soft: var(--brand-soft);
+  --accent-line: var(--brand-line);
+  --accent-grad: var(--brand-grad);
+  --shadow-violet: var(--shadow-lift);
 }
+
 
 .bg-\[\#1a73e8\]      { background-color: var(--accent) !important; }
 .text-\[\#1a73e8\]    { color: var(--accent) !important; }
@@ -115,7 +158,7 @@
 }
 
 html {
-  font-family: var(--font-inter), -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: var(--font-ui), -apple-system, 'Helvetica Neue', Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -171,39 +214,70 @@ body {
 /* ─────────────── Type scale ───────────────
    One typographic system for the whole dashboard, so a heading means the same thing on every
    page. Three faces, each with a job:
-     --font-display  Instrument Serif — section and page titles. A serif at a heading size reads
-                     as an assertion; the same words in the UI sans read as a label.
-     --font-inter    everything a user reads as interface: labels, body, controls.
-     --font-mono     JetBrains Mono — every FIGURE. Proportional digits give 236 and 5 different
-                     advance widths, so columns of numbers stop aligning and magnitudes misread.
+     --font-ui  Inter, one family for everything. Hierarchy is weight, size and tracking.
+                Figures use tabular numerals so columns of numbers align.
    Headings are set here rather than per-page: the reason the dashboard looked assembled from
    parts was that each page invented its own size, weight and tracking for the same level. */
 
-h1, h2, h3, h4 {
-  font-family: var(--font-display), Georgia, 'Times New Roman', serif;
+h1, h2, h3 {
+  font-family: var(--font-display), Georgia, serif;
   font-weight: 400;
-  letter-spacing: -0.011em;
   color: var(--color-text-primary);
 }
+/* h4 is a card title, not a statement -- it stays in the grotesque. */
+h4 {
+  font-family: var(--font-ui), 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+/* Swiss tracking: large type tightens, small type opens up. A single family only reads as a
+   system if the optical size is corrected by hand. */
+h1 { letter-spacing: -0.018em; }
+h2 { letter-spacing: -0.014em; }
+h3 { letter-spacing: -0.010em; }
+h4 { letter-spacing: -0.010em; }
 
-h1 { font-size: 2rem;    line-height: 1.18; }
-h2 { font-size: 1.5rem;  line-height: 1.25; }
-h3 { font-size: 1.125rem; line-height: 1.35; }
-h4 { font-size: 1rem;    line-height: 1.4; }
+/* Golden-ratio scale. φ = 1.618 between major steps, √φ = 1.272 between minor ones, off a
+   16px base. Every size below is a step on it, so nothing is chosen by eye. Line height runs
+   the other way -- tighter as type grows -- because a display line needs less leading to hold
+   together, and body needs 1.618 to stay readable. */
+:root {
+  --step--2: 0.618rem;   /* 9.9px  — micro labels           */
+  --step--1: 0.786rem;   /* 12.6px — captions, eyebrow       */
+  --step-0:  1rem;       /* 16px   — body                    */
+  --step-1:  1.272rem;   /* 20.4px — lead, card titles       */
+  --step-2:  1.618rem;   /* 25.9px — h3                      */
+  --step-3:  2.058rem;   /* 32.9px — h2                      */
+  --step-4:  2.618rem;   /* 41.9px — h1                      */
+  --step-5:  3.330rem;   /* 53.3px — hero                    */
+  --leading-body: 1.618;
+  --leading-tight: 1.272;
+}
+
+h1 { font-size: var(--step-4); line-height: 1.12; }
+h2 { font-size: var(--step-3); line-height: 1.18; }
+h3 { font-size: var(--step-2); line-height: var(--leading-tight); }
+h4 { font-size: var(--step-1); line-height: 1.35; }
+
+.hero-title { font-size: var(--step-5); line-height: 1.04; letter-spacing: -0.034em; font-weight: 700; }
+.lead       { font-size: var(--step-1); line-height: 1.45; color: var(--color-text-secondary); }
+
+body { font-size: var(--step-0); line-height: var(--leading-body); }
 
 /* An opt-out for headings that are really labels — a card title inside a dense panel, where a
    serif at 13px reads as decoration rather than hierarchy. */
 h1.ui-label, h2.ui-label, h3.ui-label, h4.ui-label,
 .ui-label {
-  font-family: var(--font-inter), system-ui, sans-serif;
+  font-family: var(--font-ui), -apple-system, 'Helvetica Neue', Helvetica, Arial, sans-serif;
   font-weight: 600;
   letter-spacing: 0;
 }
 
 /* Figures. Applied to any element showing a number that a reader will compare to another. */
 .num, .tabular, td.num, th.num {
-  font-family: var(--font-mono), ui-monospace, SFMono-Regular, monospace;
+  font-family: var(--font-ui), -apple-system, 'Helvetica Neue', Helvetica, Arial, sans-serif;
   font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1, 'cv01' 1;
   font-feature-settings: 'tnum' 1;
 }
 
@@ -215,10 +289,10 @@ h1.ui-label, h2.ui-label, h3.ui-label, h4.ui-label,
 }
 
 .eyebrow {
-  font-family: var(--font-inter), system-ui, sans-serif;
-  font-size: 0.65rem;
+  font-family: var(--font-ui), -apple-system, 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  font-size: var(--step--1);
   font-weight: 600;
-  letter-spacing: 0.2em;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--color-text-tertiary);
 }
@@ -309,7 +383,7 @@ h1.ui-label, h2.ui-label, h3.ui-label, h4.ui-label,
 
 /* Clean up chart axis text */
 .recharts-text {
-  font-family: var(--font-inter), sans-serif !important;
+  font-family: var(--font-ui), sans-serif !important;
 }
 
 /* ─────────────── Focus States ─────────────── */
@@ -350,4 +424,221 @@ h1.ui-label, h2.ui-label, h3.ui-label, h4.ui-label,
 ::selection {
   background-color: rgba(37, 99, 235, 0.15);
   color: var(--color-text-primary);
+}
+
+/* ─────────────── Motion ───────────────
+   Standard ease-out reads as a web page. These are the two curves a product film uses: a soft
+   overshoot for things arriving, and a long decelerate for things settling. Everything respects
+   prefers-reduced-motion at the bottom. */
+:root {
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --dur-fast: 260ms;
+  --dur-base: 520ms;
+  --dur-slow: 900ms;
+}
+
+/* Arrive: rise, sharpen and settle. The blur is what makes it read as depth rather than a slide. */
+@keyframes riseIn {
+  from { opacity: 0; transform: translateY(14px) scale(0.985); filter: blur(6px); }
+  to   { opacity: 1; transform: translateY(0)    scale(1);     filter: blur(0); }
+}
+
+/* A light sweep across a surface, once, as it lands. */
+@keyframes sheen {
+  from { background-position: -160% 0; }
+  to   { background-position: 260% 0; }
+}
+
+@keyframes floatY {
+  0%, 100% { transform: translateY(0); }
+  50%      { transform: translateY(-5px); }
+}
+
+/* A number that counts is a number a reader watches. Used with the reveal on KPI figures. */
+@keyframes countPulse {
+  0%   { opacity: 0; transform: translateY(6px); }
+  60%  { opacity: 1; transform: translateY(-1px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+.reveal        { animation: riseIn var(--dur-base) var(--ease-out-expo) both; }
+.reveal-spring { animation: riseIn var(--dur-base) var(--ease-spring) both; }
+.count-in      { animation: countPulse var(--dur-base) var(--ease-out-expo) both; }
+.float-slow    { animation: floatY 6s ease-in-out infinite; }
+
+/* Staggered entrance on the golden ratio: each child waits φ⁻¹ of the previous gap, so the
+   cadence accelerates instead of ticking metronomically. */
+.reveal-stagger > *          { animation: riseIn var(--dur-base) var(--ease-out-expo) both; }
+.reveal-stagger > *:nth-child(1) { animation-delay: 0ms; }
+.reveal-stagger > *:nth-child(2) { animation-delay: 62ms; }
+.reveal-stagger > *:nth-child(3) { animation-delay: 100ms; }
+.reveal-stagger > *:nth-child(4) { animation-delay: 162ms; }
+.reveal-stagger > *:nth-child(5) { animation-delay: 200ms; }
+.reveal-stagger > *:nth-child(6) { animation-delay: 262ms; }
+.reveal-stagger > *:nth-child(7) { animation-delay: 300ms; }
+.reveal-stagger > *:nth-child(8) { animation-delay: 362ms; }
+
+/* Surfaces that lift toward the pointer. The shadow grows faster than the translate, which is
+   what makes it feel like weight rather than a hover state. */
+.lift {
+  transition: transform var(--dur-fast) var(--ease-out-expo),
+              box-shadow var(--dur-fast) var(--ease-out-expo),
+              border-color var(--dur-fast) ease;
+  will-change: transform;
+}
+.lift:hover {
+  transform: translateY(-3px);
+  box-shadow: 0 14px 34px -12px rgb(15 23 42 / 0.20), 0 4px 10px -6px rgb(15 23 42 / 0.12);
+}
+
+/* One sheen as a premium surface lands. */
+.sheen-once {
+  background-image: linear-gradient(100deg,
+    transparent 38%, rgb(255 255 255 / 0.55) 50%, transparent 62%);
+  background-size: 220% 100%;
+  background-repeat: no-repeat;
+  animation: sheen 1.5s var(--ease-out-expo) 380ms 1 both;
+}
+
+/* An underline that draws itself, for section headings. */
+.rule-draw {
+  position: relative;
+}
+.rule-draw::after {
+  content: "";
+  position: absolute;
+  left: 0; bottom: -0.4em;
+  height: 2px; width: 0;
+  background: linear-gradient(90deg, var(--color-accent, #1a73e8), transparent);
+  animation: ruleGrow var(--dur-slow) var(--ease-out-expo) 200ms forwards;
+}
+@keyframes ruleGrow { to { width: 3.2rem; } }
+
+@media (prefers-reduced-motion: reduce) {
+  .reveal, .reveal-spring, .count-in, .float-slow,
+  .reveal-stagger > *, .sheen-once, .rule-draw::after {
+    animation: none !important;
+  }
+  .lift { transition: none; }
+  .lift:hover { transform: none; }
+}
+
+/* Anything clickable says so. Missing this is the cheapest way to look unfinished. */
+button:not(:disabled),
+[role="button"]:not([aria-disabled="true"]),
+summary,
+label[for],
+select,
+a[href] {
+  cursor: pointer;
+}
+button:disabled,
+[aria-disabled="true"] {
+  cursor: not-allowed;
+}
+
+/* ─────────────── Surfaces from the reference design ───────────────
+   Written as component classes rather than repeated utility strings, so the card in the KPI row
+   and the card in the chat answer are the same object and stay that way. */
+
+.surface {
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: 16px;
+  box-shadow: var(--shadow-card);
+}
+
+/* The hero band.
+   The wave and the gradient are two layers of ONE background, not an element background plus a
+   pseudo-element behind it. The pseudo-element version depended on a negative z-index inside an
+   isolated stacking context to sit between the background and the text, and when that resolved
+   the other way the band painted with no colour at all -- white text on a white page, which read
+   as a missing card rather than a broken one. Two background layers cannot fail that way. */
+.hero-band {
+  position: relative;
+  overflow: hidden;
+  border-radius: 20px;
+  background-image: image-set(url('/dashboard-card-overlay.png') 1x), var(--hero-grad);
+  background-size: cover, auto;
+  background-position: center right, center;
+  background-repeat: no-repeat, no-repeat;
+  background-blend-mode: soft-light, normal;
+  background-color: #4014cc;      /* the floor, so the band is never colourless */
+  box-shadow: var(--shadow-hero);
+}
+
+/* The icon tile beside a KPI name. */
+.icon-tile {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
+  background: var(--brand-soft);
+  color: var(--brand);
+  flex: none;
+}
+
+/* Direction chips. */
+.delta { display: inline-flex; align-items: center; gap: 3px; font-variant-numeric: tabular-nums; }
+.delta-up { color: var(--rise); }
+.delta-down { color: var(--fall); }
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  border: 1px solid var(--hairline);
+  background: var(--surface-sunken);
+  color: var(--color-slate-600);
+  white-space: nowrap;
+}
+.chip-brand { background: var(--brand-soft); border-color: var(--brand-line); color: var(--brand-strong); }
+.chip-warn  { background: #fff6e8; border-color: #f6dfba; color: #a8630c; }
+.chip-high  { background: #ffeef3; border-color: #fbd3de; color: #c01a4c; }
+
+/* ─────────────── Motion ───────────────
+   Deliberately small. Everything is transform/opacity only, so it composites on the GPU and adds
+   no layout work; a page of forty cards animating position would cost a frame budget the demo
+   cannot spare. `prefers-reduced-motion` turns the lot off. */
+
+@keyframes rise-in { from { opacity: 0; transform: translate3d(0, 10px, 0); } to { opacity: 1; transform: none; } }
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes sheen { from { transform: translate3d(-120%, 0, 0); } to { transform: translate3d(220%, 0, 0); } }
+
+.rise { animation: rise-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.rise-stagger > * { animation: rise-in 0.5s cubic-bezier(0.22, 1, 0.36, 1) both; }
+.rise-stagger > *:nth-child(1) { animation-delay: 0.02s; }
+.rise-stagger > *:nth-child(2) { animation-delay: 0.06s; }
+.rise-stagger > *:nth-child(3) { animation-delay: 0.10s; }
+.rise-stagger > *:nth-child(4) { animation-delay: 0.14s; }
+.rise-stagger > *:nth-child(5) { animation-delay: 0.18s; }
+.rise-stagger > *:nth-child(6) { animation-delay: 0.22s; }
+.rise-stagger > *:nth-child(n + 7) { animation-delay: 0.26s; }
+
+/* Hover lift. Shadow and transform only. */
+.lift-card { transition: transform 0.28s cubic-bezier(0.22, 1, 0.36, 1), box-shadow 0.28s ease; will-change: transform; }
+.lift-card:hover { transform: translate3d(0, -3px, 0); box-shadow: var(--shadow-lift); }
+
+/* One pass of light across the hero, once, on mount. */
+.sheen-once { position: relative; overflow: hidden; }
+.sheen-once::before {
+  content: '';
+  position: absolute;
+  top: 0; bottom: 0; left: 0;
+  width: 40%;
+  background: linear-gradient(100deg, transparent, rgb(255 255 255 / 0.16), transparent);
+  animation: sheen 1.5s cubic-bezier(0.4, 0, 0.2, 1) 0.35s both;
+  pointer-events: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .rise, .rise-stagger > *, .sheen-once::before { animation: none !important; }
+  .lift-card { transition: none; }
+  .lift-card:hover { transform: none; }
 }

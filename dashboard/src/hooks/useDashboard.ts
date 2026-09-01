@@ -35,7 +35,7 @@ function timeRangeToParam(tr: TimeRange): string {
  * Central dashboard hook. Single source of truth for tenants + timeRange.
  * All pages MUST use this hook, never derive tenant arrays locally.
  */
-export function useDashboardData() {
+export function useDashboardData(persona?: string) {
   const dispatch = useAppDispatch();
   const queryClient = useQueryClient();
   const dashboardState = useAppSelector((state) => state.dashboard);
@@ -130,56 +130,20 @@ export function useDashboardData() {
 
   // ─── Core dashboard data (React Query) ───
   const { data: dashboardData, isLoading, isFetching } = useQuery({
-    queryKey: ['dashboardData', tenantsParam, rangeParam, role],
+    queryKey: ['dashboardData', tenantsParam, rangeParam, role, persona],
     queryFn: async () => {
-      const [
-        kpiMetrics,
-        secondaryKpiMetrics,
-        trafficData,
-        topFeatures,
-        funnelData,
-        tenants,
-        realTimeUsersData,
-        dimensionProvenance,
-      ] = await Promise.all([
-        dashboardAPI.getKPIMetrics(tenantsParam, rangeParam),
-        dashboardAPI.getSecondaryKPIMetrics(tenantsParam, rangeParam),
-        dashboardAPI.getTrafficData(tenantsParam, rangeParam),
-        dashboardAPI.getTopFeatures(tenantsParam, rangeParam),
-        dashboardAPI.getFunnelData(tenantsParam, rangeParam),
-        dashboardAPI.getTenants(tenantsParam, rangeParam),
-        dashboardAPI.getRealTimeUsers(tenantsParam),
-        // Same gate as locations/devices: it describes those charts, so it must not be
-        // reachable where they are not.
-        mayReadDetailedAnalytics
-          ? dashboardAPI.getDimensionProvenance(tenantsParam, rangeParam)
-          : Promise.resolve({} as Record<string, DimensionProvenance>),
-      ]);
-
-      return {
-        kpiMetrics,
-        secondaryKpiMetrics,
-        trafficData,
-        topFeatures,
-        funnelData,
-        tenants,
-        realTimeUsers: realTimeUsersData.count,
-        realTimeUsersTimestampIST: realTimeUsersData.timestampIST ?? null,
-        dimensionProvenance,
-      };
+      // Only what the page still reads. Traffic, the funnel and the tenant roll-up were fetched
+      // on every load for panels that no longer exist, which is three round trips a reader waits
+      // on and never sees.
+      const kpiMetrics = await dashboardAPI.getKPIMetrics(tenantsParam, rangeParam, persona);
+      return { kpiMetrics };
     },
     // Keep data responsive while avoiding noisy re-fetching.
-    staleTime: 15 * 1000,
-    refetchInterval: 15 * 1000,
+    staleTime: 60 * 1000,
+    refetchInterval: 60 * 1000,
     refetchIntervalInBackground: false,
     refetchOnWindowFocus: true,
     retry: 1,
-  });
-
-  const { data: aiInsightsData } = useQuery({
-    queryKey: ['aiInsights', tenantsParam, rangeParam],
-    queryFn: () => dashboardAPI.getAIInsights(tenantsParam, rangeParam),
-    staleTime: 10 * 60 * 1000,
   });
 
   // ─── WebSocket for real-time metrics ───
@@ -247,42 +211,11 @@ export function useDashboardData() {
     rangeParam,
     // React Query data
     kpiMetrics: dashboardData?.kpiMetrics || [],
-    secondaryKpiMetrics: dashboardData?.secondaryKpiMetrics || [],
-    trafficData: dashboardData?.trafficData || [],
-    topFeatures: dashboardData?.topFeatures || [],
-    funnelData: dashboardData?.funnelData || [],
-    tenants: dashboardData?.tenants || [],
-    realTimeUsers: dashboardData?.realTimeUsers || 0,
-    realTimeUsersTimestampIST: dashboardData?.realTimeUsersTimestampIST || null,
-    dimensionProvenance: dashboardData?.dimensionProvenance || {},
-    aiInsights: aiInsightsData || [],
+    persona,
     isLoading,
     isFetching,
     // Actions
     changeTimeRange,
     changeTenant: changeTenants,
   };
-}
-
-export function useAIInsights() {
-  const { funnelData = [], topFeatures = [] } = useDashboardData();
-
-  const generateInsights = useCallback(() => {
-    const insights: string[] = [];
-
-    funnelData.forEach((step) => {
-      if (step.dropOff >= 40) {
-        insights.push(`${step.dropOff}% drop-off at ${step.label} step`);
-      }
-    });
-
-    if (topFeatures.length > 0) {
-      const topFeature = topFeatures[0];
-      insights.push(`${topFeature.name} leads with ${topFeature.value.toLocaleString()} events`);
-    }
-
-    return insights;
-  }, [funnelData, topFeatures]);
-
-  return { generateInsights };
 }

@@ -114,11 +114,17 @@ def _hits(question: str, vocabulary: frozenset) -> list[str]:
 
 
 def read(question: str, names_metric: bool, conversational: bool,
-         matched: tuple[str, ...] | list[str] = ()) -> Reading:
+         matched: tuple[str, ...] | list[str] = (), capability: str = "") -> Reading:
     """Classify the question. Deterministic, dependency-free, and explainable.
 
     `names_metric`, `conversational` and `matched` are passed in rather than recomputed so this
     module stays free of the tool registry -- the planner already knows all three.
+
+    `capability` is the capability the question matched most strongly, when it matched one at
+    all. It is the last resort before refusing: "what are you measuring?" names no metric and
+    uses no business vocabulary, so every cue test above misses it, and it was being refused as
+    unintelligible while the catalogue capability sat scoring top of the list. A question that
+    plainly reaches for a capability is a question, not noise.
 
     `matched` is every metric whose vocabulary the question uses. More than one is NOT a failure to
     understand: "what about loan data" names two loan KPIs, and a reader who does not know the
@@ -140,6 +146,16 @@ def read(question: str, names_metric: bool, conversational: bool,
         return Reading("lookup", wants=(ASSURANCE,), chain=(),
                        reason="read as a request for one specific fact (%s)" % ", ".join(lookup),
                        cues=lookup)
+
+    # A question that names no metric, asks neither why nor what-to-do, and plainly reaches for
+    # one capability IS that request. "What are you measuring" was falling through to the
+    # business-cue branch and being read as a briefing, so it was answered with the most material
+    # movement instead of the catalogue it asked for.
+    if capability and not names_metric and not matched and not wants_why and not wants_action:
+        return Reading(
+            "lookup", wants=(ASSURANCE,), chain=(),
+            reason="read as a request the %s capability answers" % capability.replace("_", " "),
+            cues=[capability])
 
     # Which parts of the chain the question explicitly reaches for. A question that asks none of
     # them but IS about the business wants all of them -- that is what a briefing is.

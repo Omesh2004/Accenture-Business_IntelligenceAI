@@ -91,8 +91,9 @@ def _claim(claim_id: str, value, unit: str, source: str, label: str, dp: int = 2
 
 
 # ── capabilities ───────────────────────────────────────────────────────────────────────────────
-def _list_metrics(tenant_id: str, persona: str, **_) -> ToolResult:
-    rows = reader.list_insights(tenant_id, persona, limit=config.MAX_KPIS_PER_SWEEP)
+def _list_metrics(tenant_id: str, persona: str, window_days: int = 0, **_) -> ToolResult:
+    rows = reader.list_insights(tenant_id, persona, limit=config.MAX_KPIS_PER_SWEEP,
+                                window_days=window_days)
     if not rows:
         return ToolResult(False, reason="no investigation has produced evidence for this tenant")
     try:
@@ -180,8 +181,9 @@ def _current_reading(tenant_id: str, kpi_id: str) -> float | None:
         return None
 
 
-def _get_insight(tenant_id: str, persona: str, kpi_id: str = "", **_) -> ToolResult:
-    row = reader.latest_insight(tenant_id, persona, kpi_id or None)
+def _get_insight(tenant_id: str, persona: str, kpi_id: str = "", window_days: int = 0,
+        **_) -> ToolResult:
+    row = reader.latest_insight(tenant_id, persona, kpi_id or None, window_days)
     if not row:
         return ToolResult(False, reason="no recorded insight matches that metric")
     # `magnitude` is the movement in the metric's own units. A percentage without it leaves a
@@ -357,8 +359,9 @@ def _unsliceable_reason(kpi_id: str) -> str:
             "over a dice roll" % (pretty_name(kpi_id), ", ".join(blocked)))
 
 
-def _get_causes(tenant_id: str, persona: str, kpi_id: str = "", **_) -> ToolResult:
-    row = reader.latest_insight(tenant_id, persona, kpi_id or None)
+def _get_causes(tenant_id: str, persona: str, kpi_id: str = "", window_days: int = 0,
+        **_) -> ToolResult:
+    row = reader.latest_insight(tenant_id, persona, kpi_id or None, window_days)
     causes = (row or {}).get("causes") or []
     if not causes:
         resolved = kpi_id or (row or {}).get("kpi_id", "")
@@ -431,8 +434,9 @@ def _render_causes(res: ToolResult, persona: str) -> str:
     return text
 
 
-def _get_factors(tenant_id: str, persona: str, kpi_id: str = "", **_) -> ToolResult:
-    row = reader.latest_insight(tenant_id, persona, kpi_id or None)
+def _get_factors(tenant_id: str, persona: str, kpi_id: str = "", window_days: int = 0,
+        **_) -> ToolResult:
+    row = reader.latest_insight(tenant_id, persona, kpi_id or None, window_days)
     factors = (row or {}).get("factors") or []
     if not factors:
         return ToolResult(False, reason="this metric declares no factor identity to decompose")
@@ -449,8 +453,9 @@ def _render_factors(res: ToolResult, persona: str) -> str:
     return "By factor, the change splits as: %s." % ", ".join(lines)
 
 
-def _get_forecast(tenant_id: str, persona: str, kpi_id: str = "", **_) -> ToolResult:
-    row = reader.latest_insight(tenant_id, persona, kpi_id or None)
+def _get_forecast(tenant_id: str, persona: str, kpi_id: str = "", window_days: int = 0,
+        **_) -> ToolResult:
+    row = reader.latest_insight(tenant_id, persona, kpi_id or None, window_days)
     claims = [c for c in ((row or {}).get("evidence") or [])
               if c["claim_id"] in ("forecast_point", "forecast_lower", "forecast_upper")]
     if not any(c["claim_id"] == "forecast_point" for c in claims):
@@ -485,8 +490,9 @@ def _is_governed(kpi_id: str) -> bool:
     return bool(contract and contract.governed)
 
 
-def _get_recommendations(tenant_id: str, persona: str, kpi_id: str = "", **_) -> ToolResult:
-    row = reader.latest_insight(tenant_id, persona, kpi_id or None)
+def _get_recommendations(tenant_id: str, persona: str, kpi_id: str = "", window_days: int = 0,
+        **_) -> ToolResult:
+    row = reader.latest_insight(tenant_id, persona, kpi_id or None, window_days)
     resolved = (row or {}).get("kpi_id", "")
     if resolved and not _is_governed(resolved):
         # Silence and "nothing to do" are different answers. An auto-discovered series has no
@@ -507,25 +513,62 @@ def _get_recommendations(tenant_id: str, persona: str, kpi_id: str = "", **_) ->
     mine = [r for r in recs if personas.owns(persona, r.get("owner_role", ""))]
     theirs = [r for r in recs if r not in mine]
     claims, facts = [], {}
+    rate_kpi = _is_rate((row or {}).get("kpi_id", ""))
     for rec in mine:
+        high = float((rec.get("expected_impact") or {}).get("high", 0.0))
+        # A rate's recoverable impact is stated in percentage points, so it is CLAIMED in
+        # percentage points. A figure shown in one unit and stored in another does not trace,
+        # and the verifier is right to reject it.
         claims.append(_claim("impact_%s" % rec["rec_id"],
-                             (rec.get("expected_impact") or {}).get("high", 0.0),
-                             "count", "recommendations", "recoverable impact"))
+                             high * 100.0 if rate_kpi else high,
+                             "percentage_points" if rate_kpi else "count",
+                             "recommendations", "recoverable impact",
+                             1 if rate_kpi else 2))
         facts["lever_%s" % rec["rec_id"]] = "%s (%s)" % (rec["lever"], rec["owner_role"])
     if theirs:
         claims.append(_claim("referred_actions", len(theirs), "count", "recommendations",
                              "actions owned elsewhere", 0))
     return ToolResult(True, summary="%d owned, %d referred" % (len(mine), len(theirs)),
-                      claims=claims, facts=facts, data={"mine": mine, "theirs": theirs},
+                      claims=claims, facts=facts,
+                      data={"mine": mine, "theirs": theirs,
+                            "kpi_id": (row or {}).get("kpi_id", "")},
                       citation="recommendations")
+
+
+def _is_rate(kpi_id: str) -> bool:
+    """Whether the contract declares this KPI a ratio. The loader exposes it as `is_ratio`."""
+    try:
+        from api.intelligence.contracts import load_declared
+        contract = load_declared().get(kpi_id)
+    except Exception:                                               # noqa: BLE001
+        return False
+    return bool(getattr(contract, "is_ratio", False))
+
+
+def _trim(value: float) -> str:
+    """The claim, printed exactly as it was stored so the verifier can trace it."""
+    return ("%.1f" % float(value)).rstrip("0").rstrip(".") or "0"
 
 
 def _render_recommendations(res: ToolResult, persona: str) -> str:
     mine, theirs = res.data["mine"], res.data["theirs"]
     by_id = {c["claim_id"]: c["value"] for c in res.claims}
-    lines = ["%s -- lever %s, owner %s, worth up to %.2f if fully recovered"
-             % (r["action"], r["lever"], r["owner_role"], by_id["impact_%s" % r["rec_id"]])
-             for r in mine]
+    kpi_id = res.data.get("kpi_id", "")
+    measure, cadence, _proxy = phrasing.scored_measure(kpi_id)
+    lines = []
+    for r in mine:
+        worth = by_id["impact_%s" % r["rec_id"]]
+        owner = str(r["owner_role"]).replace("_", " ")
+        # A bare 0.05 against a rate reads as five percent when it means five percentage POINTS.
+        # An impact with no unit at all reads as a score, so it is always said in the metric.
+        if worth and _is_rate(kpi_id):
+            gain = " worth up to %s percentage points if fully recovered" % _trim(worth)
+        elif worth:
+            gain = " worth up to %s if fully recovered" % phrasing.quantity(worth, measure, cadence)
+        else:
+            gain = ""
+        lines.append("%s (lever %s, owner %s)%s"
+                     % (r["action"], str(r["lever"]).replace("_", " "), owner, gain))
     text = ("Proposed, pending approval: %s. Nothing is executed automatically." % "; ".join(lines)
             if lines else "No lever here is yours to pull.")
     if theirs:
@@ -536,8 +579,9 @@ def _render_recommendations(res: ToolResult, persona: str) -> str:
     return text
 
 
-def _get_trust(tenant_id: str, persona: str, kpi_id: str = "", **_) -> ToolResult:
-    row = reader.latest_insight(tenant_id, persona, kpi_id or None)
+def _get_trust(tenant_id: str, persona: str, kpi_id: str = "", window_days: int = 0,
+        **_) -> ToolResult:
+    row = reader.latest_insight(tenant_id, persona, kpi_id or None, window_days)
     if not row:
         return ToolResult(False, reason="no recorded insight matches that metric")
     trust = row.get("trust") or {}
@@ -565,7 +609,7 @@ def _render_trust(res: ToolResult, persona: str) -> str:
                by_id["checks_passed"], by_id["checks_failed"], by_id["confidence"], tail))
 
 
-def _get_source_health(tenant_id: str, persona: str, **_) -> ToolResult:
+def _get_source_health(tenant_id: str, persona: str, window_days: int = 0, **_) -> ToolResult:
     sources = reader.source_health(tenant_id)
     if not sources:
         return ToolResult(False, reason="no source has reported a load yet")
@@ -590,7 +634,7 @@ def _render_source_health(res: ToolResult, persona: str) -> str:
     return "; ".join(lines) + "."
 
 
-def _get_runtime_cost(tenant_id: str, persona: str, **_) -> ToolResult:
+def _get_runtime_cost(tenant_id: str, persona: str, window_days: int = 0, **_) -> ToolResult:
     tel = reader.runtime_telemetry(tenant_id)
     claims = [
         _claim("total_runs", tel["total_runs"], "count", "model_runs", "stage runs", 0),
@@ -693,7 +737,8 @@ def _render_rank(res: ToolResult, persona: str) -> str:
     return "Covering %s. Of these, %s." % (res.facts["scope"], "; and ".join(parts))
 
 
-def _get_metric_contract(tenant_id: str, persona: str, kpi_id: str = "", **_) -> ToolResult:
+def _get_metric_contract(tenant_id: str, persona: str, kpi_id: str = "", window_days: int = 0,
+        **_) -> ToolResult:
     from api.intelligence.contracts import load_declared
     try:
         declared = load_declared()
@@ -734,7 +779,7 @@ def _compare_metrics(tenant_id: str, persona: str, kpi_ids: str = "", **_) -> To
         return ToolResult(False, reason="a comparison needs at least two metrics")
     claims, facts, found = [], {}, []
     for kpi in ids:
-        row = reader.latest_insight(tenant_id, persona, kpi)
+        row = reader.latest_insight(tenant_id, persona, kpi, window_days)
         if not row:
             continue
         # A metric inside its band has no `observed` claim; that is a comparable state, not a
@@ -770,11 +815,12 @@ def _render_compare(res: ToolResult, persona: str) -> str:
     return "Side by side: %s." % "; ".join(parts)
 
 
-def _greet(tenant_id: str, persona: str, **_) -> ToolResult:
+def _greet(tenant_id: str, persona: str, window_days: int = 0, **_) -> ToolResult:
     """Greeting is a capability like any other, so the planner picks it rather than the loop
     branching on the question shape."""
     profile = personas.get(persona)
-    rows = reader.list_insights(tenant_id, persona, limit=config.MAX_KPIS_PER_SWEEP)
+    rows = reader.list_insights(tenant_id, persona, limit=config.MAX_KPIS_PER_SWEEP,
+                                window_days=window_days)
     try:
         from api.intelligence.contracts import load_declared
         governed = set(load_declared())
@@ -790,31 +836,125 @@ def _greet(tenant_id: str, persona: str, **_) -> ToolResult:
 
 
 def _render_greet(res: ToolResult, persona: str) -> str:
+    """Phrased by the model from the same facts, so two greetings are not the same paragraph.
+
+    This used to concatenate four fixed strings, which is why "hii" and "ok thank you" came back
+    word for word identical. The facts are unchanged; only the wording is the model's.
+    """
+    from api.intelligence.stages import llm_chat
     profile = personas.get(persona)
+    flagged = [f.strip() for f in (res.facts.get("flagged") or "").split(",") if f.strip()]
     parts = [profile.greeting, profile.remit]
     if res.facts.get("any_flagged") == "yes":
         parts.append("Currently flagged: %s." % res.facts["flagged"])
     else:
         parts.append("Nothing is currently outside its expected band.")
-    if profile.examples:
-        parts.append("Ask me anything about them. For example: “%s”."
-                     % profile.examples[0])
-    return " ".join(parts)
+    plain = " ".join(parts)
+    text, _tin, _tout = llm_chat.reply(
+        "greeting", "hello", profile.label, profile.remit, flagged,
+        profile.examples[0] if profile.examples else "", plain)
+    return text
 
 
-def _run_localized_search(tenant_id: str, persona: str, kpi_id: str = "", **_) -> ToolResult:
+def _get_trend(tenant_id: str, persona: str, kpi_id: str = "", window_days: int = 0,
+        **_) -> ToolResult:
+    """The metric's daily path over the window, read through the Metric API.
+
+    A movement is only legible as a shape, and until now the agent could state that a rate fell
+    without ever having looked at the line. This reads the same named series the dashboard plots,
+    so the chart beside an answer and the figures inside it come from one read.
+
+    The points are DATA, not claims: the narrator may not quote a day off this series. What it
+    licenses is the picture.
+    """
+    from datetime import timedelta
+
+    from api.intelligence.metrics import Window
+    from api.metric_api.client import MetricAPIClient
+
+    row = reader.latest_insight(tenant_id, persona, kpi_id or None, window_days)
+    kpi = kpi_id or (row or {}).get("kpi_id", "")
+    if not kpi:
+        return ToolResult(False, reason="no metric to draw a trend for")
+
+    contract = None
+    try:
+        from api.intelligence.contracts import load_declared
+        contract = load_declared().get(kpi)
+    except Exception:                                               # noqa: BLE001
+        contract = None
+
+    days = window_days or config.WINDOW_DAYS
+    metrics = MetricAPIClient()
+    try:
+        end = metrics.watermark(tenant_id)
+    except Exception:                                               # noqa: BLE001
+        end = None
+    end = (end or datetime.utcnow()).replace(hour=0, minute=0, second=0, microsecond=0)
+    window = Window(end - timedelta(days=days), end)
+
+    # A ratio is plotted from its two counts, never re-aggregated from a stored rate.
+    numerator = getattr(contract, "numerator", None)
+    num_spec = numerator() if callable(numerator) else None
+    fundamentals = getattr(contract, "fundamentals", None) or []
+    spec = num_spec or (fundamentals[0] if fundamentals else None)
+    if spec is None:
+        return ToolResult(False, reason="this metric declares no fundamental to plot")
+
+    try:
+        series = metrics.fundamental_series(tenant_id, spec, window)
+        points = [{"date": str(day), "value": float(v)} for day, v in sorted(series.points.items())]
+        denominator = getattr(contract, "denominator", None)
+        den_spec = denominator() if callable(denominator) else None
+        if den_spec is not None:
+            den = metrics.fundamental_series(tenant_id, den_spec, window)
+            by_day = {str(k): float(v) for k, v in den.points.items()}
+            points = [{"date": p["date"],
+                       "value": (p["value"] / by_day[p["date"]]) if by_day.get(p["date"]) else 0.0}
+                      for p in points]
+    except Exception as exc:                                        # noqa: BLE001
+        return ToolResult(False, reason="the series could not be read: %s" % exc)
+
+    if len(points) < 2:
+        return ToolResult(False, reason="too few days on record to draw a path")
+
+    anomaly = (row or {}).get("anomaly") or {}
+    band = [c for c in ((row or {}).get("evidence") or [])
+            if c["claim_id"] in ("forecast_lower", "forecast_upper")]
+    by_id = {c["claim_id"]: c["value"] for c in band}
+    return ToolResult(
+        True,
+        summary="%d days on record for %s" % (len(points), kpi),
+        facts={"trend_days": str(len(points))},
+        data={"kpi_id": kpi, "points": points, "days": days,
+              "is_ratio": bool(getattr(contract, "is_ratio", False)),
+              "window_start": str(anomaly.get("window_start") or ""),
+              "window_end": str(anomaly.get("window_end") or ""),
+              "lower": by_id.get("forecast_lower"), "upper": by_id.get("forecast_upper")},
+        citation="gold.kpi_daily")
+
+
+def _render_trend(res: ToolResult, persona: str) -> str:
+    pts = res.data.get("points") or []
+    return ("Its daily path over the last %d days is on record, %d points from gold.kpi_daily."
+            % (int(res.data.get("days", len(pts))), len(pts)))
+
+
+def _run_localized_search(tenant_id: str, persona: str, kpi_id: str = "", window_days: int = 0,
+        **_) -> ToolResult:
     """Agentic Tool: Execute Stage 03 localization unconditionally to find high-variance segments."""
     if not kpi_id:
         return ToolResult(False, reason="localized search requires a specific metric to analyze")
     
-    from api.intelligence.metrics import ClickHouseMetricLayer, Window
+    from api.intelligence.metrics import Window
+    from api.metric_api.client import MetricAPIClient
     from api.intelligence.orchestrator import Ctx
     from api.intelligence.contracts import load_all, sliceable_dimensions
     from api.intelligence.stages import localize
     from api.intelligence.ids import investigation_id
     from datetime import datetime, timedelta
     
-    metrics = ClickHouseMetricLayer()
+    metrics = MetricAPIClient()
     try:
         watermark = metrics.watermark(tenant_id)
     except Exception:
@@ -882,7 +1022,7 @@ def _render_localized_search(res: ToolResult, persona: str) -> str:
     return text
 
 
-def _identity(tenant_id: str, persona: str, **_) -> ToolResult:
+def _identity(tenant_id: str, persona: str, window_days: int = 0, **_) -> ToolResult:
     """What this system IS. A separate capability from the greeting on purpose.
 
     "hii" and "who are you" both sat in the greeting's cue list, so both returned the identical
@@ -890,7 +1030,8 @@ def _identity(tenant_id: str, persona: str, **_) -> ToolResult:
     talking to, and answering it with "Good to see you" is the system declining to say.
     """
     profile = personas.get(persona)
-    rows = reader.list_insights(tenant_id, persona, limit=config.MAX_KPIS_PER_SWEEP)
+    rows = reader.list_insights(tenant_id, persona, limit=config.MAX_KPIS_PER_SWEEP,
+                                window_days=window_days)
     try:
         from api.intelligence.contracts import load_declared
         governed = set(load_declared())
@@ -920,7 +1061,7 @@ def _render_identity(res: ToolResult, persona: str) -> str:
     )
 
 
-def _describe_capabilities(tenant_id: str, persona: str, **_) -> ToolResult:
+def _describe_capabilities(tenant_id: str, persona: str, window_days: int = 0, **_) -> ToolResult:
     profile = personas.get(persona)
     names = sorted(s.name for s in catalogue(persona)
                    if s.intent not in ("greeting", "help"))
@@ -975,7 +1116,9 @@ REGISTRY: dict[str, ToolSpec] = {
                  "List the metrics investigated for this tenant, marking which are governed "
                  "contracts and which are currently outside their band.",
                  "catalog", dict(_TENANT), _list_metrics,
-                 selectors=("kpis", "metrics do you", "track", "cover", "list", "contracts"),
+                 selectors=("kpis", "metrics do you", "metrics", "measuring", "measure",
+                            "track", "tracking", "cover", "list", "contracts", "watching",
+                            "monitor", "what all"),
                  render=_render_list, priority=2),
         ToolSpec("get_insight",
                  "The recorded finding for a metric: whether it moved, its observed and expected "
@@ -1003,6 +1146,13 @@ REGISTRY: dict[str, ToolSpec] = {
                  selectors=("forecast", "outlook", "expect", "predict", "projection", "next week",
                             "trend"),
                  needs_metric=True, render=_render_forecast, priority=3),
+        ToolSpec("get_trend",
+                 "The metric's daily path over the window, so the shape of a movement can be "
+                 "seen rather than only described.",
+                 "trend", {**_TENANT, **_KPI}, _get_trend,
+                 selectors=("trend", "path", "over time", "chart", "graph", "plot", "shape",
+                            "daily", "history", "show me", "visual", "look like"),
+                 needs_metric=True, render=_render_trend, priority=2),
         ToolSpec("get_recommendations",
                  "Proposed actions from the metric contract's closed lever list, scoped to the "
                  "levers this persona owns.",
@@ -1091,11 +1241,11 @@ def validate_call(name: str, args: dict, persona: str) -> dict:
     return {k: v for k, v in args.items() if k in spec.params}
 
 
-def run(name: str, args: dict, persona: str) -> ToolResult:
+def run(name: str, args: dict, persona: str, window_days: int = 0) -> ToolResult:
     """Execute one validated call. A tool that raises becomes an observation, never a 500."""
     spec = REGISTRY[name]
     try:
-        return spec.fn(persona=persona, **args)
+        return spec.fn(persona=persona, window_days=window_days, **args)
     except Exception as exc:                       # noqa: BLE001 - surfaced as an observation
         return ToolResult(False, reason="tool failed: %s" % exc, citation=name)
 

@@ -69,17 +69,27 @@ def write_trust_findings(rows: list[dict]) -> int:
     )
 
 
+def _span_days(r: dict) -> int:
+    """The window length, from the window itself, so a caller cannot record a mismatched one."""
+    try:
+        return max(1, (r["window_end"] - r["window_start"]).days)
+    except Exception:                                               # noqa: BLE001
+        return 7
+
+
 def write_anomaly(r: dict) -> int:
     return _insert(
         "anomalies",
         ["anomaly_id", "investigation_id", "tenant_id", "kpi_id", "detected_at", "window_start",
          "window_end", "method", "direction", "magnitude", "baseline", "observed", "forecast_id",
-         "materiality", "severity", "status", "engine_type"],
+         "materiality", "p_value", "severity", "status", "engine_type", "window_days"],
         [[r["anomaly_id"], r["investigation_id"], r["tenant_id"], r["kpi_id"], r["detected_at"],
           r["window_start"], r["window_end"], r["method"], int(r["direction"]),
           round6(r["magnitude"]), round6(r["baseline"]), round6(r["observed"]),
-          r.get("forecast_id", ""), round6(r["materiality"]), r["severity"],
-          r.get("status", "open"), r.get("engine_type", "stats")]],
+          r.get("forecast_id", ""), round6(r["materiality"]),
+          round6(float(r.get("p_value", 1.0))), r["severity"],
+          r.get("status", "open"), r.get("engine_type", "stats"),
+          int(r.get("window_days", 0) or _span_days(r))]],
     )
 
 
@@ -120,22 +130,26 @@ def write_causal_effect(r: dict) -> int:
         "causal_effects",
         ["effect_id", "investigation_id", "anomaly_id", "tenant_id", "kpi_id", "intervention",
          "rung", "effect_point", "effect_lower", "effect_upper", "method", "assumptions_met",
-         "degraded_reason", "engine_type"],
+         "degraded_reason", "counterfactual", "observed", "placebo_effect", "control_cells",
+         "engine_type", "_version"],
         [[r["effect_id"], r["investigation_id"], r["anomaly_id"], r["tenant_id"], r["kpi_id"],
           r["intervention"], r["rung"], round6(r["effect_point"]), round6(r["effect_lower"]),
           round6(r["effect_upper"]), r["method"], int(r.get("assumptions_met", 1)),
-          r.get("degraded_reason", ""), r.get("engine_type", "stats")]],
+          r.get("degraded_reason", ""), round6(r.get("counterfactual", 0.0)),
+          round6(r.get("observed", 0.0)), round6(r.get("placebo_effect", 0.0)),
+          int(r.get("control_cells", 0)), r.get("engine_type", "stats"), datetime.utcnow()]],
     )
 
 
 def write_recommendation(r: dict) -> int:
     return _insert(
         "recommendations",
-        ["rec_id", "investigation_id", "anomaly_id", "tenant_id", "action", "lever", "owner_role",
-         "expected_impact", "status", "engine_type"],
-        [[r["rec_id"], r["investigation_id"], r["anomaly_id"], r["tenant_id"], r["action"],
-          r["lever"], r["owner_role"], _j(r["expected_impact"]), r.get("status", "proposed"),
-          r.get("engine_type", "rule")]],
+        ["rec_id", "investigation_id", "anomaly_id", "tenant_id", "driver", "action", "lever",
+         "owner_role", "expected_impact", "confidence", "monitoring", "status", "engine_type"],
+        [[r["rec_id"], r["investigation_id"], r["anomaly_id"], r["tenant_id"], r.get("driver", ""),
+          r["action"], r["lever"], r["owner_role"], _j(r["expected_impact"]),
+          float(r.get("confidence", 0.0)), _j(r.get("monitoring", {})),
+          r.get("status", "proposed"), r.get("engine_type", "rule")]],
     )
 
 
@@ -143,10 +157,11 @@ def write_insight(r: dict) -> int:
     return _insert(
         "insights",
         ["insight_id", "investigation_id", "tenant_id", "kpi_id", "anomaly_id", "persona",
-         "generated_at", "trust_verdict", "headline", "narrative", "evidence", "llm_breakdown",
-         "confidence", "simulated", "abstained", "verifier_pass"],
+         "window_days", "generated_at", "trust_verdict", "headline", "narrative", "evidence",
+         "llm_breakdown", "confidence", "simulated", "abstained", "verifier_pass"],
         [[r["insight_id"], r["investigation_id"], r["tenant_id"], r["kpi_id"],
-          r.get("anomaly_id", ""), r["persona"], r["generated_at"], r["trust_verdict"],
+          r.get("anomaly_id", ""), r["persona"], int(r.get("window_days", 7)),
+          r["generated_at"], r["trust_verdict"],
           r["headline"], r["narrative"], _j(r["evidence"]), _j(r["llm_breakdown"]),
           round6(r["confidence"]), int(r.get("simulated", 0)), int(r.get("abstained", 0)),
           int(r.get("verifier_pass", 1))]],

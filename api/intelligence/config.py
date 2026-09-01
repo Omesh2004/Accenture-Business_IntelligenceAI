@@ -43,6 +43,21 @@ NON_DIMENSION_KEYS = set(_list(
 
 # --- detect -----------------------------------------------------------------
 MATERIALITY_FLOOR = _f("INTEL_MATERIALITY_FLOOR", 0.15)
+# The deviation histogram needs 4 cells to find a valley. Higher excluded `region`
+# (6 values) -- the dimension that actually explained the movement.
+PSQUEEZE_MIN_LEAVES = int(_f("INTEL_PSQUEEZE_MIN_LEAVES", 4))
+
+# Difference-in-differences. Too few unaffected cells and there is no control group to compare
+# against; a placebo effect above this share of the estimate means parallel trends has failed.
+# The windows every sweep scores. A reader asking about 30 or 90 days needs a finding that was
+# actually measured over 30 or 90 days, not the 7-day one relabelled.
+WINDOW_CHOICES = tuple(int(x) for x in
+                       os.getenv("INTELLIGENCE_WINDOW_CHOICES", "7,30,90").split(",") if x.strip())
+
+DID_MIN_CONTROL_CELLS = _i("INTEL_DID_MIN_CONTROL_CELLS", 3)
+DID_PLACEBO_MAX_RATIO = _f("INTEL_DID_PLACEBO_MAX_RATIO", 0.35)
+# Share of the recent window that must move the same way for a change point.
+LEVEL_SHIFT_MIN = _f("INTEL_LEVEL_SHIFT_MIN", 0.75)
 # Absolute events a KPI must carry in the window before a breach is worth investigating.
 MIN_KPI_VOLUME = _f("INTEL_MIN_KPI_VOLUME", 20)
 SEVERITY_WARN = _f("INTEL_SEVERITY_WARN", 0.40)
@@ -80,7 +95,7 @@ DAILY_FRESHNESS_FLOOR_MIN = _i("INTEL_DAILY_FRESHNESS_FLOOR_MIN", 1440)
 
 # --- narrate ----------------------------------------------------------------
 PERSONAS = _list("INTEL_PERSONAS",
-                 "cfo,ops_manager,analyst,marketing_lead,risk_officer,data_steward")
+                 "cfo,ops_manager,analyst,risk_officer")
 DEFAULT_PERSONA = _s("INTEL_DEFAULT_PERSONA", "analyst")
 VERIFIER_TOLERANCE = _f("INTEL_VERIFIER_TOLERANCE", 0.01)
 
@@ -109,8 +124,10 @@ LLM_MAX_ATTEMPTS = _i("INTEL_LLM_MAX_ATTEMPTS", 2)
 # strictly more informative, because it states the band.
 LLM_NARRATE_SECTIONS = _s("INTEL_LLM_NARRATE_SECTIONS", "0") == "1"
 LLM_TIMEOUT_S = _i("INTEL_LLM_TIMEOUT_S", 60)
-LLM_MAX_TOKENS = _i("INTEL_LLM_MAX_TOKENS", 400)
-LLM_TEMPERATURE = _f("INTEL_LLM_TEMPERATURE", 0.0)
+# Room to explain. The cap is a runaway guard, not a style choice.
+LLM_MAX_TOKENS = _i("INTEL_LLM_MAX_TOKENS", 1600)
+# A little warmth so the prose reads as writing. Numbers come from claims, not sampling.
+LLM_TEMPERATURE = _f("INTEL_LLM_TEMPERATURE", 0.3)
 LLM_SEED = _i("INTEL_LLM_SEED", 1337)
 LLM_DISCOVERY_TIMEOUT_S = _i("INTEL_LLM_DISCOVERY_TIMEOUT_S", 5)
 
@@ -120,7 +137,8 @@ WINDOW_DAYS = _i("INTELLIGENCE_WINDOW_DAYS", 7)
 BASELINE_DAYS = _i("INTELLIGENCE_BASELINE_DAYS", 28)
 DATASET = _s("INTELLIGENCE_DATASET", "seeded")
 FORECAST_INTERVAL_MIN = _i("INTELLIGENCE_FORECAST_INTERVAL_MIN", 60)
-SWEEP_INTERVAL_MIN = _i("INTELLIGENCE_SWEEP_INTERVAL_MIN", 15)
+# A planted movement should surface while someone is still looking at the screen.
+SWEEP_INTERVAL_MIN = _i("INTELLIGENCE_SWEEP_INTERVAL_MIN", 3)
 # Source 2 refreshes hourly; source 3 weekly but re-seeding is a no-op.
 BATCH_INTERVAL_MIN = _i("INTELLIGENCE_BATCH_INTERVAL_MIN", 60)
 # Bounds a sweep so thousands of series cannot make one run unbounded.

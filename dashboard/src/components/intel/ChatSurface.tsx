@@ -23,12 +23,13 @@
  */
 
 import React, { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { useQuery } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'framer-motion';
 import { ArrowUp, Database, Loader2, Maximize2, Minimize2, Sparkles, Trash2, X } from 'lucide-react';
-import { dashboardAPI } from '@/lib/api';
+import type { ChatTurn } from '@/lib/api';
 import AgentConsole from '../AgentConsole';
-import { TimeSeriesPanel } from './panels';
+import AnswerCards from './AnswerCards';
+import Chart from './Charts';
+import InsightRail from './InsightRail';
 import Select from './Select';
 import ShinyText from './ShinyText';
 import TextType from './TextType';
@@ -50,6 +51,25 @@ function Elapsed({ from }: { from: number }) {
     <span style={{ color: INK.textFaint, fontFamily: FONT.mono }} className="text-[11px]">
       {((now - from) / 1000).toFixed(1)}s
     </span>
+  );
+}
+
+/**
+ * One stage of an answer arriving.
+ *
+ * The whole answer used to appear the instant the lead line finished typing: four cards, three
+ * charts and a derivation panel in a single frame. Staging them costs nothing and lets a reader
+ * follow the argument in the order it was made.
+ */
+function Reveal({ delay, children }: { delay: number; children: React.ReactNode }) {
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.42, delay, ease: EASE }}
+    >
+      {children}
+    </motion.div>
   );
 }
 
@@ -77,31 +97,54 @@ function AssistantTurn({
   tenants,
   onTyped,
   onDismiss,
+  followUps = [],
+  onFollowUp,
 }: {
   message: ChatMessage;
   live: boolean;
   tenants: string[];
   onTyped: () => void;
   onDismiss: () => void;
+  /** Offered under the newest answer only, so a transcript is not lined with stale prompts. */
+  followUps?: string[];
+  onFollowUp?: (q: string) => void;
 }) {
   const answer = message.answer;
   const [typed, setTyped] = useState(!live);
 
-  // The answer carries its OWN chart, for the metric it actually resolved to.
-  //
-  // Without this the only chart on screen was the page's, which is bound to the most material
-  // STANDING movement. Ask about a quiet metric and you got "loan approval rate stayed inside its
-  // expected range, it read 0.59" beside a line climbing to 3.8M -- because that line was fee
-  // revenue. Two correct figures about two different metrics, with nothing on screen saying so.
-  const { data: series } = useQuery({
-    queryKey: ['chatSeries', tenants.join(','), answer?.kpi_id],
-    queryFn: () => dashboardAPI.getKpiSeries(tenants, answer!.kpi_id, 30),
-    enabled: Boolean(typed && answer?.kpi_id),
-    staleTime: 60 * 1000,
-    retry: 1,
-  });
+  // The answer carries its own charts now: `get_trend` reads the series through the Metric API
+  // and the payload arrives with it. Fetching a second copy here was two reads of a moving table,
+  // which is exactly what a chart beside a quoted figure must not be.
   const lead = answer?.sections?.length ? answer.sections[0].text : message.text;
   const analytical = Boolean(answer?.sections?.some((s) => s.kind === 'findings'));
+  // Whether the console would actually render anything here. Embedded, it shows the sections
+  // after the lead, the tool calls, the tables and the charts, and nothing else. A greeting has
+  // none of those, and an empty panel offering to explain a derivation that does not exist is
+  // worse than no panel.
+  const hasDerivation = Boolean(
+    (answer?.sections?.length ?? 0) > 1
+    || (answer?.datasets?.length ?? 0) > 0
+    || (answer?.visuals?.length ?? 0) > 0
+    || answer?.trace?.some((t) => t.kind === 'act'),
+  );
+  // At most three charts, and never one the cards above already are: `bars` IS the "Where is it
+  // concentrated" list and `delta` IS the big number in "What happened". Drawing them again put
+  // the same figures on screen twice, which reads as two findings rather than one.
+  const charts = useMemo(() => {
+    const all = answer?.visuals || [];
+    const order = ['trend', 'waterfall', 'band', 'donut'];
+    const seen = new Set<string>();
+    const picked: typeof all = [];
+    for (const kind of order) {
+      const found = all.find((v) => v.kind === kind && !seen.has(v.kind));
+      if (!found) continue;
+      seen.add(found.kind);
+      picked.push(found);
+      if (picked.length === 3) break;
+    }
+    return picked;
+  }, [answer?.visuals]);
+
   const sources = useMemo(() => {
     const seen = new Set<string>();
     return (answer?.citations || []).filter((c) => {
@@ -172,33 +215,43 @@ function AssistantTurn({
         )}
       </div>
 
-      {typed && series && series.points?.length > 0 && (
-        <motion.div
-          initial={{ opacity: 0, y: 8 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.4, ease: EASE }}
-        >
-          <TimeSeriesPanel
-            title={series.name}
-            subtitle={`${series.days}-day path · ${
-              series.unit === 'ratio' ? 'rate' : `counting ${series.measure || 'events'}`
-            }`}
-            points={series.points}
-            isRate={series.unit === 'ratio'}
-            band={series.forecast}
-            bandWithheld={series.forecast_withheld}
-            source={series.source}
-            height={190}
-          />
-        </motion.div>
+      {/* The four questions a reader arrives with, then everything the run could honestly draw.
+          Each stage waits for the one before it, so the answer assembles in the order it was
+          reasoned rather than appearing all at once. */}
+      {typed && answer && (
+        <>
+          <Reveal delay={0}>
+            <AnswerCards answer={answer} visuals={answer.visuals || []} />
+          </Reveal>
+          {charts.length > 0 && (
+            <Reveal delay={0.34}>
+              <div className={`grid grid-cols-1 gap-3 ${
+                charts.length === 1 ? '' : charts.length === 2 ? 'lg:grid-cols-2'
+                                                              : 'lg:grid-cols-2 xl:grid-cols-3'}`}>
+                {charts.map((v, i) => (
+                  <Chart key={`${v.tool}-${v.kind}-${i}`} visual={v} />
+                ))}
+              </div>
+            </Reveal>
+          )}
+        </>
       )}
 
-      {typed && answer && (analytical || (answer.trace?.length ?? 0) > 0) && (
+      {typed && answer && hasDerivation && (
         <motion.div
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.4, ease: EASE }}
         >
+          <details className="surface group mt-3 overflow-hidden">
+            <summary className="flex cursor-pointer select-none items-center gap-2 px-5 py-3
+                                text-[10.5px] font-semibold uppercase tracking-[0.14em]
+                                text-slate-500 transition-colors hover:text-slate-700">
+              <span className="inline-block h-1.5 w-1.5 rounded-full"
+                    style={{ background: 'var(--brand)' }} />
+              How this answer was derived
+            </summary>
+            <div className="border-t border-slate-100">
           <AgentConsole
             gates={answer.rail || []}
             steps={answer.trace || []}
@@ -214,11 +267,32 @@ function AssistantTurn({
             kpiName={answer.kpi_id?.replace(/_/g, ' ') || ''}
             embedded
           />
+            </div>
+          </details>
         </motion.div>
       )}
 
       {/* The tables each figure was read from, flat. The console shows a source per section; this
           is the whole provenance of the answer in one line, which is what a reader checks first. */}
+      {typed && live && followUps.length > 0 && (
+        <Reveal delay={0.62}>
+          <div className="flex flex-wrap gap-1.5 pt-1">
+            {followUps.map((q) => (
+              <button
+                key={q}
+                onClick={() => onFollowUp?.(q)}
+                className="cursor-pointer rounded-full border px-3 py-1.5 text-[12px]
+                           transition-colors duration-200"
+                style={{ borderColor: INK.hairline, background: INK.surface,
+                         color: INK.textSoft }}
+              >
+                {q}
+              </button>
+            ))}
+          </div>
+        </Reveal>
+      )}
+
       {typed && sources.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="text-[10px] tracking-[0.16em] uppercase" style={{ color: INK.textFaint }}>
@@ -274,6 +348,7 @@ function ChatSurface({
       onError: (d: string) => void;
     },
     signal: AbortSignal,
+    history: ChatTurn[],
   ) => Promise<void>;
   /** A question typed on the page before the overlay existed. Sent once, then cleared. */
   seed?: string;
@@ -383,6 +458,11 @@ function ChatSurface({
             onError: setError,
           },
           controller.signal,
+          // The turns so far, so a follow-up like "what about the others?" has a subject. The
+          // user turn just pushed is excluded; it is the question being asked.
+          messages.slice(-8).map((m) => ({
+            role: m.role, text: m.text, kpi_id: m.answer?.kpi_id || undefined,
+          })),
         );
       } catch (err) {
         if ((err as Error)?.name !== 'AbortError') {
@@ -393,7 +473,7 @@ function ChatSurface({
         setPending([]);
       }
     },
-    [onAsk, running],
+    [onAsk, running, messages],
   );
 
   // The question typed on the page is sent here, once. Guarded by a ref rather than by clearing
@@ -406,10 +486,20 @@ function ChatSurface({
     onSeedConsumed?.();
   }, [seed, submit, onSeedConsumed]);
 
-  const suggestions = useMemo(
-    () => choices?.personas.find((p) => p.id === persona)?.examples ?? [],
-    [choices, persona],
-  );
+  // Once an answer has landed the agent's own follow-ups are better than the persona's stock
+  // examples: they are about the metric actually on screen.
+  const latestAnswer = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      if (messages[i].role === 'assistant' && messages[i].answer) return messages[i].answer!;
+    }
+    return null;
+  }, [messages]);
+
+  const suggestions = useMemo(() => {
+    const fromAnswer = latestAnswer?.suggestions ?? [];
+    const stock = choices?.personas.find((p) => p.id === persona)?.examples ?? [];
+    return (fromAnswer.length ? fromAnswer : stock).slice(0, 4);
+  }, [latestAnswer, choices, persona]);
 
   const wipe = () => {
     clearChat(tenantKey, persona);
@@ -424,10 +514,15 @@ function ChatSurface({
         className="flex shrink-0 items-center gap-3 px-5 py-3"
         style={{ borderBottom: `1px solid ${INK.hairline}`, background: INK.surface }}
       >
-        <Sparkles className="h-4 w-4" style={{ color: INK.accent }} />
-        <span className="text-[13px] font-semibold" style={{ color: INK.text, fontFamily: FONT.sans }}>
-          Analyst
+        <span className="grid h-7 w-7 shrink-0 place-items-center rounded-lg"
+              style={{ background: 'var(--brand-grad)' }}>
+          <Sparkles className="h-3.5 w-3.5 text-white" />
         </span>
+        <span className="text-[13.5px] font-semibold"
+              style={{ color: INK.text, fontFamily: FONT.sans }}>
+          AI Analyst
+        </span>
+        <span className="chip chip-brand">Evidence-bound</span>
         {choices && choices.personas.length > 1 && (
           <Select
             testId="persona-select"
@@ -446,12 +541,15 @@ function ChatSurface({
           {messages.length > 0 && (
             <button
               onClick={wipe}
-              title="Clear this conversation"
-              aria-label="Clear this conversation"
-              className="cursor-pointer rounded-lg p-1.5"
-              style={{ color: INK.textFaint }}
+              title="Start a new conversation"
+              aria-label="Start a new conversation"
+              className="mr-1 flex cursor-pointer items-center gap-1.5 rounded-full px-3 py-1.5
+                         text-[12px] font-medium text-white transition-transform duration-200
+                         hover:scale-[1.03]"
+              style={{ background: 'var(--brand-grad)' }}
             >
               <Trash2 className="h-3.5 w-3.5" />
+              New chat
             </button>
           )}
           <button
@@ -477,7 +575,8 @@ function ChatSurface({
         </div>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
+      <div className="flex min-h-0 flex-1">
+       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
         <div className="mx-auto max-w-4xl space-y-6">
           {messages.map((m) =>
             m.role === 'user' ? (
@@ -490,6 +589,8 @@ function ChatSurface({
                 tenants={tenants}
                 onTyped={scrollToEnd}
                 onDismiss={() => setMessages((prev) => prev.filter((x) => x.id !== m.id))}
+                followUps={suggestions}
+                onFollowUp={submit}
               />
             ),
           )}
@@ -539,11 +640,22 @@ function ChatSurface({
 
           <div ref={endRef} />
         </div>
+       </div>
+
+       {/* Only shown once there is something to summarise, and only for the newest answer. */}
+       {latestAnswer && !running && (
+         <div className="hidden min-h-0 xl:flex">
+           <InsightRail answer={latestAnswer} />
+         </div>
+       )}
       </div>
 
       <div className="shrink-0 px-5 pb-5" style={{ background: INK.canvas }}>
         <div className="mx-auto max-w-3xl">
-          {messages.length === 0 && suggestions.length > 0 && (
+          {/* Only on an empty transcript. Once an answer is on screen a permanent row of
+              questions sits between the reader and the thing they asked for, and reads as part
+              of the answer rather than as a prompt. Follow-ups live under the answer instead. */}
+          {messages.length === 0 && !running && suggestions.length > 0 && (
             <div className="mb-3 flex flex-wrap gap-1.5">
               {suggestions.map((s, i) => (
                 <motion.button

@@ -1,93 +1,100 @@
 'use client';
 
 /**
- * KPI Card component.
- * Displays a single key performance indicator with value, trend, and icon.
- * Features subtle hover animation and color-coded trend indicators.
+ * One KPI: an icon tile, the reading, a sparkline and the direction it moved.
+ *
+ * The sparkline is the same series the chart below the row plots, so the two cannot disagree.
+ * Where there is no series the card simply drops the sparkline rather than drawing a flat line,
+ * which would read as "no movement" instead of "not loaded".
  */
 
-import React, { memo } from 'react';
+import React, { memo, useMemo } from 'react';
+import { motion } from 'framer-motion';
 import {
-  Activity,
-  Layers,
-  Clock,
-  AlertTriangle,
-  Globe,
-  Users,
-  TrendingDown,
-  TrendingUp,
+  Activity, AlertTriangle, Banknote, Clock, Globe, Landmark, Layers, ShieldCheck,
+  TrendingDown, TrendingUp, Users,
 } from 'lucide-react';
 import { KPIMetric } from '@/types';
+import type { SeriesPoint } from '@/hooks/useKpiSeries';
 
-/** Maps icon string names to Lucide components */
-const iconMap: Record<string, React.ElementType> = {
-  activity: Activity,
-  layers: Layers,
-  clock: Clock,
-  'alert-triangle': AlertTriangle,
-  globe: Globe,
-  users: Users,
-  'trending-down': TrendingDown,
-  'trending-up': TrendingUp,
+const ICONS: Record<string, React.ElementType> = {
+  activity: Activity, layers: Layers, clock: Clock, 'alert-triangle': AlertTriangle,
+  globe: Globe, users: Users, 'trending-down': TrendingDown, 'trending-up': TrendingUp,
+  'shield-check': ShieldCheck, landmark: Landmark, banknote: Banknote,
 };
 
-interface KPICardProps {
-  metric: KPIMetric;
+/** Metrics where a rise is the bad direction, so the colour follows meaning not sign. */
+const RISE_IS_BAD = new Set(['transaction_failure_rate', 'error-rate', 'bounce-rate']);
+
+/** A minimal path. No axes, no grid: at this size they would be noise, not information. */
+function Spark({ points, colour }: { points: SeriesPoint[]; colour: string }) {
+  const d = useMemo(() => {
+    if (points.length < 2) return '';
+    const values = points.map((p) => p.value);
+    const lo = Math.min(...values);
+    const hi = Math.max(...values);
+    const span = hi - lo || 1;
+    const w = 100;
+    const h = 26;
+    return points
+      .map((p, i) => {
+        const x = (i / (points.length - 1)) * w;
+        const y = h - ((p.value - lo) / span) * h;
+        return `${i ? 'L' : 'M'}${x.toFixed(2)},${y.toFixed(2)}`;
+      })
+      .join(' ');
+  }, [points]);
+
+  if (!d) return <span className="h-[26px] flex-1" />;
+  return (
+    <svg viewBox="0 0 100 26" preserveAspectRatio="none" className="h-[26px] flex-1"
+         aria-hidden focusable="false">
+      <motion.path
+        d={d} fill="none" stroke={colour} strokeWidth={1.6}
+        strokeLinecap="round" strokeLinejoin="round"
+        vectorEffect="non-scaling-stroke"
+        initial={{ pathLength: 0, opacity: 0 }}
+        animate={{ pathLength: 1, opacity: 1 }}
+        transition={{ duration: 0.85, ease: [0.22, 1, 0.36, 1] }}
+      />
+    </svg>
+  );
 }
 
-function KPICard({ metric }: KPICardProps) {
-  const IconComponent = iconMap[metric.icon] || Activity;
-  const isPositive = metric.changeDirection === 'up';
-
-  // Special case: for error rate and bounce rate, "up" is bad
-  const isErrorMetric = metric.id === 'error-rate' || metric.id === 'bounce-rate';
-  const trendIsGood = isErrorMetric ? !isPositive : isPositive;
-
-  // For avg response time, "down" is good
-  const isResponseMetric = metric.id === 'avg-response' || metric.id === 'avg-session';
-  const displayTrendGood = isResponseMetric ? !isPositive : trendIsGood;
+function KPICard({ metric, spark = [] }: { metric: KPIMetric; spark?: SeriesPoint[] }) {
+  const Icon = ICONS[metric.icon] || Activity;
+  const rose = metric.changeDirection === 'up';
+  const good = RISE_IS_BAD.has(metric.id) ? !rose : rose;
+  const Arrow = rose ? TrendingUp : TrendingDown;
+  const colour = good ? 'var(--rise)' : 'var(--fall)';
 
   return (
-    <div
-      className="bg-white rounded-lg border border-gray-200 p-4 shadow-sm hover:border-gray-300 hover:shadow transition-all duration-200 flex flex-col justify-between h-full group"
-      id={`kpi-card-${metric.id}`}
-    >
-      {/* Header: Label */}
-      <div className="flex items-center gap-2 mb-3">
-        <IconComponent className="w-4 h-4 text-gray-500" />
-        <span className="text-sm text-gray-600 font-medium">{metric.label}</span>
+    <div id={`kpi-card-${metric.id}`} className="surface lift-card p-5">
+      <div className="mb-4 flex items-center gap-2.5">
+        <span className="icon-tile"><Icon className="h-[15px] w-[15px]" /></span>
+        <span className="min-w-0 flex-1 truncate text-[10.5px] font-semibold uppercase tracking-[0.13em] text-slate-500">
+          {metric.label}
+        </span>
         {metric.simulated && (
-          // A modelled figure must never render bare -- see CLAUDE.md "Never fabricate a
-          // metric silently". The title carries the reason the API supplied.
-          <span
-            title={metric.simulatedNote || 'This figure is modelled, not measured.'}
-            className="ml-auto text-[10px] uppercase tracking-wide font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5 cursor-help"
-          >
+          <span className="chip chip-warn"
+                title={metric.simulatedNote || 'This figure is modelled, not measured.'}>
             Simulated
           </span>
         )}
       </div>
 
-      {/* Value + Trend */}
-      <div className="flex justify-between items-end mt-1">
-        <span className="num text-3xl font-medium text-gray-900 tracking-tight">
-          {metric.value}
+      <p className="num mb-3 text-slate-900" style={{ fontSize: 'var(--step-3)', fontWeight: 600,
+                                                      letterSpacing: '-0.02em', lineHeight: 1.05 }}>
+        {metric.value}
+      </p>
+
+      <div className="flex items-end gap-3">
+        <Spark points={spark} colour={good ? 'var(--brand)' : 'var(--fall)'} />
+        <span className={`delta shrink-0 text-[12.5px] font-medium ${good ? 'delta-up' : 'delta-down'}`}
+              style={{ color: colour }}>
+          <Arrow className="h-3.5 w-3.5" />
+          {metric.change}%
         </span>
-        <div
-          className={`flex items-center gap-1 text-[13px] font-medium ${
-            displayTrendGood ? 'text-[#1a73e8]' : 'text-gray-500'
-          }`}
-        >
-          {isPositive ? (
-            <TrendingUp className="w-3.5 h-3.5 stroke-[2.5]" />
-          ) : (
-            <TrendingDown className="w-3.5 h-3.5 stroke-[2.5]" />
-          )}
-          <span>
-            {isPositive ? '+' : '-'}
-            {metric.change}%
-          </span>
-        </div>
       </div>
     </div>
   );

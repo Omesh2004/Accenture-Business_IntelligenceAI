@@ -7,6 +7,17 @@ formula: txn_failed / txn_total
 unit: ratio
 additivity: non-additive     # the RATE is not additive; its two counts are
 
+# How a person refers to this metric. Without these the agent cannot tell that
+# "new account opening" means signups, and answers about something else entirely.
+aliases:
+  - transaction failures
+  - failed transactions
+  - payment failures
+  - failure rate
+  - declines
+  - decline rate
+  - payment errors
+
 grain:
   time: daily
   entity: transaction
@@ -29,25 +40,23 @@ identity:
   txn_id: required
   customer_id: hashed
 
+# Addressed as (kpi_id, fundamental) against gold.kpi_daily -- see
+# docs/INTERFACES/kpi_rollups.md. The table/event forms are no longer supported.
 fundamentals:
-  - metric: txn_failed
-    table: fact_transactions
-    measure: "1"
-    aggregation: count
-    filter:
-      status: FAILED
+  - kpi_id: transaction_failure_rate
+    fundamental: txn_failed
     additivity: additive
     engine_type: sql
-  - metric: txn_total
-    table: fact_transactions
-    measure: "1"
-    aggregation: count
+    role: numerator
+  - kpi_id: transaction_failure_rate
+    fundamental: txn_total
     additivity: additive
     engine_type: sql
+    role: denominator
 
 dimensions:
   # All measured columns on the transaction itself.
-  allowed: [channel, txn_type, mcc, category, region, country, branch_code]
+  allowed: [channel, txn_type, mcc, region, branch_code]
   max_depth: 2
   min_segment_volume: 50
   availability:
@@ -89,6 +98,9 @@ quality:
       signature: "txn_failed == 0 across a full window on every channel"
       verdict: ambiguous
 
+# What a movement here is worth to the bank; Materiality ranks by it.
+strategic_weight: 0.7
+
 detection:
   direction: up
   band_source: robust_baseline
@@ -110,7 +122,10 @@ forecast:
 
 causal:
   enabled: true
-  evidence_rungs: [association, attribution, corroborated_cause]
+  # estimated_effect is reachable because this KPI counts an additive event over segments that
+  # give a control group. Localize names the treated cells, the unaffected cells give the trend
+  # they would have followed, and a placebo window tests that assumption before any claim.
+  evidence_rungs: [association, attribution, corroborated_cause, estimated_effect]
   interventions: [payment_provider_change, release, capacity_change]
   control_dimensions: [channel, txn_type]
   degrade_to: attribution

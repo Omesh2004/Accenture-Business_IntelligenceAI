@@ -86,7 +86,7 @@ export const SIM_EVENTS: SimEvent[] = [
   { raw: "free.loan.kyc_completed", canonical: "loan.kyc_completed.success", route: "/loans", kind: "outcome_success", label: "Loan KYC completed" },
   { raw: "lending.loan.kyc_completed", canonical: "loan.kyc_completed.success", route: "/loans", kind: "outcome_success", label: "Loan KYC completed" },
   { raw: "free.loan.kyc_failed", canonical: "loan.kyc.failure", route: "/loans", kind: "outcome_failure", failureSiblingOf: "loan.kyc_completed.success", label: "Loan KYC failed" },
-  { raw: "lending.loan.kyc_abandoned", canonical: "loan.kyc_abandoned.success", route: "/loans", kind: "outcome_failure", failureSiblingOf: "loan.kyc_completed.success", label: "Loan KYC abandoned" },
+  { raw: "lending.loan.kyc_abandoned", canonical: "loan.kyc_abandoned.failure", route: "/loans", kind: "outcome_failure", failureSiblingOf: "loan.kyc_completed.success", label: "Loan KYC abandoned" },
   { raw: "lending.loans.viewed", canonical: "loan.page.view", route: "/loans", kind: "page", label: "Loans view" },
   { raw: "lending.loan.applied", canonical: "loan.applied.success", route: "/loans", kind: "outcome_success", label: "Loan applied" },
   { raw: "loan_approved", canonical: "loan.approved.success", route: "/loans", kind: "outcome_success", label: "Loan approved" },

@@ -173,6 +173,8 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+      analytics-api:
+        condition: service_started
     environment:
       - CLICKHOUSE_HOST=clickhouse
       - CLICKHOUSE_USER=default
@@ -182,8 +184,9 @@ services:
       - INTELLIGENCE_DATASET=seeded
       - EXTRACT_API_URL=http://nexabank-backend:5000/api
       - EXTRACT_API_TOKEN=${EXTRACT_API_TOKEN:-local-dev-extract-token}
-      - INTELLIGENCE_LLM=${INTELLIGENCE_LLM:-0}
-      - VLLM_URL=http://host.docker.internal:11434/v1
+      - INTELLIGENCE_LLM=${INTELLIGENCE_LLM:-1}
+      - VLLM_URL=http://vllm-server:8000/v1
+      - METRIC_API_URL=http://analytics-api:8001
     volumes:
       - ./api:/app/api
       - ./contracts:/app/contracts:ro
@@ -205,8 +208,8 @@ services:
       - CLICKHOUSE_HOST=clickhouse
       - CLICKHOUSE_USER=default
       - CLICKHOUSE_PASSWORD=clickhouse
-      - VLLM_URL=http://host.docker.internal:11434/v1
-      - INTELLIGENCE_LLM=${INTELLIGENCE_LLM:-0}
+      - VLLM_URL=http://vllm-server:8000/v1
+      - INTELLIGENCE_LLM=${INTELLIGENCE_LLM:-1}
       - METRIC_API_TENANTS=${METRIC_API_TENANTS:-nexabank}
     volumes:
       # Contracts are configuration, not code: both readers must see the same file.
@@ -275,7 +278,7 @@ services:
       - ANALYTICS_API_HOST=analytics-api
       - INGESTION_API_HOST=ingestion-api
       - NEXT_PUBLIC_ANALYTICS_WS_URL=ws://analytics-api:8001
-      - NEXT_MODE=${NEXT_MODE:-development}
+      - NEXT_MODE=${NEXT_MODE:-production}
     env_file:
       - ./dashboard/.env.local
     volumes:
@@ -313,6 +316,8 @@ services:
       # Hot-reload: mount source code (but NOT node_modules)
       - ./nexabank/backend/src:/app/src
       - ./nexabank/backend/prisma:/app/prisma
+      # The generator writes the ground-truth fixture the gates score against.
+      - ./fixtures:/app/fixtures
     restart: unless-stopped
 
   nexabank-frontend:
@@ -323,7 +328,7 @@ services:
     ports:
       - "3002:3002"
     environment:
-      - NEXT_MODE=${NEXT_MODE:-development}
+      - NEXT_MODE=${NEXT_MODE:-production}
       - NEXT_PUBLIC_API_URL=http://localhost:5000/api
     volumes:
       # Hot-reload: mount source directories

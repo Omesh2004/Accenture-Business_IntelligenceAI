@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
-import { Inter, Instrument_Serif, JetBrains_Mono } from "next/font/google";
+import { Inter, Instrument_Serif } from "next/font/google";
 import "./globals.css";
 import StoreProvider from "@/lib/StoreProvider";
 import AuthProvider from "@/components/AuthProvider";
@@ -9,30 +9,22 @@ import { Toaster } from "sonner";
 import QueryProvider from "@/lib/QueryProvider";
 
 /**
- * Root layout with Inter font, Redux provider, and global metadata.
- * Uses Inter for a clean, professional look matching enterprise dashboards.
+ * Two roles, no more. Inter is Helvetica's screen-native descendant and sets everything a reader
+ * uses -- labels, body, controls and every FIGURE, with tabular numerals so columns align.
+ * Instrument Serif sets page and section titles only: high contrast against the grotesque, which
+ * is what makes a title read as a statement instead of a bigger label.
  */
-
-const inter = Inter({
+const ui = Inter({
   subsets: ["latin"],
-  variable: "--font-inter",
+  weight: ["300", "400", "500", "600", "700", "800"],
+  variable: "--font-ui",
   display: "swap",
 });
 
-// Display face for the intelligence report's headlines. A finding stated in the same face as the
-// chrome around it reads as another label; a distinct display face makes it read as a statement.
 const display = Instrument_Serif({
   subsets: ["latin"],
   weight: "400",
   variable: "--font-display",
-  display: "swap",
-});
-
-// Figures are compared column-to-column, so they need fixed advance widths. Inter's proportional
-// digits make a 236 and a 5 in adjacent rows look like different magnitudes than they are.
-const mono = JetBrains_Mono({
-  subsets: ["latin"],
-  variable: "--font-mono",
   display: "swap",
 });
 
@@ -58,7 +50,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${inter.variable} ${display.variable} ${mono.variable} h-full antialiased`}
+      className={`${ui.variable} ${display.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col font-sans bg-gray-100/50">
         <AuthProvider>

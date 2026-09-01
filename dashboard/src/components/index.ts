@@ -8,8 +8,6 @@ export { default as TopNavbar } from './TopNavbar';
 export { default as KPICard } from './KPICard';
 export { default as ChartContainer } from './ChartContainer';
 export { default as TrafficChart } from './TrafficChart';
-export { default as AIInsightsPanel } from './AIInsightsPanel';
-export { default as JourneyFunnelInsights } from './JourneyFunnelInsights';
 export { default as IntelligenceEvidence } from './IntelligenceEvidence';
 export { default as SourceHealthPanel } from './SourceHealthPanel';
 export { default as IntelligenceAsk } from './IntelligenceAsk';

@@ -13,7 +13,7 @@ set -e
 if [ -n "${VLLM_MODEL:-}" ]; then
     MODEL="$VLLM_MODEL"
     GPU_UTIL="${VLLM_GPU_UTIL:-0.60}"
-    MAX_LEN="${VLLM_MAX_LEN:-2048}"
+    MAX_LEN="${VLLM_MAX_LEN:-8192}"
     EXTRA_FLAGS="${VLLM_EXTRA_FLAGS:---enforce-eager}"
     echo "═══════════════════════════════════════════════════════"
     echo "  vLLM: model PINNED by VLLM_MODEL (VRAM tiering skipped)"
@@ -51,13 +51,15 @@ if [ "$VRAM_FREE_MIB" -ge "$TIER_7B" ]; then
 elif [ "$VRAM_FREE_MIB" -ge "$TIER_3B" ]; then
     MODEL="Qwen/Qwen2.5-3B-Instruct-AWQ"
     GPU_UTIL=0.75
-    MAX_LEN=2048
+    MAX_LEN=4096
     EXTRA_FLAGS="--enforce-eager"
     echo "  ▸ Selected: 3B model (mid-VRAM tier)"
 else
     MODEL="Qwen/Qwen2.5-1.5B-Instruct-AWQ"
     GPU_UTIL=0.65
-    MAX_LEN=1024
+    # The narrator explains a finding rather than labelling it, so it needs room. 1024 left
+    # nothing after the signal cards and every long prompt was rejected outright.
+    MAX_LEN=8192
     EXTRA_FLAGS="--enforce-eager"
     echo "  ▸ Selected: 1.5B model (low-VRAM tier)"
 fi

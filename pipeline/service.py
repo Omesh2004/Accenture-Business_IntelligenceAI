@@ -29,8 +29,11 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("pipeline")
 
 TENANTS = [t.strip() for t in os.environ.get("PIPELINE_TENANTS", "nexabank").split(",") if t.strip()]
-EXTRACT_INTERVAL_S = int(os.environ.get("PIPELINE_EXTRACT_INTERVAL_S", "300"))
-TRANSFORM_INTERVAL_S = int(os.environ.get("PIPELINE_TRANSFORM_INTERVAL_S", "180"))
+# Tight enough that a change planted in NexaBank is visible in the warehouse within a
+# couple of minutes. At five and three minutes the chain took the better part of half an
+# hour to surface anything, which is not a loop anyone can watch.
+EXTRACT_INTERVAL_S = int(os.environ.get("PIPELINE_EXTRACT_INTERVAL_S", "60"))
+TRANSFORM_INTERVAL_S = int(os.environ.get("PIPELINE_TRANSFORM_INTERVAL_S", "60"))
 GOLD_WINDOW_DAYS = int(os.environ.get("PIPELINE_GOLD_WINDOW_DAYS", "120"))
 RUN_ON_START = os.environ.get("PIPELINE_RUN_ON_START", "1") == "1"
 
@@ -144,6 +147,20 @@ class DevSeedRequest(BaseModel):
 def _require_dev_seed():
     if not ENABLE_DEV_SEED:
         raise HTTPException(status_code=403, detail="dev seed disabled (set ENABLE_DEV_SEED=1)")
+
+
+@app.post("/refresh")
+def refresh(gold_days: int = GOLD_WINDOW_DAYS, full: bool = False) -> dict:
+    """Run the whole chain now: extract, then every transform, synchronously.
+
+    The loops already do this on a timer. This is for the moment someone plants a movement in
+    NexaBank and wants to see it reach the warehouse without waiting for the next tick.
+    """
+    try:
+        return {"ok": True, **run_all(gold_days=gold_days, full=full)}
+    except Exception as exc:                                        # noqa: BLE001
+        logger.exception("manual refresh failed")
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
 @app.post("/dev/seed")

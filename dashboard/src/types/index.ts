@@ -558,12 +558,23 @@ export interface AgentDataset {
 
 /** A chart the run can honestly draw. `source` is the table its numbers were read from. */
 export interface AgentVisual {
-  kind: 'bars' | 'delta';
+  kind: 'bars' | 'delta' | 'trend' | 'band' | 'waterfall' | 'donut';
   title: string;
   subtitle: string;
   unit: string;
-  series: { label: string; value: number; severity?: string }[];
+  /** For a waterfall, `at` is the running level after the step and `role` names its part. */
+  series: {
+    label: string; value: number; severity?: string; at?: number;
+    role?: 'start' | 'step' | 'rest' | 'end';
+  }[];
   pct_change?: number;
+  /** trend only: the window the engine scored, and the band it was scored against. */
+  window_start?: string;
+  window_end?: string;
+  lower?: number | null;
+  upper?: number | null;
+  /** band only: where the reading fell against the range. */
+  observed?: number | null;
   source: string;
   gate: string;
   tool: string;

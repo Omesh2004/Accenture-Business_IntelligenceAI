@@ -48,8 +48,14 @@ def forecast_id(tenant_id: str, kpi_id: str, as_of: datetime, method: str) -> st
     return derive_id(tenant_id, kpi_id, as_of, method)
 
 
-def effect_id(anomaly: str, intervention: str) -> str:
-    return derive_id(anomaly, intervention)
+def effect_id(anomaly: str) -> str:
+    """One causal verdict per anomaly.
+
+    Keying on the intervention as well let a re-run land beside the old row rather than replace
+    it, so an estimate later withdrawn for a failed assumption stayed readable next to its own
+    correction. The verdict has to supersede itself.
+    """
+    return derive_id(anomaly, "causal")
 
 
 def rec_id(anomaly: str, lever: str) -> str:

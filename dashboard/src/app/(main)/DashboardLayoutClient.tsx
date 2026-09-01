@@ -26,7 +26,7 @@ export default function DashboardLayoutClient({ children }: DashboardLayoutProps
 
   return (
     <AuthGuard>
-    <div className="min-h-screen bg-[var(--color-bg-secondary)] font-sans relative">
+    <div className="relative min-h-screen font-sans" style={{ background: 'var(--surface-sunken)' }}>
       {/* Sidebar - hidden on mobile via CSS, toggled via Redux */}
       <div className="hidden lg:block print:hidden">
         <Sidebar />
@@ -45,7 +45,7 @@ export default function DashboardLayoutClient({ children }: DashboardLayoutProps
       {/* Main Content Area */}
       <div
         className={`transition-all duration-300 print:ml-0 ${
-          sidebarCollapsed ? 'lg:ml-16' : 'lg:ml-56'
+          sidebarCollapsed ? 'lg:ml-[76px]' : 'lg:ml-[236px]'
         }`}
       >
         <div className="print:hidden sticky top-0 z-30">

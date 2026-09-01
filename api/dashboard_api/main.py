@@ -8,6 +8,7 @@ an `ops_manager` response has `revenue` stripped so it cannot be seen or back-co
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 from datetime import date, datetime, timedelta
@@ -16,6 +17,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
 from api.metric_api.main import router as metric_router, tenant_ok, KNOWN_TENANTS
 from api.metric_api import reads
@@ -129,13 +131,51 @@ def intelligence_insight(request: Request, tenants: str = Query(None),
     return filter_revenue(p, body)
 
 
+@app.post("/intelligence/rescore")
+def intelligence_rescore(tenants: str = Query(None), days: int = Query(0, ge=0, le=365),
+                         all_windows: bool = Query(False)):
+    """Re-run the investigation sweep now, for one window or for all of them.
+
+    The service sweeps on a timer. This is for the moment a movement has just been planted in
+    NexaBank and pushed through the pipeline: without it the engine keeps answering from the last
+    tick, and an anomaly that already exists in the data reads as "no material movement" until the
+    clock comes round.
+    """
+    from api.intelligence import config as icfg
+    from api.intelligence.orchestrator import Orchestrator
+    from api.intelligence.service import current_window
+    from api.metric_api.client import MetricAPIClient
+
+    tenant = _tenant(tenants)
+    # One window by default. Sweeping all three takes minutes and times the request out; the
+    # window on screen is the one a demo needs back immediately.
+    windows = ([days] if days
+               else list(icfg.WINDOW_CHOICES) if all_windows
+               else [icfg.WINDOW_DAYS])
+    orch = Orchestrator(MetricAPIClient())
+    out = []
+    for span in windows:
+        try:
+            results = orch.sweep(tenant, current_window(span), dataset=icfg.DATASET,
+                                 run_forecast=True)
+            out.append({"window_days": span, "investigations": len(results),
+                        "anomalies": sum(1 for r in results if r.get("anomaly"))})
+        except Exception as exc:                                    # noqa: BLE001
+            out.append({"window_days": span, "error": str(exc)})
+    return {"tenant_id": tenant, "swept": out}
+
+
 @app.get("/intelligence/insights")
 def intelligence_insights(request: Request, tenants: str = Query(None),
-                          limit: int = Query(20, ge=1, le=100)):
+                          limit: int = Query(20, ge=1, le=100),
+                          days: int = Query(0, ge=0, le=365)):
+    """`days` selects the findings scored over that window. Without it the newest of any window
+    wins, which is how a 90-day movement ended up marked on a 7-day chart."""
     tenant = _tenant(tenants)
     p = resolve_persona(request)
-    return filter_revenue(p, {"tenant_id": tenant, "persona": p,
-                              "insights": _reader().list_insights(tenant, p, limit)})
+    rows = _reader().list_insights(tenant, p, limit, window_days=days or None)
+    return filter_revenue(p, {"tenant_id": tenant, "persona": p, "days": days,
+                              "insights": rows})
 
 
 @app.get("/intelligence/sources")
@@ -199,10 +239,60 @@ def intelligence_outcome(req: OutcomeRequest):
         raise HTTPException(status_code=503, detail=f"feedback loop unavailable: {exc}")
 
 
-@app.post("/intelligence/ask")
 @app.post("/intelligence/ask/stream")
-def intelligence_ask(req: AskRequest):
-    raise HTTPException(
-        status_code=503,
-        detail="the intelligence agent is being rebuilt for Round 2 (Track C). "
-               "The read endpoints (/intelligence/insight, /series, /recommendations) are live.")
+def intelligence_ask_stream(request: Request, req: AskRequest):
+    """Same answer as /ask, streamed as SSE so the trace appears while the agent works.
+
+    Frames: rail | pending | step | result | answer | error, each `event:`/`data:` separated by
+    a blank line.
+    """
+    from api.intelligence import loop
+
+    tenant = _tenant(req.tenant_id)
+    p = resolve_persona(request, req.persona)
+    question = (req.question or "").strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="question is required")
+
+    def frame(kind: str, payload) -> str:
+        body = json.dumps(payload, default=str)
+        return "event: " + kind + "\ndata: " + body + "\n\n"
+
+    def generate():
+        queue: list[str] = []
+
+        def emit(kind: str, payload) -> None:
+            queue.append(frame(kind, payload))
+
+        try:
+            res = loop.run(tenant, question, p, emit=emit,
+                           window_days=int(req.days or 0), history=req.history or [])
+        except Exception as exc:
+            yield frame("error", {"detail": str(exc)})
+            return
+        # Steps first, then the finished answer, so the reader sees the work before the verdict.
+        for chunk in queue:
+            yield chunk
+        body = filter_revenue(p, res.as_dict())
+        if body.get("rail"):
+            yield frame("rail", {"gates": body["rail"]})
+        yield frame("answer", body)
+
+    return StreamingResponse(generate(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.post("/intelligence/ask")
+def intelligence_ask(request: Request, req: AskRequest):
+    """Ask the agent a question. Persona is resolved server-side, never from the body."""
+    from api.intelligence import loop
+    tenant = _tenant(req.tenant_id)
+    p = resolve_persona(request, req.persona)
+    question = (req.question or "").strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="question is required")
+    res = loop.run(tenant, question, p, window_days=int(req.days or 0),
+                   history=req.history or [])
+    # Entitlement is applied inside the agent before assembly; this is belt and braces at the
+    # boundary, so a new field can never leak a hidden KPI.
+    return filter_revenue(p, res.as_dict())

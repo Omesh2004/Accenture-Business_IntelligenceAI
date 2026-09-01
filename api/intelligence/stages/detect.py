@@ -5,6 +5,7 @@ median/MAD: a fresh anomaly contaminates a mean-based baseline and hides itself.
 """
 from __future__ import annotations
 
+import math
 import statistics
 from dataclasses import dataclass
 
@@ -20,6 +21,7 @@ class DetectResult:
     reason: str = ""
     anomaly: dict | None = None
     materiality: float = 0.0
+    p_value: float = 1.0
 
 
 def benjamini_hochberg(pvalues: list[float], alpha: float | None = None) -> list[bool]:
@@ -40,6 +42,24 @@ def benjamini_hochberg(pvalues: list[float], alpha: float | None = None) -> list
     return keep
 
 
+def z_to_p(z: float) -> float:
+    """Two-sided normal tail. Detect needs a p-value so FDR can be applied across the sweep."""
+    return max(1e-12, math.erfc(abs(z) / math.sqrt(2.0)))
+
+
+def level_shift(recent: list[float], history: list[float]) -> float:
+    """Share of the recent window sitting on one side of the historical median.
+
+    A single spike is not a change point. 1.0 means every recent point moved the same way.
+    """
+    if not recent or not history:
+        return 0.0
+    med = statistics.median(history)
+    above = sum(1 for v in recent if v > med)
+    below = sum(1 for v in recent if v < med)
+    return max(above, below) / len(recent)
+
+
 def robust_z(value: float, history: list[float]) -> float:
     if not history:
         return 0.0
@@ -55,20 +75,28 @@ def robust_z(value: float, history: list[float]) -> float:
 
 
 def materiality(observed: float, baseline: float, critical_pct: float,
-                affected: float, total: float, breaching: int, min_windows: int) -> float:
-    """effect x reach x persistence, each in [0,1]. docs/PIPELINE_CONTRACT.md section 4.
+                affected: float, total: float, breaching: int, min_windows: int,
+                strategic_weight: float = 0.5) -> float:
+    """Ranking score: strength x reach x business weight. What to surface first."""
+    return round6(strength(observed, baseline, critical_pct, breaching, min_windows)
+                  * (min(1.0, affected / total) if total > EPSILON else 1.0)
+                  * max(0.0, min(1.0, strategic_weight)))
 
-    `reach` is the share of the KPI's own population the movement touches. Detect scores the whole
-    window, so that share is 1.0 and callers pass total = 0. It was previously the KPI's share of
-    the tenant's raw event volume, which made every business KPI structurally immaterial -- loan
-    approvals are a few hundred events beside tens of thousands of page views, so a 37% collapse
-    scored 0.05 and was suppressed. Triviality is guarded by `config.MIN_KPI_VOLUME` instead.
+
+def strength(observed: float, baseline: float, critical_pct: float,
+             breaching: int, min_windows: int) -> float:
+    """How big and how persistent the movement is, before business weighting.
+
+    Severity reads this, not materiality: weighting severity by importance meant a KPI weighted
+    0.7 could never cross the 0.75 urgent threshold however far it moved.
     """
     denom = max(abs(baseline), EPSILON)
-    effect = min(1.0, abs(observed - baseline) / denom / max(critical_pct / 100.0, EPSILON))
-    reach = min(1.0, affected / total) if total > EPSILON else 1.0
+    ratio = abs(observed - baseline) / denom / max(critical_pct / 100.0, EPSILON)
+    # Saturating rather than capped: a hard min(1.0, ..) scored every real movement exactly 1.0,
+    # so nothing could be ranked against anything else.
+    effect = ratio / (ratio + 1.0)
     persistence = min(1.0, breaching / max(min_windows, 1))
-    return round6(effect * reach * persistence)
+    return round6(effect * persistence)
 
 
 def severity_for(score: float) -> str:
@@ -80,7 +108,7 @@ def severity_for(score: float) -> str:
 
 
 def run(ctx, series_values: list[float], band: dict | None, kpi_volume: float,
-        tenant_volume: float) -> DetectResult:
+        tenant_volume: float, baseline_values: list[float] | None = None) -> DetectResult:
     cfg = ctx.contract.detection
     min_windows = max(1, int(cfg.get("min_persistence_windows", 2)))
     critical_pct = float(cfg.get("critical_pct_change", 20))
@@ -100,18 +128,28 @@ def run(ctx, series_values: list[float], band: dict | None, kpi_volume: float,
 
     observed = float(statistics.median(recent))
 
+    # Robust baseline always runs; the forecast band corroborates it when one exists. Firing on
+    # the band alone let a narrow band call any wobble an anomaly.
+    # Prefer pre-window history; fall back to the in-window head when there is none.
+    robust_history = baseline_values or history
+    z = robust_z(observed, robust_history)
+    robust_hit = abs(z) >= config.ROBUST_Z_THRESHOLD
     if band and band.get("lower") is not None:
         baseline = float(band.get("point") or statistics.median(history))
         lower, upper = float(band["lower"]), float(band["upper"])
         breaching = sum(1 for v in recent if v < lower or v > upper)
-        outside = observed < lower or observed > upper
-        method = "forecast_band"
+        outside = (observed < lower or observed > upper) and robust_hit
+        method = "forecast_band+mad"
     else:
         baseline = float(statistics.median(history))
         breaching = sum(1 for v in recent
-                        if abs(robust_z(v, history)) >= config.ROBUST_Z_THRESHOLD)
-        outside = abs(robust_z(observed, history)) >= config.ROBUST_Z_THRESHOLD
+                        if abs(robust_z(v, robust_history)) >= config.ROBUST_Z_THRESHOLD)
+        outside = robust_hit
         method = "mad"
+
+    # A change point, not a one-day spike.
+    if outside and level_shift(recent, robust_history) < config.LEVEL_SHIFT_MIN:
+        return DetectResult(False, "not_a_level_shift")
 
     if not outside:
         return DetectResult(False, "within_band")
@@ -127,7 +165,7 @@ def run(ctx, series_values: list[float], band: dict | None, kpi_volume: float,
         return DetectResult(False, "below_effect_floor")
 
     score = materiality(observed, baseline, critical_pct, kpi_volume, tenant_volume,
-                        breaching, min_windows)
+                        breaching, min_windows, ctx.contract.strategic_weight)
     if score < config.MATERIALITY_FLOOR:
         return DetectResult(False, "immaterial", materiality=score)
 
@@ -145,8 +183,10 @@ def run(ctx, series_values: list[float], band: dict | None, kpi_volume: float,
         "baseline": round6(baseline),
         "observed": round6(observed),
         "forecast_id": (band or {}).get("forecast_id", ""),
+        "p_value": round6(z_to_p(z)),
         "materiality": score,
-        "severity": severity_for(score),
+        "severity": severity_for(strength(observed, baseline, critical_pct,
+                                          breaching, min_windows)),
         "status": "open",
         "engine_type": "stats",
     }, score)

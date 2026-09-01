@@ -61,7 +61,7 @@ function logFetchFailure(what: string, error: unknown): void {
 }
 
 /** Base API configuration */
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001';
+export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001';
 
 /** Configured axios instance with interceptors */
 const apiClient: AxiosInstance = axios.create({
@@ -447,35 +447,75 @@ function toKpiCard(k: KpiFromApi): KPIMetric {
   };
 }
 
+
+/** Track B returns envelopes, not arrays. Adapt at the boundary so no component sees the shape. */
+interface TrafficEnvelope { dates?: string[]; txn_total?: number[]; txn_failed?: number[] }
+
+function toAvailableTenants(data: unknown): AvailableTenant[] {
+  if (Array.isArray(data)) return data as AvailableTenant[];
+  const ids = (data as { tenants?: unknown })?.tenants;
+  if (!Array.isArray(ids)) return [];
+  return ids.map((t) =>
+    typeof t === 'string'
+      ? { id: t, name: t, eventCount: 0, uniqueUsers: 0 }
+      : (t as AvailableTenant));
+}
+
+function toTrafficRows(data: unknown): Record<string, string | number>[] {
+  if (Array.isArray(data)) return data as Record<string, string | number>[];
+  const e = (data || {}) as TrafficEnvelope;
+  const dates = Array.isArray(e.dates) ? e.dates : [];
+  return dates.map((d, i) => ({
+    date: d,
+    total: Number(e.txn_total?.[i] ?? 0),
+    failed: Number(e.txn_failed?.[i] ?? 0),
+  }));
+}
+
+
+/** kyc_completion_rate -> KYC Completion Rate. */
+function prettyKpi(id: string): string {
+  if (!id) return 'Finding';
+  return id.split('_').map((w) => (w === 'kyc' ? 'KYC' : w.charAt(0).toUpperCase() + w.slice(1)))
+    .join(' ');
+}
+
+/** The window the engine actually scored, so a chart marks it rather than guessing. */
+/** One prior turn, sent so a follow-up like "what about the others?" can be resolved. */
+export interface ChatTurn { role: 'user' | 'assistant'; text: string; kpi_id?: string }
+
+export interface MovedWindow {
+  start: string; end: string; direction: number; severity: string;
+  /** The expected range the movement was scored against, when one was recorded. */
+  lower?: number; upper?: number;
+}
+
+interface RawInsightWindow {
+  kpi_id: string; anomaly_id?: string; window_start?: string; window_end?: string;
+  direction?: number; severity?: string; band_lower?: number; band_upper?: number;
+}
+
 export const dashboardAPI = {
   /** Fetch KPI metrics for the dashboard header */
   /** The five governed KPIs. The API returns fundamentals; the card shape is built here. */
-  async getKPIMetrics(tenants: string[], range: string): Promise<KPIMetric[]> {
+  async getKPIMetrics(tenants: string[], range: string, persona?: string): Promise<KPIMetric[]> {
     const days = Number(String(range).replace(/[^0-9]/g, '')) || 30;
+    const p = persona ? `&persona=${encodeURIComponent(persona)}` : '';
     try {
       const response = await apiClient.get<KpiEnvelope>(
-        `/metrics/kpi?tenants=${tenants.join(',')}&days=${days}`);
+        `/metrics/kpi?tenants=${tenants.join(',')}&days=${days}${p}`);
       return (response.data?.kpis || []).map(toKpiCard);
     } catch (error) {
       console.error('Failed to fetch KPI metrics', error);
       return [];
     }
   },
-
-  async getSecondaryKPIMetrics(tenants: string[], range: string): Promise<KPIMetric[]> {
-    try {
-      const response = await apiClient.get<KPIMetric[]>(`/metrics/secondary_kpi?tenants=${tenants.join(',')}&range=${range}`);
-      return response.data;
-    } catch (error) {
-      console.error('Failed to fetch Secondary KPI metrics', error);
-      return [];
-    }
-  },
-
-  /** Fetch traffic overview time series data */
   async getTrafficData(tenants: string[], range: string): Promise<TimeSeriesDataPoint[]> {
     try {
-      const response = await apiClient.get<Record<string, string | number>[]>(`/metrics/traffic?tenants=${tenants.join(',')}&range=${range}`);
+      const days = Number(String(range).replace(/[^0-9]/g, '')) || 30;
+      const raw = await apiClient.get<TrafficEnvelope | Record<string, string | number>[]>(
+        `/metrics/traffic?tenants=${tenants.join(',')}&days=${days}`);
+      const response = { data: toTrafficRows(raw.data) };
       return response.data.map((r: Record<string, string | number>) => {
         const point: Record<string, string | number> = { date: String(r.date) };
         for (const key of Object.keys(r)) {
@@ -490,93 +530,40 @@ export const dashboardAPI = {
       return [];
     }
   },
-
-  async getTopFeatures(tenants: string[], range: string): Promise<BarDataPoint[]> {
-    try {
-      const response = await apiClient.get<{ usage: BackendFeatureUsageItem[] }>(`/features/usage?tenants=${tenants.join(',')}&range=${range}`);
-      const backendUsage = response.data.usage || [];
-      return backendUsage.map((item: BackendFeatureUsageItem) => ({
-        name: item.event_name,
-        value: item.total_interactions,
-      }));
-    } catch (error) {
-      console.error('Failed to fetch top features from backend', error);
-      return [];
-    }
-  },
-
-  /** Fetch user journey funnel data using backend /funnels endpoint */
+  /** The KYC funnel from gold.funnel_daily: stage, order, entered. */
   async getFunnelData(tenants: string[], range: string): Promise<FunnelStep[]> {
+    const days = Number(String(range).replace(/[^0-9]/g, '')) || 30;
+    const COLORS = ['#a100ff', '#8b19e8', '#7500c0', '#5d1a94', '#460073'];
     try {
-      const { APP_REGISTRY } = await import('./feature-map');
-      const canonicalStepMap: Record<string, string> = {
-        login: 'login.auth.success',
-        'login.auth.success': 'login.auth.success',
-        dashboard_view: 'dashboard.page.view',
-        'dashboard.page.view': 'dashboard.page.view',
-        transfer_started: 'transaction.pay_now.success',
-        transfer_completed: 'transaction.pay_now.success',
-        'transaction.pay_now.success': 'transaction.pay_now.success',
-        loan_applied: 'loan.applied.success',
-        'loan.applied.success': 'loan.applied.success',
-        kyc_started: 'loan.kyc_started.success',
-        kyc_completed: 'loan.kyc_completed.success',
-        'loan.kyc_started.success': 'loan.kyc_started.success',
-        'loan.kyc_completed.success': 'loan.kyc_completed.success',
-        authorizer_approved: 'transaction.pay_now.success',
-      };
-
-      const normalizeStepToken = (step: string): string =>
-        String(step || '')
-          .trim()
-          .toLowerCase()
-          .replace(/\s+/g, '_');
-
-      const toCanonicalStep = (step: string): string => {
-        const normalized = normalizeStepToken(step);
-        return canonicalStepMap[normalized] || normalized;
-      };
-
-      const selectedConfigs = tenants
-        .map((tenantId) => APP_REGISTRY[tenantId])
-        .filter(Boolean);
-
-      const fallbackSteps = ['login.auth.success', 'dashboard.page.view', 'transaction.pay_now.success', 'loan.applied.success'];
-      const mergedSteps = selectedConfigs.length > 0
-        ? Array.from(
-            new Set(
-              selectedConfigs
-                .flatMap((cfg) => cfg.funnelSteps || [])
-                .map((step) => toCanonicalStep(step))
-                .filter(Boolean)
-            )
-          )
-        : fallbackSteps;
-
-      const steps = mergedSteps.length >= 2 ? mergedSteps.join(',') : fallbackSteps.join(',');
-      
-      const response = await apiClient.get<{ funnel: BackendFunnelStep[] }>(`/funnels?tenants=${encodeURIComponent(tenants.join(','))}&steps=${encodeURIComponent(steps)}&window_minutes=60&range=${range}`);
-      const funnel = response.data.funnel || [];
-      
-      return funnel.map((step: BackendFunnelStep) => ({
-        step: step.step,
-        label: step.event_name,
-        value: step.users_completed,
-        dropOff: step.drop_off_pct,
-        timeToNextStep: '-',
-        color: '#1a73e8',
-      }));
+      const response = await apiClient.get<{
+        stages?: { stage: string; order: number; entered: number }[];
+      }>(`/funnels?tenants=${encodeURIComponent(tenants.join(','))}&days=${days}&funnel_id=kyc_funnel`);
+      const stages = [...(response.data?.stages || [])].sort((a, b) => a.order - b.order);
+      return stages.map((st, i) => {
+        const value = Number(st.entered || 0);
+        const prev = i === 0 ? value : Number(stages[i - 1].entered || 0);
+        // Drop-off is measured against the stage before it, so the first stage never leaks.
+        const dropOff = i === 0 || prev <= 0 ? 0 : Math.round(((prev - value) / prev) * 100);
+        return {
+          label: String(st.stage || '').replace(/_/g, ' '),
+          value,
+          dropOff,
+          color: COLORS[i % COLORS.length],
+        };
+      });
     } catch (error) {
-      console.error('Failed to fetch funnel from backend', error);
+      console.error('Failed to fetch funnel data', error);
       return [];
     }
   },
+
 
   async getTenants(tenants?: string[], range: string = '7d'): Promise<Tenant[]> {
     try {
       const params = tenants && tenants.length > 0 ? `?tenants=${tenants.join(',')}&range=${range}` : `?range=${range}`;
-      const response = await apiClient.get<Tenant[]>(`/tenants${params}`);
-      return response.data;
+      const response = await apiClient.get<{ tenants?: string[] } | Tenant[]>(`/tenants${params}`);
+      const list = toAvailableTenants(response.data);
+      return list as unknown as Tenant[];
     } catch {
       return [];
     }
@@ -584,8 +571,9 @@ export const dashboardAPI = {
 
   async getAvailableTenants(range: string = '90d'): Promise<AvailableTenant[]> {
     try {
-      const response = await apiClient.get<AvailableTenant[]>(`/tenants/available?range=${range}`);
-      return response.data;
+      const response = await apiClient.get<{ tenants?: string[] } | AvailableTenant[]>(
+        `/tenants/available?range=${range}`);
+      return toAvailableTenants(response.data);
     } catch (error) {
       console.error('Failed to fetch available tenants', error);
       return [
@@ -613,7 +601,7 @@ export const dashboardAPI = {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const response = await apiClient.get<{ insights: BackendInsight[] }>(
-          `/insights?tenants=${tenants.join(',')}&range=${range}`,
+          `/intelligence/insights?tenants=${encodeURIComponent(tenants.join(','))}`,
           { timeout: 15000 }
         );
         
@@ -622,16 +610,30 @@ export const dashboardAPI = {
         // Cache cleared on success
         delete aiInsightsErrorCache[cacheKey];
         
-        return insights.map((insight: BackendInsight, ix: number) => ({
-          id: `ai-${ix}`,
-          type: insight.severity === 'high' ? 'warning' as const : insight.severity === 'medium' ? 'info' as const : 'success' as const,
-          title: insight.type || 'Backend Insight',
-          message: insight.message || String(insight),
-          impact: insight.severity === 'high' ? 'High' : 'Medium',
-          priority: insight.severity,
-          confidence: normalizeConfidenceLabel(insight.confidence) || confidenceFromSeverity(insight.severity),
-          actionRequired: insight.severity === 'high',
-        }));
+        // Signal Store rows: headline, kpi_id, trust_verdict, confidence. The old mapping read
+        // severity/message, which do not exist, so every card rendered "[object Object]".
+        type StoredInsight = {
+          insight_id?: string; kpi_id?: string; headline?: string; narrative?: string;
+          trust_verdict?: string; confidence?: number; abstained?: number; simulated?: number;
+        };
+        return (insights as unknown as StoredInsight[]).map((row, ix) => {
+          const conf = Number(row.confidence ?? 0);
+          const quarantined = row.trust_verdict && row.trust_verdict !== 'pass';
+          const abstained = Boolean(row.abstained);
+          return {
+            id: row.insight_id || `insight-${ix}`,
+            type: (quarantined ? 'warning' : abstained ? 'info' : 'success') as
+              'warning' | 'info' | 'success',
+            title: prettyKpi(row.kpi_id || ''),
+            message: row.headline || row.narrative || 'No finding recorded for this metric.',
+            impact: conf >= 0.7 ? 'High' : conf >= 0.4 ? 'Medium' : 'Low',
+            priority: (conf >= 0.7 ? 'high' : conf >= 0.4 ? 'medium' : 'low') as
+              'high' | 'medium' | 'low',
+            confidence: (conf >= 0.7 ? 'High' : conf >= 0.4 ? 'Medium' : 'Low') as
+              'High' | 'Medium' | 'Low',
+            actionRequired: Boolean(quarantined),
+          };
+        });
       } catch (err: unknown) {
         const status = (err as { response?: { status?: number } })?.response?.status;
         const message = (err as { message?: string })?.message || String(err);
@@ -774,19 +776,6 @@ export const dashboardAPI = {
     }
   },
 
-  /** Fetch real-time active user count (returns count + IST timestamp) */
-  async getRealTimeUsers(tenants: string[]): Promise<{ count: number; timestampIST: string | null }> {
-    try {
-      const response = await apiClient.get<{ count: number; timestamp_ist: string | null; timezone: string }>(`/metrics/realtime_users?tenants=${tenants.join(',')}`);
-      return {
-        count: response.data.count ?? 0,
-        timestampIST: response.data.timestamp_ist ?? null,
-      };
-    } catch {
-      return { count: 0, timestampIST: null };
-    }
-  },
-
   async getDeploymentInfo(): Promise<DeploymentInfoResponse> {
     try {
       const response = await apiClient.get<DeploymentInfoResponse>('/deployment/info');
@@ -837,6 +826,61 @@ export const dashboardAPI = {
     } catch (error) {
       console.error('Failed to fetch pro users', error);
       return { pro_users: 0, total_users: 0, pro_adoption_pct: 0 };
+    }
+  },
+
+  /** Daily series for one KPI, straight off the Metric API (gold rollups). */
+  async getMetricSeries(tenant: string, kpiId: string, days: number): Promise<{
+    kind: string; dates: string[]; fundamentals: Record<string, number[]>;
+  } | null> {
+    const end = new Date();
+    const start = new Date(end.getTime() - days * 86400000);
+    const iso = (d: Date) => d.toISOString().slice(0, 10);
+    try {
+      const r = await apiClient.get(
+        `/metric/kpi/series?tenant=${tenant}&kpi_id=${kpiId}&start=${iso(start)}&end=${iso(end)}`);
+      return r.data;
+    } catch (error) {
+      console.error(`Failed to fetch series for ${kpiId}`, error);
+      return null;
+    }
+  },
+
+  /** KPI ids the engine recorded an anomaly for, so a chart can mark a real movement. */
+  async getMovedKpis(tenants: string[], days?: number): Promise<Record<string, MovedWindow>> {
+    try {
+      // The window must be the one scored over the range on screen, or the shading marks a
+      // period the chart is not even showing.
+      const r = await apiClient.get<{ insights?: RawInsightWindow[] }>(
+        `/intelligence/insights?tenants=${encodeURIComponent(tenants.join(','))}`
+        + (days ? `&days=${days}` : ''));
+      const out: Record<string, MovedWindow> = {};
+      for (const i of r.data?.insights || []) {
+        if (!i.anomaly_id || !i.window_start) continue;
+        out[i.kpi_id] = {
+          // Dates only. The series is day-grain, so a timestamp would never match a tick.
+          start: String(i.window_start).slice(0, 10),
+          end: String(i.window_end || '').slice(0, 10),
+          direction: Number(i.direction ?? 0),
+          severity: String(i.severity || ''),
+          lower: i.band_lower == null ? undefined : Number(i.band_lower),
+          upper: i.band_upper == null ? undefined : Number(i.band_upper),
+        };
+      }
+      return out;
+    } catch {
+      return {};
+    }
+  },
+
+  /** KPI ids this persona may see. Hidden ones are never requested. */
+  async getVisibleKpis(tenants: string[], days: number, persona: string): Promise<string[]> {
+    try {
+      const r = await apiClient.get<KpiEnvelope>(
+        `/metrics/kpi?tenants=${tenants.join(',')}&days=${days}&persona=${encodeURIComponent(persona)}`);
+      return (r.data?.kpis || []).map((k) => k.kpi_id);
+    } catch {
+      return [];
     }
   },
 
@@ -944,12 +988,14 @@ export const dashboardAPI = {
   /** Ask the agent a question. Persona is resolved server-side; tenant scoping is a query param
    *  because RBACMiddleware reads tenant from the query string, not the body. */
   async askIntelligence(
-    tenants: string[], question: string, persona?: string,
+    tenants: string[], question: string, persona?: string, days?: number,
+    history?: ChatTurn[],
   ): Promise<AgentAnswer | null> {
     try {
       const response = await apiClient.post<AgentAnswer>(
         `/intelligence/ask?tenants=${encodeURIComponent(tenants.join(','))}`,
-        persona ? { question, persona } : { question });
+        { question, ...(persona ? { persona } : {}), ...(days ? { days } : {}),
+          ...(history?.length ? { history } : {}) });
       return response.data;
     } catch (error) {
       console.error('Failed to ask the intelligence agent', error);
@@ -994,6 +1040,8 @@ export const dashboardAPI = {
       onError?: (detail: string) => void;
     },
     signal?: AbortSignal,
+    days?: number,
+    history?: ChatTurn[],
   ): Promise<void> {
     const headers = { 'Content-Type': 'application/json', ...(await rbacHeaders()) };
     const url =
@@ -1001,7 +1049,9 @@ export const dashboardAPI = {
     const response = await fetch(url, {
       method: 'POST',
       headers,
-      body: JSON.stringify(persona ? { question, persona } : { question }),
+      body: JSON.stringify(
+        { question, ...(persona ? { persona } : {}), ...(days ? { days } : {}),
+          ...(history?.length ? { history } : {}) }),
       signal,
     });
     if (!response.ok || !response.body) {

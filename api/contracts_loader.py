@@ -40,12 +40,11 @@ KPI_REGISTRY: dict[str, KpiSpec] = {
     "kyc_completion_rate": KpiSpec(
         "kyc_completion_rate", "rate", ("kyc_started", "kyc_completed"),
         "silver.fact_loan_applications",
-        ("loan_type", "risk_segment", "region", "branch_code", "country"),
+        ("loan_type", "risk_segment", "region", "branch_code"),
         numerator="kyc_completed", denominator="kyc_started"),
     "loan_approval_volume": KpiSpec(
         "loan_approval_volume", "count", ("loans_approved", "principal_approved"),
-        "silver.fact_loan_applications",
-        ("loan_type", "risk_segment", "region", "branch_code", "country")),
+        "silver.fact_loan_applications", ("loan_type", "risk_segment", "region")),
     "revenue": KpiSpec(
         "revenue", "money", ("fee_revenue", "interest_accrued", "pro_revenue"),
         "silver.fact_transactions",
@@ -53,7 +52,7 @@ KPI_REGISTRY: dict[str, KpiSpec] = {
     "transaction_failure_rate": KpiSpec(
         "transaction_failure_rate", "rate", ("txn_total", "txn_failed"),
         "silver.fact_transactions",
-        ("channel", "txn_type", "mcc", "category", "region", "branch_code", "country"),
+        ("channel", "txn_type", "mcc", "region", "branch_code"),
         numerator="txn_failed", denominator="txn_total"),
 }
 

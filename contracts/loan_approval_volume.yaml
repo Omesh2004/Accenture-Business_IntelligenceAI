@@ -7,6 +7,18 @@ formula: count(applications where status = APPROVED)
 unit: count
 additivity: additive
 
+# How a person refers to this metric. Without these the agent cannot tell that
+# "new account opening" means signups, and answers about something else entirely.
+aliases:
+  - loan approvals
+  - loans approved
+  - approval volume
+  - lending volume
+  - loans
+  - lending
+  - approvals
+  - credit approvals
+
 grain:
   time: daily
   entity: application
@@ -29,28 +41,20 @@ identity:
   application_id: required
   customer_id: hashed
 
+# Addressed as (kpi_id, fundamental) against gold.kpi_daily -- see
+# docs/INTERFACES/kpi_rollups.md. The table/event forms are no longer supported.
 fundamentals:
-  - metric: loans_approved
-    table: fact_loan_applications
-    measure: "1"
-    aggregation: count
-    time_column: decided_at
-    filter:
-      status: APPROVED
+  - kpi_id: loan_approval_volume
+    fundamental: loans_approved
     additivity: additive
     engine_type: sql
-  - metric: principal_approved
-    table: fact_loan_applications
-    measure: principal_amount
-    aggregation: sum
-    time_column: decided_at
-    filter:
-      status: APPROVED
+  - kpi_id: loan_approval_volume
+    fundamental: principal_approved
     additivity: additive
     engine_type: sql
 
 dimensions:
-  allowed: [loan_type, region, country, branch_code, risk_segment]
+  allowed: [loan_type, risk_segment, region]
   max_depth: 2
   min_segment_volume: 10
   availability:
@@ -91,6 +95,9 @@ quality:
       signature: "loans_approved flat while kyc_started rises sharply"
       verdict: ambiguous
 
+# What a movement here is worth to the bank; Materiality ranks by it.
+strategic_weight: 0.85
+
 detection:
   direction: both
   band_source: robust_baseline
@@ -112,7 +119,10 @@ forecast:
 
 causal:
   enabled: true
-  evidence_rungs: [association, attribution, corroborated_cause]
+  # estimated_effect is reachable because this KPI counts an additive event over segments that
+  # give a control group. Localize names the treated cells, the unaffected cells give the trend
+  # they would have followed, and a placebo window tests that assumption before any claim.
+  evidence_rungs: [association, attribution, corroborated_cause, estimated_effect]
   interventions: [credit_policy_change, campaign, rate_change]
   control_dimensions: [loan_type, risk_segment]
   degrade_to: attribution

@@ -17,7 +17,7 @@
 import { createHash } from "crypto";
 
 import { prisma } from "../prisma";
-import { TEMPLATES, applyTemplates, type Template } from "./templates";
+import { TEMPLATES, applyTemplates, plantedTruth, type Template } from "./templates";
 
 // ── deterministic RNG ────────────────────────────────────────────────────────
 // Seeded so the same arguments rebuild the same bank. A dataset nobody can reproduce cannot be
@@ -298,12 +298,19 @@ function arg(name: string, fallback: string): string {
   generateFacts(plan)
     .then(async (w) => {
       console.log("written:", JSON.stringify(w));
+      // The answer key the gates score against: what was planted and what the engine is
+      // expected to conclude. A record of what ran cannot check anything.
       const fs = await import("fs");
       const path = await import("path");
-      const outDir = path.join(process.cwd(), "fixtures");
+      const outDir = process.env.FIXTURES_DIR || path.join(process.cwd(), "fixtures");
       if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
-      fs.writeFileSync(path.join(outDir, "planted_truth.json"), JSON.stringify({ plan: { ...plan, templates: templateNames }, written: w }, null, 2));
-      console.log(`wrote fixtures/planted_truth.json`);
+      fs.writeFileSync(path.join(outDir, "planted_truth.json"), JSON.stringify({
+        generated_at: new Date().toISOString(),
+        plan: { ...plan, templates: templateNames },
+        written: w,
+        planted: plantedTruth(plan.tenantId, plan.templates),
+      }, null, 2));
+      console.log(`wrote ${path.join(outDir, "planted_truth.json")}`);
       console.log(`took ${Math.round((Date.now() - started) / 1000)}s`);
       await prisma.$disconnect();
     })

@@ -19,7 +19,7 @@ import React, { memo, useCallback, useEffect, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { AnimatePresence, motion } from 'framer-motion';
 import { ArrowUp, MessageSquare, Sparkles } from 'lucide-react';
-import { dashboardAPI } from '@/lib/api';
+import { dashboardAPI, type ChatTurn } from '@/lib/api';
 import ChatSurface from './intel/ChatSurface';
 import Select from './intel/Select';
 import { EASE, FONT, INK } from './intel/theme';
@@ -30,10 +30,13 @@ function IntelligenceAsk({
   tenants,
   persona,
   onPersonaChange,
+  days,
 }: {
   tenants: string[];
   persona?: string;
   onPersonaChange?: (persona: string) => void;
+  /** The page range selector. The agent answers over this unless the question names a period. */
+  days?: number;
 }) {
   const [open, setOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(true);
@@ -84,18 +87,21 @@ function IntelligenceAsk({
         onError: (d: string) => void;
       },
       signal: AbortSignal,
+      history: ChatTurn[] = [],
     ) =>
       dashboardAPI
-        .streamIntelligence(tenants, question, active || undefined, handlers, signal)
+        .streamIntelligence(tenants, question, active || undefined, handlers, signal, days,
+                            history)
         .catch(async (err) => {
           if ((err as Error)?.name === 'AbortError') return;
           // Streaming is delivery, not the answer. If a proxy buffers SSE the batch route still
           // produces the identical payload, so a question is never lost to transport.
-          const result = await dashboardAPI.askIntelligence(tenants, question, active || undefined);
+          const result = await dashboardAPI.askIntelligence(
+            tenants, question, active || undefined, days, history);
           if (result) handlers.onAnswer(result);
           else handlers.onError('The agent could not be reached.');
         }),
-    [tenants, active],
+    [tenants, active, days],
   );
 
   const launch = (q: string) => {
