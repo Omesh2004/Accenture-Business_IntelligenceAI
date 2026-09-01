@@ -151,7 +151,18 @@ class Orchestrator:
         # is guarded by an absolute volume floor instead.
         kpi_volume = (self.metrics.fundamental_total(tenant_id, den_spec, window)
                       if den_spec else self.metrics.fundamental_total(tenant_id, spec, window))
-        det = detect.run(ctx, series.values(), band, kpi_volume, 0.0)
+        # The robust baseline needs history from BEFORE the window. series_values[:-n] is all
+        # inside it, so on a sustained shift the movement was compared against itself.
+        hist_window = Window(window.start - timedelta(days=config.BASELINE_DAYS), window.start)
+        try:
+            hist_series = (ratio_series(self.metrics, tenant_id, contract, hist_window)
+                           if contract.is_ratio
+                           else self.metrics.fundamental_series(tenant_id, spec, hist_window))
+            baseline_values = list(hist_series.values()) if hist_series else []
+        except Exception:
+            baseline_values = []
+        det = detect.run(ctx, series.values(), band, kpi_volume, 0.0,
+                         baseline_values=baseline_values)
         self._record_run(ctx, "detect", "stats", t0, inputs=series.values())
 
         if not det.fired:
@@ -301,4 +312,26 @@ class Orchestrator:
             if res.get("anomaly"):
                 opened[contract.id] = res["anomaly"]
             results.append(res)
+
+        self._apply_fdr(results)
         return results
+
+    @staticmethod
+    def _apply_fdr(results: list[dict]) -> None:
+        """Benjamini-Hochberg across the KPIs tested together.
+
+        Testing five series at once manufactures alarms; a KPI that only looks unlikely because
+        several were tried is marked suppressed_fdr rather than surfaced.
+        """
+        found = [r for r in results if r.get("anomaly")]
+        if len(found) < 2:
+            return
+        keep = detect.benjamini_hochberg([float(r["anomaly"].get("p_value", 1.0)) for r in found])
+        for r, survives in zip(found, keep):
+            if survives:
+                continue
+            r["anomaly"]["status"] = "suppressed_fdr"
+            try:
+                store.write_anomaly(r["anomaly"])
+            except Exception:
+                logger.exception("could not record FDR suppression for %s", r.get("kpi_id"))

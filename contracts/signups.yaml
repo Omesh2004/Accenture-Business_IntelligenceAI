@@ -34,16 +34,16 @@ identity:
   account_no: required
   customer_id: hashed
 
+# Addressed as (kpi_id, fundamental) against gold.kpi_daily -- see
+# docs/INTERFACES/kpi_rollups.md. The table/event forms are no longer supported.
 fundamentals:
-  - metric: accounts_opened
-    table: fact_account_openings
-    measure: "1"
-    aggregation: count
+  - kpi_id: signups
+    fundamental: accounts_opened
     additivity: additive
     engine_type: sql
 
 dimensions:
-  allowed: [account_type, region, country, branch_code]
+  allowed: [account_type, branch_code, region, country]
   max_depth: 2
   min_segment_volume: 10
   availability:

@@ -57,17 +57,20 @@ class Contract:
         return out
 
     def _ratio_parts(self) -> list[dict]:
-        """Fundamentals in declaration order: clickstream form, or fact form for a ratio.
+        """Numerator then denominator, for a ratio contract.
 
-        Recognising only the `event` form (bug audit A5) left every fact-based ratio --
-        digital_adoption_rate, loan_approval_rate -- reporting is_ratio False, so Detect scored
-        their numerator count and a rate that fell was published as an urgent rise. Fact-based
-        NON-ratio contracts keep returning nothing, so their volume guard is unchanged.
+        Order comes from an explicit `role:` where declared, otherwise declaration order.
+        Getting this wrong makes a rate score its own numerator, so a rate that halved while
+        volume grew reads as a rise.
         """
-        events = [x for x in self.fundamentals if x.get("event") or x.get("events")]
-        if events or self.raw.get("unit") != "ratio":
-            return events
-        return [x for x in self.fundamentals if x.get("table")]
+        if self.raw.get("unit") != "ratio":
+            return []
+        funds = self.fundamentals
+        num = [x for x in funds if x.get("role") == "numerator"]
+        den = [x for x in funds if x.get("role") == "denominator"]
+        if num and den:
+            return [num[0], den[0]]
+        return funds[:2]
 
     @property
     def is_ratio(self) -> bool:

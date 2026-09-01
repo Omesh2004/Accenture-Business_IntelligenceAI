@@ -43,6 +43,8 @@ NON_DIMENSION_KEYS = set(_list(
 
 # --- detect -----------------------------------------------------------------
 MATERIALITY_FLOOR = _f("INTEL_MATERIALITY_FLOOR", 0.15)
+# Share of the recent window that must move the same way for a change point.
+LEVEL_SHIFT_MIN = _f("INTEL_LEVEL_SHIFT_MIN", 0.75)
 # Absolute events a KPI must carry in the window before a breach is worth investigating.
 MIN_KPI_VOLUME = _f("INTEL_MIN_KPI_VOLUME", 20)
 SEVERITY_WARN = _f("INTEL_SEVERITY_WARN", 0.40)

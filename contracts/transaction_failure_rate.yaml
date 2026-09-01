@@ -29,25 +29,23 @@ identity:
   txn_id: required
   customer_id: hashed
 
+# Addressed as (kpi_id, fundamental) against gold.kpi_daily -- see
+# docs/INTERFACES/kpi_rollups.md. The table/event forms are no longer supported.
 fundamentals:
-  - metric: txn_failed
-    table: fact_transactions
-    measure: "1"
-    aggregation: count
-    filter:
-      status: FAILED
+  - kpi_id: transaction_failure_rate
+    fundamental: txn_failed
     additivity: additive
     engine_type: sql
-  - metric: txn_total
-    table: fact_transactions
-    measure: "1"
-    aggregation: count
+    role: numerator
+  - kpi_id: transaction_failure_rate
+    fundamental: txn_total
     additivity: additive
     engine_type: sql
+    role: denominator
 
 dimensions:
   # All measured columns on the transaction itself.
-  allowed: [channel, txn_type, mcc, category, region, country, branch_code]
+  allowed: [channel, txn_type, mcc, region, branch_code]
   max_depth: 2
   min_segment_volume: 50
   availability:

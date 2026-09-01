@@ -74,11 +74,12 @@ def write_anomaly(r: dict) -> int:
         "anomalies",
         ["anomaly_id", "investigation_id", "tenant_id", "kpi_id", "detected_at", "window_start",
          "window_end", "method", "direction", "magnitude", "baseline", "observed", "forecast_id",
-         "materiality", "severity", "status", "engine_type"],
+         "materiality", "p_value", "severity", "status", "engine_type"],
         [[r["anomaly_id"], r["investigation_id"], r["tenant_id"], r["kpi_id"], r["detected_at"],
           r["window_start"], r["window_end"], r["method"], int(r["direction"]),
           round6(r["magnitude"]), round6(r["baseline"]), round6(r["observed"]),
-          r.get("forecast_id", ""), round6(r["materiality"]), r["severity"],
+          r.get("forecast_id", ""), round6(r["materiality"]),
+          round6(float(r.get("p_value", 1.0))), r["severity"],
           r.get("status", "open"), r.get("engine_type", "stats")]],
     )
 

@@ -37,25 +37,23 @@ identity:
   application_id: required
   customer_id: hashed
 
+# Addressed as (kpi_id, fundamental) against gold.kpi_daily -- see
+# docs/INTERFACES/kpi_rollups.md. The table/event forms are no longer supported.
 fundamentals:
-  - metric: kyc_completed
-    table: fact_loan_applications
-    measure: "1"
-    aggregation: count
-    filter:
-      kyc_step: 3
+  - kpi_id: kyc_completion_rate
+    fundamental: kyc_completed
     additivity: additive
     engine_type: sql
-  - metric: kyc_started
-    table: fact_loan_applications
-    measure: "1"
-    aggregation: count
+    role: numerator
+  - kpi_id: kyc_completion_rate
+    fundamental: kyc_started
     additivity: additive
     engine_type: sql
+    role: denominator
 
 dimensions:
   # Every one is a measured column on the fact, not a per-session fabrication.
-  allowed: [region, country, branch_code, risk_segment, loan_type]
+  allowed: [loan_type, risk_segment, region, branch_code]
   max_depth: 2
   min_segment_volume: 15
   availability:

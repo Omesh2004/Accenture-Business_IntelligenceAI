@@ -46,32 +46,24 @@ identity:
 # Computed by pipeline/transforms/gold_kpi.py into gold.kpi_daily. These are not single-table
 # aggregations -- fee_revenue is a priced join -- so the spec describes the derivation rather
 # than pretending it is one SELECT.
+# Addressed as (kpi_id, fundamental) against gold.kpi_daily -- see
+# docs/INTERFACES/kpi_rollups.md. The table/event forms are no longer supported.
 fundamentals:
-  - metric: fee_revenue
-    derivation: >
-      SUCCESS fact_transactions joined to dim_fee_schedule on (txn_type, channel) within the
-      rule's validity dates: sum(fee_flat + amount * fee_pct).
-    source_tables: [fact_transactions, dim_fee_schedule]
-    time_column: occurred_at
+  - kpi_id: revenue
+    fundamental: fee_revenue
     additivity: additive
     engine_type: sql
-  - metric: interest_accrued
-    derivation: >
-      Flat daily accrual, not amortised: for each day, sum over APPROVED applications decided on
-      or before that day of principal_amount * (interest_rate / 100) / 365.
-    source_tables: [fact_loan_applications]
-    time_column: decided_at
+  - kpi_id: revenue
+    fundamental: interest_accrued
     additivity: additive
     engine_type: sql
-  - metric: pro_revenue
-    derivation: "SUCCESS fact_transactions where txn_type = 'PRO_LICENSE_FEE': sum(amount)."
-    source_tables: [fact_transactions]
-    time_column: occurred_at
+  - kpi_id: revenue
+    fundamental: pro_revenue
     additivity: additive
     engine_type: sql
 
 dimensions:
-  allowed: [channel, txn_type, mcc, category, region, country, branch_code]
+  allowed: [channel, txn_type, mcc, region, branch_code]
   max_depth: 2
   min_segment_volume: 50
   availability:

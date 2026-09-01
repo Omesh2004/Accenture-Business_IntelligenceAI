@@ -5,6 +5,7 @@ median/MAD: a fresh anomaly contaminates a mean-based baseline and hides itself.
 """
 from __future__ import annotations
 
+import math
 import statistics
 from dataclasses import dataclass
 
@@ -20,6 +21,7 @@ class DetectResult:
     reason: str = ""
     anomaly: dict | None = None
     materiality: float = 0.0
+    p_value: float = 1.0
 
 
 def benjamini_hochberg(pvalues: list[float], alpha: float | None = None) -> list[bool]:
@@ -38,6 +40,24 @@ def benjamini_hochberg(pvalues: list[float], alpha: float | None = None) -> list
         if rank <= largest:
             keep[idx] = True
     return keep
+
+
+def z_to_p(z: float) -> float:
+    """Two-sided normal tail. Detect needs a p-value so FDR can be applied across the sweep."""
+    return max(1e-12, math.erfc(abs(z) / math.sqrt(2.0)))
+
+
+def level_shift(recent: list[float], history: list[float]) -> float:
+    """Share of the recent window sitting on one side of the historical median.
+
+    A single spike is not a change point. 1.0 means every recent point moved the same way.
+    """
+    if not recent or not history:
+        return 0.0
+    med = statistics.median(history)
+    above = sum(1 for v in recent if v > med)
+    below = sum(1 for v in recent if v < med)
+    return max(above, below) / len(recent)
 
 
 def robust_z(value: float, history: list[float]) -> float:
@@ -88,7 +108,7 @@ def severity_for(score: float) -> str:
 
 
 def run(ctx, series_values: list[float], band: dict | None, kpi_volume: float,
-        tenant_volume: float) -> DetectResult:
+        tenant_volume: float, baseline_values: list[float] | None = None) -> DetectResult:
     cfg = ctx.contract.detection
     min_windows = max(1, int(cfg.get("min_persistence_windows", 2)))
     critical_pct = float(cfg.get("critical_pct_change", 20))
@@ -108,18 +128,28 @@ def run(ctx, series_values: list[float], band: dict | None, kpi_volume: float,
 
     observed = float(statistics.median(recent))
 
+    # Robust baseline always runs; the forecast band corroborates it when one exists. Firing on
+    # the band alone let a narrow band call any wobble an anomaly.
+    # Prefer pre-window history; fall back to the in-window head when there is none.
+    robust_history = baseline_values or history
+    z = robust_z(observed, robust_history)
+    robust_hit = abs(z) >= config.ROBUST_Z_THRESHOLD
     if band and band.get("lower") is not None:
         baseline = float(band.get("point") or statistics.median(history))
         lower, upper = float(band["lower"]), float(band["upper"])
         breaching = sum(1 for v in recent if v < lower or v > upper)
-        outside = observed < lower or observed > upper
-        method = "forecast_band"
+        outside = (observed < lower or observed > upper) and robust_hit
+        method = "forecast_band+mad"
     else:
         baseline = float(statistics.median(history))
         breaching = sum(1 for v in recent
-                        if abs(robust_z(v, history)) >= config.ROBUST_Z_THRESHOLD)
-        outside = abs(robust_z(observed, history)) >= config.ROBUST_Z_THRESHOLD
+                        if abs(robust_z(v, robust_history)) >= config.ROBUST_Z_THRESHOLD)
+        outside = robust_hit
         method = "mad"
+
+    # A change point, not a one-day spike.
+    if outside and level_shift(recent, robust_history) < config.LEVEL_SHIFT_MIN:
+        return DetectResult(False, "not_a_level_shift")
 
     if not outside:
         return DetectResult(False, "within_band")
@@ -153,6 +183,7 @@ def run(ctx, series_values: list[float], band: dict | None, kpi_volume: float,
         "baseline": round6(baseline),
         "observed": round6(observed),
         "forecast_id": (band or {}).get("forecast_id", ""),
+        "p_value": round6(z_to_p(z)),
         "materiality": score,
         "severity": severity_for(strength(observed, baseline, critical_pct,
                                           breaching, min_windows)),

@@ -29,28 +29,20 @@ identity:
   application_id: required
   customer_id: hashed
 
+# Addressed as (kpi_id, fundamental) against gold.kpi_daily -- see
+# docs/INTERFACES/kpi_rollups.md. The table/event forms are no longer supported.
 fundamentals:
-  - metric: loans_approved
-    table: fact_loan_applications
-    measure: "1"
-    aggregation: count
-    time_column: decided_at
-    filter:
-      status: APPROVED
+  - kpi_id: loan_approval_volume
+    fundamental: loans_approved
     additivity: additive
     engine_type: sql
-  - metric: principal_approved
-    table: fact_loan_applications
-    measure: principal_amount
-    aggregation: sum
-    time_column: decided_at
-    filter:
-      status: APPROVED
+  - kpi_id: loan_approval_volume
+    fundamental: principal_approved
     additivity: additive
     engine_type: sql
 
 dimensions:
-  allowed: [loan_type, region, country, branch_code, risk_segment]
+  allowed: [loan_type, risk_segment, region]
   max_depth: 2
   min_segment_volume: 10
   availability:
