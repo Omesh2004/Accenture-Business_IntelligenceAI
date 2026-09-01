@@ -48,7 +48,13 @@ class Contract:
 
     @property
     def fundamentals(self) -> list[dict]:
-        return self.raw.get("fundamentals") or []
+        # The Metric API addresses a fundamental as (kpi_id, fundamental); the YAML only names
+        # `metric`. Stamp both on so every caller can pass a spec straight through.
+        out = []
+        for f in (self.raw.get("fundamentals") or []):
+            out.append({**f, "kpi_id": self.id,
+                        "fundamental": f.get("fundamental") or f.get("metric", "")})
+        return out
 
     def _ratio_parts(self) -> list[dict]:
         """Fundamentals in declaration order: clickstream form, or fact form for a ratio.
