@@ -952,8 +952,10 @@ function AgentConsole({
               : undefined
           }
         >
-          <GateRail gates={gates} active={active} pad={pad} />
-          <Reasoning steps={steps} running={running} pending={pending} showHeader={!embedded} />
+          {!embedded && <GateRail gates={gates} active={active} pad={pad} />}
+          {(!embedded || running) && (
+            <Reasoning steps={steps} running={running} pending={pending} showHeader={!embedded} />
+          )}
 
           {toolSteps.length > 0 && (
             <section className={`${pad} pt-5`}>

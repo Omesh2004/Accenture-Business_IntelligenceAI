@@ -199,6 +199,11 @@ function AssistantTurn({
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.4, ease: EASE }}
         >
+          <details className="group mt-3 rounded-xl border border-gray-200 bg-white">
+            <summary className="cursor-pointer select-none px-4 py-2.5 text-xs tracking-[0.08em] uppercase text-gray-500 hover:text-gray-700">
+              How this answer was derived
+            </summary>
+            <div className="border-t border-gray-100">
           <AgentConsole
             gates={answer.rail || []}
             steps={answer.trace || []}
@@ -214,6 +219,8 @@ function AssistantTurn({
             kpiName={answer.kpi_id?.replace(/_/g, ' ') || ''}
             embedded
           />
+            </div>
+          </details>
         </motion.div>
       )}
 
