@@ -134,38 +134,23 @@ export function useDashboardData(persona?: string) {
     queryFn: async () => {
       const [
         kpiMetrics,
-        secondaryKpiMetrics,
         trafficData,
-        topFeatures,
         funnelData,
         tenants,
-        realTimeUsersData,
-        dimensionProvenance,
       ] = await Promise.all([
         dashboardAPI.getKPIMetrics(tenantsParam, rangeParam, persona),
-        dashboardAPI.getSecondaryKPIMetrics(tenantsParam, rangeParam),
         dashboardAPI.getTrafficData(tenantsParam, rangeParam),
-        dashboardAPI.getTopFeatures(tenantsParam, rangeParam),
         dashboardAPI.getFunnelData(tenantsParam, rangeParam),
         dashboardAPI.getTenants(tenantsParam, rangeParam),
-        dashboardAPI.getRealTimeUsers(tenantsParam),
         // Same gate as locations/devices: it describes those charts, so it must not be
         // reachable where they are not.
-        mayReadDetailedAnalytics
-          ? dashboardAPI.getDimensionProvenance(tenantsParam, rangeParam)
-          : Promise.resolve({} as Record<string, DimensionProvenance>),
       ]);
 
       return {
         kpiMetrics,
-        secondaryKpiMetrics,
         trafficData,
-        topFeatures,
         funnelData,
         tenants,
-        realTimeUsers: realTimeUsersData.count,
-        realTimeUsersTimestampIST: realTimeUsersData.timestampIST ?? null,
-        dimensionProvenance,
       };
     },
     // Keep data responsive while avoiding noisy re-fetching.
@@ -247,14 +232,9 @@ export function useDashboardData(persona?: string) {
     rangeParam,
     // React Query data
     kpiMetrics: dashboardData?.kpiMetrics || [],
-    secondaryKpiMetrics: dashboardData?.secondaryKpiMetrics || [],
     trafficData: dashboardData?.trafficData || [],
-    topFeatures: dashboardData?.topFeatures || [],
     funnelData: dashboardData?.funnelData || [],
     tenants: dashboardData?.tenants || [],
-    realTimeUsers: dashboardData?.realTimeUsers || 0,
-    realTimeUsersTimestampIST: dashboardData?.realTimeUsersTimestampIST || null,
-    dimensionProvenance: dashboardData?.dimensionProvenance || {},
     persona,
     aiInsights: aiInsightsData || [],
     isLoading,
@@ -266,7 +246,7 @@ export function useDashboardData(persona?: string) {
 }
 
 export function useAIInsights() {
-  const { funnelData = [], topFeatures = [] } = useDashboardData();
+  const { funnelData = [] } = useDashboardData();
 
   const generateInsights = useCallback(() => {
     const insights: string[] = [];
@@ -277,13 +257,9 @@ export function useAIInsights() {
       }
     });
 
-    if (topFeatures.length > 0) {
-      const topFeature = topFeatures[0];
-      insights.push(`${topFeature.name} leads with ${topFeature.value.toLocaleString()} events`);
-    }
 
     return insights;
-  }, [funnelData, topFeatures]);
+  }, [funnelData]);
 
   return { generateInsights };
 }

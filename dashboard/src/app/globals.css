@@ -14,30 +14,30 @@
    indigo accent instead of fighting it. Lightness steps are unchanged, so every existing
    foreground/background pairing keeps the contrast it was designed with. */
 @theme {
-  --color-slate-50:  #f7f8fa;
-  --color-slate-100: #eff1f5;
-  --color-slate-200: #e7e8ef;
-  --color-slate-300: #d6d8e3;
-  --color-slate-400: #8b8fa3;
-  --color-slate-500: #6b7085;
-  --color-slate-600: #4a4d5e;
-  --color-slate-700: #33364a;
-  --color-slate-800: #1f2233;
-  --color-slate-900: #12131a;
-  --color-slate-950: #0a0b11;
+  --color-slate-50: #faf8fd;
+  --color-slate-100: #f3eff9;
+  --color-slate-200: #e8e2f1;
+  --color-slate-300: #d3cae3;
+  --color-slate-400: #8d86a1;
+  --color-slate-500: #6c6581;
+  --color-slate-600: #4b4661;
+  --color-slate-700: #342f49;
+  --color-slate-800: #201c34;
+  --color-slate-900: #141020;
+  --color-slate-950: #0a0714;
 
   /* Gray is used interchangeably with slate across the codebase; keeping them in step stops a
      card border and the divider inside it being two different greys. */
-  --color-gray-50:  #f7f8fa;
-  --color-gray-100: #eff1f5;
-  --color-gray-200: #e7e8ef;
-  --color-gray-300: #d6d8e3;
-  --color-gray-400: #8b8fa3;
-  --color-gray-500: #6b7085;
-  --color-gray-600: #4a4d5e;
-  --color-gray-700: #33364a;
-  --color-gray-800: #1f2233;
-  --color-gray-900: #12131a;
+  --color-gray-50: #faf8fd;
+  --color-gray-100: #f3eff9;
+  --color-gray-200: #e8e2f1;
+  --color-gray-300: #d3cae3;
+  --color-gray-400: #8d86a1;
+  --color-gray-500: #6c6581;
+  --color-gray-600: #4b4661;
+  --color-gray-700: #342f49;
+  --color-gray-800: #201c34;
+  --color-gray-900: #141020;
 }
 
 /* The accent. `#1a73e8` is written as a Tailwind ARBITRARY value in ~120 places
@@ -45,9 +45,15 @@
    `@theme` — it compiles to a literal. Overriding the generated classes is the only way to move
    them without touching every call site, and it keeps the migration in one reversible block. */
 :root {
-  --accent: #4338ca;
-  --accent-strong: #3730a3;
-  --accent-soft: #eef0fd;
+  /* Accenture: core purple #A100FF, deepening to #7500C0 and #460073. The deep violet carries
+     large areas -- the bright purple is a highlight, and reads as neon if it fills a panel. */
+  --accent: #7500c0;
+  --accent-strong: #460073;
+  --accent-bright: #a100ff;
+  --accent-soft: #f4ecff;
+  --accent-line: #e3d4f7;
+  --accent-grad: linear-gradient(120deg, #a100ff 0%, #7500c0 55%, #460073 100%);
+  --shadow-violet: 0 14px 34px -14px rgb(70 0 115 / 0.28), 0 4px 12px -8px rgb(70 0 115 / 0.20);
 }
 
 .bg-\[\#1a73e8\]      { background-color: var(--accent) !important; }
@@ -479,4 +485,18 @@ h1.ui-label, h2.ui-label, h3.ui-label, h4.ui-label,
   }
   .lift { transition: none; }
   .lift:hover { transform: none; }
+}
+
+/* Anything clickable says so. Missing this is the cheapest way to look unfinished. */
+button:not(:disabled),
+[role="button"]:not([aria-disabled="true"]),
+summary,
+label[for],
+select,
+a[href] {
+  cursor: pointer;
+}
+button:disabled,
+[aria-disabled="true"] {
+  cursor: not-allowed;
 }

@@ -82,7 +82,7 @@ export default function PersonaLens({
         <div>
           <span className="eyebrow">Withheld</span>
           <p style={{ fontSize: 'var(--step-0)' }} className={lens.hides.length ? 'text-red-700' : 'text-gray-500'}>
-            {lens.hides.length ? `${lens.hides.join(', ')} — removed before the answer is built` : 'Nothing'}
+            {lens.hides.length ? `${lens.hides.join(', ')}: removed before the answer is built` : 'Nothing'}
           </p>
         </div>
       </div>

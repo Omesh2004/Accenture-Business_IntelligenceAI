@@ -487,18 +487,6 @@ export const dashboardAPI = {
       return [];
     }
   },
-
-  async getSecondaryKPIMetrics(tenants: string[], range: string): Promise<KPIMetric[]> {
-    try {
-      const response = await apiClient.get<KPIMetric[]>(`/metrics/secondary_kpi?tenants=${tenants.join(',')}&range=${range}`);
-      return response.data;
-    } catch (error) {
-      console.error('Failed to fetch Secondary KPI metrics', error);
-      return [];
-    }
-  },
-
-  /** Fetch traffic overview time series data */
   async getTrafficData(tenants: string[], range: string): Promise<TimeSeriesDataPoint[]> {
     try {
       const days = Number(String(range).replace(/[^0-9]/g, '')) || 30;
@@ -519,22 +507,6 @@ export const dashboardAPI = {
       return [];
     }
   },
-
-  async getTopFeatures(tenants: string[], range: string): Promise<BarDataPoint[]> {
-    try {
-      const response = await apiClient.get<{ usage: BackendFeatureUsageItem[] }>(`/features/usage?tenants=${tenants.join(',')}&range=${range}`);
-      const backendUsage = response.data.usage || [];
-      return backendUsage.map((item: BackendFeatureUsageItem) => ({
-        name: item.event_name,
-        value: item.total_interactions,
-      }));
-    } catch (error) {
-      console.error('Failed to fetch top features from backend', error);
-      return [];
-    }
-  },
-
-  /** Fetch user journey funnel data using backend /funnels endpoint */
   async getFunnelData(tenants: string[], range: string): Promise<FunnelStep[]> {
     try {
       const { APP_REGISTRY } = await import('./feature-map');
@@ -584,7 +556,9 @@ export const dashboardAPI = {
 
       const steps = mergedSteps.length >= 2 ? mergedSteps.join(',') : fallbackSteps.join(',');
       
-      const response = await apiClient.get<{ funnel: BackendFunnelStep[] }>(`/funnels?tenants=${encodeURIComponent(tenants.join(','))}&steps=${encodeURIComponent(steps)}&window_minutes=60&range=${range}`);
+      const days = Number(String(range).replace(/[^0-9]/g, '')) || 30;
+      const response = await apiClient.get<{ stages?: BackendFunnelStep[]; funnel?: BackendFunnelStep[] }>(
+        `/funnels?tenants=${encodeURIComponent(tenants.join(','))}&days=${days}&funnel_id=kyc_funnel`);
       const funnel = response.data.funnel || [];
       
       return funnel.map((step: BackendFunnelStep) => ({
@@ -644,7 +618,7 @@ export const dashboardAPI = {
     for (let attempt = 0; attempt < 2; attempt++) {
       try {
         const response = await apiClient.get<{ insights: BackendInsight[] }>(
-          `/insights?tenants=${tenants.join(',')}&range=${range}`,
+          `/intelligence/insights?tenants=${encodeURIComponent(tenants.join(','))}`,
           { timeout: 15000 }
         );
         
@@ -805,19 +779,6 @@ export const dashboardAPI = {
     }
   },
 
-  /** Fetch real-time active user count (returns count + IST timestamp) */
-  async getRealTimeUsers(tenants: string[]): Promise<{ count: number; timestampIST: string | null }> {
-    try {
-      const response = await apiClient.get<{ count: number; timestamp_ist: string | null; timezone: string }>(`/metrics/realtime_users?tenants=${tenants.join(',')}`);
-      return {
-        count: response.data.count ?? 0,
-        timestampIST: response.data.timestamp_ist ?? null,
-      };
-    } catch {
-      return { count: 0, timestampIST: null };
-    }
-  },
-
   async getDeploymentInfo(): Promise<DeploymentInfoResponse> {
     try {
       const response = await apiClient.get<DeploymentInfoResponse>('/deployment/info');
@@ -868,6 +829,34 @@ export const dashboardAPI = {
     } catch (error) {
       console.error('Failed to fetch pro users', error);
       return { pro_users: 0, total_users: 0, pro_adoption_pct: 0 };
+    }
+  },
+
+  /** Daily series for one KPI, straight off the Metric API (gold rollups). */
+  async getMetricSeries(tenant: string, kpiId: string, days: number): Promise<{
+    kind: string; dates: string[]; fundamentals: Record<string, number[]>;
+  } | null> {
+    const end = new Date();
+    const start = new Date(end.getTime() - days * 86400000);
+    const iso = (d: Date) => d.toISOString().slice(0, 10);
+    try {
+      const r = await apiClient.get(
+        `/metric/kpi/series?tenant=${tenant}&kpi_id=${kpiId}&start=${iso(start)}&end=${iso(end)}`);
+      return r.data;
+    } catch (error) {
+      console.error(`Failed to fetch series for ${kpiId}`, error);
+      return null;
+    }
+  },
+
+  /** KPI ids this persona may see. Hidden ones are never requested. */
+  async getVisibleKpis(tenants: string[], days: number, persona: string): Promise<string[]> {
+    try {
+      const r = await apiClient.get<KpiEnvelope>(
+        `/metrics/kpi?tenants=${tenants.join(',')}&days=${days}&persona=${encodeURIComponent(persona)}`);
+      return (r.data?.kpis || []).map((k) => k.kpi_id);
+    } catch {
+      return [];
     }
   },
 

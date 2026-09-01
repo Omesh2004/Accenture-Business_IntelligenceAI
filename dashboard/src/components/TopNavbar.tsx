@@ -335,66 +335,6 @@ function TopNavbar() {
           </div>
         </div>
 
-        {/* Data Sync & Transparency */}
-        <div className="hidden md:flex relative" ref={transparencyRef}>
-          <button
-            onClick={handleTransparencyClick}
-            className="flex items-center gap-3 px-3 py-2.5 cursor-pointer rounded-md text-xs font-medium transition-all duration-200 border border-gray-200 bg-white hover:bg-gray-100 text-gray-700 shadow-sm"
-          >
-            <span className='italic'>Data Sync &amp; Transparency</span>
-          </button>
-
-          {showTransparency && (
-            <div className="absolute right-0 top-10 w-80 bg-white border border-gray-200 rounded-lg shadow-lg py-2 z-50 animate-in fade-in slide-in-from-top-2 duration-150">
-              <div className="px-4 py-3 border-b border-gray-100 flex justify-between items-center">
-                <h3 className="text-sm font-bold text-gray-900">Cloud Sync Status</h3>
-                <div
-                  className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${deploymentMode === 'cloud'
-                      ? 'bg-blue-100 text-blue-800'
-                      : 'bg-orange-100 text-orange-800'
-                    }`}
-                >
-                  {deploymentMode === 'cloud' ? 'Cloud Mode' : 'On-Prem Mode'}
-                </div>
-              </div>
-
-              <div className="p-4">
-                {transparencyLoading ? (
-                  <div className="flex items-center justify-center gap-2 py-4 text-sm text-gray-500">
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Loading transparency data…
-                  </div>
-                ) : transparencyData ? (
-                  <div className="space-y-4">
-                    <p className="text-xs text-gray-600 bg-gray-100 p-2 rounded border border-gray-100 font-medium">
-                      {transparencyData.message}
-                    </p>
-                    <div className="space-y-3">
-                      {transparencyData.visible_categories.map((cat, ix) => (
-                        <div key={ix} className="text-xs">
-                          <div className="flex items-center gap-2 mb-1">
-                            <span
-                              className={`w-2 h-2 rounded-full ${cat.is_synced ? 'bg-blue-500' : 'bg-gray-500'
-                                }`}
-                            />
-                            <strong
-                              className={cat.is_synced ? 'text-blue-900' : 'text-gray-500'}
-                            >
-                              {cat.category}
-                            </strong>
-                          </div>
-                          <p className="text-gray-500 line-clamp-2 pl-4">{cat.details}</p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="text-sm text-center py-4 text-gray-500">Data unavailable.</div>
-                )}
-              </div>
-            </div>
-          )}
-        </div>
 
         {/* Right Section: Search + Profile */}
         <div className="flex items-center gap-4">

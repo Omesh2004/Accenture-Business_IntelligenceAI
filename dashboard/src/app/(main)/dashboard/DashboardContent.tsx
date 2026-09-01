@@ -18,7 +18,6 @@ export default function DashboardContent() {
   const {
     isLoading,
     kpiMetrics,
-    secondaryKpiMetrics,
     trafficData,
     aiInsights,
     funnelData,
@@ -60,14 +59,6 @@ export default function DashboardContent() {
 
       <section className="reveal" id="insights-section" aria-label="AI Insights">
         <AIInsightsPanel insights={aiInsights} />
-      </section>
-
-      <section id="secondary-kpi-section" aria-label="Secondary Metrics">
-        <div className="reveal-stagger grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-          {secondaryKpiMetrics.map((metric) => (
-            <KPICard key={metric.id} metric={metric} />
-          ))}
-        </div>
       </section>
     </div>
   );

@@ -10,7 +10,7 @@ import React, { useEffect, useState } from 'react';
 import {
   Area, AreaChart, CartesianGrid, ReferenceArea, ResponsiveContainer, Tooltip, XAxis, YAxis,
 } from 'recharts';
-import { API_BASE_URL, rbacHeaders } from '@/lib/api';
+import { dashboardAPI } from '@/lib/api';
 
 const KPIS = [
   { id: 'signups', label: 'New Account Signups', unit: 'count' },
@@ -73,33 +73,14 @@ export default function KpiTrends(
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const end = new Date();
-      const start = new Date(end.getTime() - days * 86400000);
-      const iso = (d: Date) => d.toISOString().slice(0, 10);
-      const headers = await rbacHeaders();
+      const visible = await dashboardAPI.getVisibleKpis([tenant], days, persona);
+      const allowed = visible.length ? visible : KPIS.map((k) => k.id);
       const out: Record<string, Series> = {};
-      // Ask the server which KPIs this persona may see, so a hidden one is never
-      // requested rather than requested and hidden.
-      let visible: string[] = KPIS.map((k) => k.id);
-      try {
-        const r = await fetch(
-          `${API_BASE_URL}/metrics/kpi?tenants=${tenant}&days=${days}&persona=${persona}`,
-          { headers });
-        if (r.ok) {
-          const d = await r.json();
-          if (Array.isArray(d?.kpis)) visible = d.kpis.map((x: { kpi_id: string }) => x.kpi_id);
-        }
-      } catch { /* fall back to all five */ }
-      await Promise.all(KPIS.filter((k) => visible.includes(k.id)).map(async (k) => {
-        try {
-          const res = await fetch(
-            `${API_BASE_URL}/metric/kpi/series?tenant=${tenant}&kpi_id=${k.id}` +
-            `&start=${iso(start)}&end=${iso(end)}`, { headers });
-          if (!res.ok) return;
-          const d = await res.json();
-          const points = toPoints(d, k.unit);
-          out[k.id] = { points, kind: d.kind, anomalyFrom: anomalyStart(points) };
-        } catch { /* a missing series renders as an empty card, never a crash */ }
+      await Promise.all(KPIS.filter((k) => allowed.includes(k.id)).map(async (k) => {
+        const d = await dashboardAPI.getMetricSeries(tenant, k.id, days);
+        if (!d) return;
+        const points = toPoints(d, k.unit);
+        out[k.id] = { points, kind: d.kind, anomalyFrom: anomalyStart(points) };
       }));
       if (!cancelled) setSeries(out);
     })();
@@ -108,8 +89,7 @@ export default function KpiTrends(
 
   return (
     <div className="reveal-stagger grid grid-cols-1 lg:grid-cols-2 gap-4">
-      {KPIS.filter((k) => series[k.id] !== undefined || Object.keys(series).length === 0)
-        .map((k) => {
+      {KPIS.filter((k) => series[k.id] !== undefined).map((k) => {
         const s = series[k.id];
         const pts = s?.points || [];
         const last = pts.length ? pts[pts.length - 1].value : 0;
@@ -119,7 +99,7 @@ export default function KpiTrends(
             <div className="flex items-baseline justify-between mb-3">
               <span className="eyebrow">{k.label}</span>
               <span className="num text-gray-900" style={{ fontSize: 'var(--step-1)', fontWeight: 600 }}>
-                {pts.length ? fmt(k.unit, last) : '—'}
+                {pts.length ? fmt(k.unit, last) : 'No data'}
               </span>
             </div>
             <div style={{ height: 132 }}>
