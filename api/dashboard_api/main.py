@@ -19,7 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from api.metric_api.main import router as metric_router, tenant_ok, KNOWN_TENANTS
 from api.metric_api import reads
-from api.contracts_loader import all_kpi_ids, KPI_REGISTRY
+from api.contracts_loader import all_kpi_ids, KPI_REGISTRY, load_declared
 from api.middleware import resolve_persona, selectable_personas, filter_revenue, hidden_kpis
 from api.schemas import OutcomeRequest, AskRequest
 
@@ -67,14 +67,20 @@ def dashboard_kpis(request: Request,
     p = resolve_persona(request, persona)
     hidden = hidden_kpis(p)
     start, end = _window(days)
+    prev_start = start - (end - start)
+    names = {k: c.name for k, c in load_declared().items()}
     out = []
     for kpi_id in all_kpi_ids():
         if kpi_id in hidden:
             continue
         total = reads.kpi_total(tenant, kpi_id, start, end)
-        out.append({"kpi_id": kpi_id, "kind": total["kind"],
+        prev = reads.kpi_total(tenant, kpi_id, prev_start, start)
+        out.append({"kpi_id": kpi_id, "name": names.get(kpi_id, kpi_id),
+                    "kind": total["kind"],
                     "fundamentals": total["fundamentals"],
-                    "rate": total.get("rate")})
+                    "rate": total.get("rate"),
+                    "previous": {"fundamentals": prev["fundamentals"],
+                                 "rate": prev.get("rate")}})
     return {"tenant": tenant, "persona": p, "days": days, "kpis": out}
 
 

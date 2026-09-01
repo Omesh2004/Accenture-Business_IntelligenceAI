@@ -394,19 +394,74 @@ function confidenceFromSeverity(severity: BackendInsight['severity']): 'High' | 
 
 /* ─────────────── API Methods ─────────────── */
 
+
+// ─── KPI cards ───────────────────────────────────────────────────────────────
+interface KpiFromApi {
+  kpi_id: string;
+  name?: string;
+  kind: 'count' | 'rate' | 'money';
+  fundamentals: Record<string, number>;
+  rate: number | null;
+  previous?: { fundamentals: Record<string, number>; rate: number | null };
+}
+interface KpiEnvelope { tenant: string; persona: string; days: number; kpis: KpiFromApi[] }
+
+const KPI_ICON: Record<string, string> = {
+  signups: 'users',
+  kyc_completion_rate: 'shield-check',
+  loan_approval_volume: 'landmark',
+  revenue: 'banknote',
+  transaction_failure_rate: 'shield-alert',
+};
+
+/** A money KPI is the sum of its lines; a count is its first fundamental. */
+function kpiAmount(k: { kind: string; fundamentals: Record<string, number>; rate: number | null }): number {
+  if (k.kind === 'rate') return k.rate ?? 0;
+  const values = Object.values(k.fundamentals || {});
+  if (k.kind === 'money') return values.reduce((a, b) => a + b, 0);
+  return values[0] ?? 0;
+}
+
+function formatKpi(kind: string, amount: number): string {
+  if (kind === 'rate') return `${(amount * 100).toFixed(1)}%`;
+  if (kind === 'money') return `$${Math.round(amount).toLocaleString()}`;
+  return Math.round(amount).toLocaleString();
+}
+
+function toKpiCard(k: KpiFromApi): KPIMetric {
+  const now = kpiAmount(k);
+  const before = k.previous ? kpiAmount({ ...k, ...k.previous }) : 0;
+  const change = before ? ((now - before) / before) * 100 : 0;
+  return {
+    id: k.kpi_id,
+    label: k.name || k.kpi_id,
+    value: formatKpi(k.kind, now),
+    change: Math.abs(Number(change.toFixed(1))),
+    changeDirection: change >= 0 ? 'up' : 'down',
+    icon: KPI_ICON[k.kpi_id] || 'activity',
+    // Two of revenue's three lines are modelled, so the whole figure is labelled.
+    ...(k.kpi_id === 'revenue'
+      ? { simulated: true,
+          simulatedNote: 'Interchange and accrued interest are modelled, not settled.' }
+      : {}),
+  };
+}
+
 export const dashboardAPI = {
   /** Fetch KPI metrics for the dashboard header */
+  /** The five governed KPIs. The API returns fundamentals; the card shape is built here. */
   async getKPIMetrics(tenants: string[], range: string): Promise<KPIMetric[]> {
+    const days = Number(String(range).replace(/[^0-9]/g, '')) || 30;
     try {
-      const response = await apiClient.get<KPIMetric[]>(`/metrics/kpi?tenants=${tenants.join(',')}&range=${range}`);
-      return response.data;
+      const response = await apiClient.get<KpiEnvelope>(
+        `/metrics/kpi?tenants=${tenants.join(',')}&days=${days}`);
+      return (response.data?.kpis || []).map(toKpiCard);
     } catch (error) {
       console.error('Failed to fetch KPI metrics', error);
       return [];
     }
   },
 
-  /** Fetch Secondary KPI metrics */
   async getSecondaryKPIMetrics(tenants: string[], range: string): Promise<KPIMetric[]> {
     try {
       const response = await apiClient.get<KPIMetric[]>(`/metrics/secondary_kpi?tenants=${tenants.join(',')}&range=${range}`);
