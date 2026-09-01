@@ -163,12 +163,19 @@ def kpi_cell_deltas(tenant: str, kpi_id: str, fundamental: str, dims: list[str],
 
 # ── /metric/funnel ──────────────────────────────────────────────────────────
 def funnel(tenant: str, funnel_id: str, start: date, end: date) -> dict:
+    """Distinct users per stage over the window, merged from the daily states.
+
+    Adding the daily `entered` numbers would count a returning user once per day, so the stage
+    counts are merged from the aggregate state instead. `events` stays a sum: it is a raw event
+    count and is additive.
+    """
+    # FINAL already collapses the ReplacingMergeTree versions, so the states merge directly.
     rows = _q(
-        f"SELECT stage, min(stage_order) AS so, sum(e) AS entered, sum(ev) AS events FROM ("
-        f"  SELECT stage, stage_order, argMax(entered,_version) AS e, argMax(events,_version) AS ev "
-        f"  FROM {GOLD}.funnel_daily WHERE tenant_id=%(t)s AND funnel_id=%(fn)s "
-        "     AND date>=%(s)s AND date<%(e)s GROUP BY stage, stage_order, date) "
-        "GROUP BY stage ORDER BY so",
+        f"SELECT stage, min(stage_order) AS so, uniqExactMerge(entered_users) AS entered, "
+        f"       sum(events) AS events "
+        f"FROM {GOLD}.funnel_daily FINAL "
+        f"WHERE tenant_id=%(t)s AND funnel_id=%(fn)s AND date>=%(s)s AND date<%(e)s "
+        f"GROUP BY stage ORDER BY so",
         {"t": tenant, "fn": funnel_id, "s": start, "e": end})
     return {"funnel_id": funnel_id,
             "stages": [{"stage": str(r["stage"]), "order": int(r["so"]),
