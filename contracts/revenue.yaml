@@ -58,7 +58,7 @@ fundamentals:
   - metric: interest_accrued
     derivation: >
       Flat daily accrual, not amortised: for each day, sum over APPROVED applications decided on
-      or before that day of principal_amount * interest_rate / 365.
+      or before that day of principal_amount * (interest_rate / 100) / 365.
     source_tables: [fact_loan_applications]
     time_column: decided_at
     additivity: additive

@@ -146,7 +146,8 @@ CROSS JOIN {SILVER}.fact_loan_applications a
 LEFT JOIN {SILVER}.dim_customer c ON a.tenant_id=c.tenant_id AND a.customer_id=c.customer_id""",
          where="a.status = 'APPROVED' AND a.decided_at > toDateTime('1971-01-01') "
                "AND toDate(a.decided_at) <= days.d",
-         value="round(toFloat64(sum(a.principal_amount * a.interest_rate / 365)), 2)",
+         # interest_rate is a percent (7..14), not a fraction.
+         value="round(toFloat64(sum(a.principal_amount * a.interest_rate / 100 / 365)), 2)",
          distinct="toUInt64(0)",
          dims={"loan_type": "a.loan_type", "risk_segment": "c.risk_segment", "region": "c.region",
                "branch_code": "c.branch_code", "country": "c.country"}),
