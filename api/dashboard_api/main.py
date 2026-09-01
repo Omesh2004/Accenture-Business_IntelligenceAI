@@ -8,6 +8,7 @@ an `ops_manager` response has `revenue` stripped so it cannot be seen or back-co
 """
 from __future__ import annotations
 
+import json
 import os
 import sys
 from datetime import date, datetime, timedelta
@@ -16,6 +17,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 
 from api.metric_api.main import router as metric_router, tenant_ok, KNOWN_TENANTS
 from api.metric_api import reads
@@ -197,6 +199,48 @@ def intelligence_outcome(req: OutcomeRequest):
         return {"status": "recorded"}
     except Exception as exc:
         raise HTTPException(status_code=503, detail=f"feedback loop unavailable: {exc}")
+
+
+@app.post("/intelligence/ask/stream")
+def intelligence_ask_stream(request: Request, req: AskRequest):
+    """Same answer as /ask, streamed as SSE so the trace appears while the agent works.
+
+    Frames: rail | pending | step | result | answer | error, each `event:`/`data:` separated by
+    a blank line.
+    """
+    from api.intelligence import loop
+
+    tenant = _tenant(req.tenant_id)
+    p = resolve_persona(request, req.persona)
+    question = (req.question or "").strip()
+    if not question:
+        raise HTTPException(status_code=400, detail="question is required")
+
+    def frame(kind: str, payload) -> str:
+        body = json.dumps(payload, default=str)
+        return "event: " + kind + "\ndata: " + body + "\n\n"
+
+    def generate():
+        queue: list[str] = []
+
+        def emit(kind: str, payload) -> None:
+            queue.append(frame(kind, payload))
+
+        try:
+            res = loop.run(tenant, question, p, emit=emit)
+        except Exception as exc:
+            yield frame("error", {"detail": str(exc)})
+            return
+        # Steps first, then the finished answer, so the reader sees the work before the verdict.
+        for chunk in queue:
+            yield chunk
+        body = filter_revenue(p, res.as_dict())
+        if body.get("rail"):
+            yield frame("rail", {"gates": body["rail"]})
+        yield frame("answer", body)
+
+    return StreamingResponse(generate(), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
 @app.post("/intelligence/ask")

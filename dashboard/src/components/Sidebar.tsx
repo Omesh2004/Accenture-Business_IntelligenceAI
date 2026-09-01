@@ -66,9 +66,7 @@ function Sidebar(_props: SidebarProps) {
     // App admin sees full detailed analytics for their app
     navItems = [
       { id: 'dashboard', label: 'Dashboard', icon: 'layout-dashboard', href: buildAppScopedPath(activeAppId, '/dashboard') },
-      { id: 'license-usage', label: 'License vs Usage', icon: 'key', href: buildAppScopedPath(activeAppId, '/license-usage') },
       { id: 'intelligence', label: 'Intelligence', icon: 'brain', href: buildAppScopedPath(activeAppId, '/intelligence') },
-      { id: 'ai-report', label: 'AI Report', icon: 'file-text', href: buildAppScopedPath(activeAppId, '/ai-report') }
     ];
   } else if (role === 'super_admin') {
     // Super admin sees only the Global Admin view

@@ -61,7 +61,7 @@ function logFetchFailure(what: string, error: unknown): void {
 }
 
 /** Base API configuration */
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001';
+export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8001';
 
 /** Configured axios instance with interceptors */
 const apiClient: AxiosInstance = axios.create({

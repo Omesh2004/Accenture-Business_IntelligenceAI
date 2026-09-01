@@ -115,7 +115,7 @@
 }
 
 html {
-  font-family: var(--font-ui), -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-family: var(--font-ui), -apple-system, 'Helvetica Neue', Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
@@ -171,20 +171,28 @@ body {
 /* ─────────────── Type scale ───────────────
    One typographic system for the whole dashboard, so a heading means the same thing on every
    page. Three faces, each with a job:
-     --font-display  Instrument Serif — section and page titles. A serif at a heading size reads
-                     as an assertion; the same words in the UI sans read as a label.
-     --font-inter    everything a user reads as interface: labels, body, controls.
-     --font-mono     JetBrains Mono — every FIGURE. Proportional digits give 236 and 5 different
-                     advance widths, so columns of numbers stop aligning and magnitudes misread.
+     --font-ui  Inter, one family for everything. Hierarchy is weight, size and tracking.
+                Figures use tabular numerals so columns of numbers align.
    Headings are set here rather than per-page: the reason the dashboard looked assembled from
    parts was that each page invented its own size, weight and tracking for the same level. */
 
-h1, h2, h3, h4 {
-  font-family: var(--font-display), Georgia, 'Times New Roman', serif;
+h1, h2, h3 {
+  font-family: var(--font-display), Georgia, serif;
   font-weight: 400;
-  letter-spacing: -0.011em;
   color: var(--color-text-primary);
 }
+/* h4 is a card title, not a statement -- it stays in the grotesque. */
+h4 {
+  font-family: var(--font-ui), 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+/* Swiss tracking: large type tightens, small type opens up. A single family only reads as a
+   system if the optical size is corrected by hand. */
+h1 { letter-spacing: -0.018em; }
+h2 { letter-spacing: -0.014em; }
+h3 { letter-spacing: -0.010em; }
+h4 { letter-spacing: -0.010em; }
 
 /* Golden-ratio scale. φ = 1.618 between major steps, √φ = 1.272 between minor ones, off a
    16px base. Every size below is a step on it, so nothing is chosen by eye. Line height runs
@@ -208,7 +216,7 @@ h2 { font-size: var(--step-3); line-height: 1.18; }
 h3 { font-size: var(--step-2); line-height: var(--leading-tight); }
 h4 { font-size: var(--step-1); line-height: 1.35; }
 
-.hero-title { font-size: var(--step-5); line-height: 1.05; letter-spacing: -0.022em; }
+.hero-title { font-size: var(--step-5); line-height: 1.04; letter-spacing: -0.034em; font-weight: 700; }
 .lead       { font-size: var(--step-1); line-height: 1.45; color: var(--color-text-secondary); }
 
 body { font-size: var(--step-0); line-height: var(--leading-body); }
@@ -217,15 +225,16 @@ body { font-size: var(--step-0); line-height: var(--leading-body); }
    serif at 13px reads as decoration rather than hierarchy. */
 h1.ui-label, h2.ui-label, h3.ui-label, h4.ui-label,
 .ui-label {
-  font-family: var(--font-ui), system-ui, sans-serif;
+  font-family: var(--font-ui), -apple-system, 'Helvetica Neue', Helvetica, Arial, sans-serif;
   font-weight: 600;
   letter-spacing: 0;
 }
 
 /* Figures. Applied to any element showing a number that a reader will compare to another. */
 .num, .tabular, td.num, th.num {
-  font-family: var(--font-mono), ui-monospace, SFMono-Regular, monospace;
+  font-family: var(--font-ui), -apple-system, 'Helvetica Neue', Helvetica, Arial, sans-serif;
   font-variant-numeric: tabular-nums;
+  font-feature-settings: 'tnum' 1, 'cv01' 1;
   font-feature-settings: 'tnum' 1;
 }
 
@@ -237,10 +246,10 @@ h1.ui-label, h2.ui-label, h3.ui-label, h4.ui-label,
 }
 
 .eyebrow {
-  font-family: var(--font-ui), system-ui, sans-serif;
+  font-family: var(--font-ui), -apple-system, 'Helvetica Neue', Helvetica, Arial, sans-serif;
   font-size: var(--step--1);
-  font-weight: 700;
-  letter-spacing: 0.18em;
+  font-weight: 600;
+  letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--color-text-tertiary);
 }

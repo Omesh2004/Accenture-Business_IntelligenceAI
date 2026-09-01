@@ -9,6 +9,7 @@ import KPICard from '@/components/KPICard';
 import TrafficChart from '@/components/TrafficChart';
 import AIInsightsPanel from '@/components/AIInsightsPanel';
 import JourneyFunnelInsights from '@/components/JourneyFunnelInsights';
+import KpiTrends from '@/components/KpiTrends';
 
 export default function DashboardContent() {
   const {
@@ -34,6 +35,11 @@ export default function DashboardContent() {
             <KPICard key={metric.id} metric={metric} />
           ))}
         </div>
+      </section>
+
+      <section className="reveal" id="kpi-trends" aria-label="KPI Trends">
+        <h3 className="mb-3">How each KPI moved</h3>
+        <KpiTrends />
       </section>
 
       <section className="reveal" id="traffic-section" aria-label="Traffic Analytics">
