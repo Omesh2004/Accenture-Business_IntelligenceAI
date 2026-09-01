@@ -1,0 +1,15 @@
+{
+  "plan": {
+    "tenantId": "bank_a",
+    "customers": 100,
+    "days": 30,
+    "seed": 20260831,
+    "templates": []
+  },
+  "written": {
+    "customers": 100,
+    "accounts": 100,
+    "transactions": 2076,
+    "applications": 19
+  }
+}

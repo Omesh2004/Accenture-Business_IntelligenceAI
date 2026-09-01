@@ -298,6 +298,12 @@ function arg(name: string, fallback: string): string {
   generateFacts(plan)
     .then(async (w) => {
       console.log("written:", JSON.stringify(w));
+      const fs = await import("fs");
+      const path = await import("path");
+      const outDir = path.join(process.cwd(), "fixtures");
+      if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true });
+      fs.writeFileSync(path.join(outDir, "planted_truth.json"), JSON.stringify({ plan: { ...plan, templates: templateNames }, written: w }, null, 2));
+      console.log(`wrote fixtures/planted_truth.json`);
       console.log(`took ${Math.round((Date.now() - started) / 1000)}s`);
       await prisma.$disconnect();
     })

@@ -3,6 +3,7 @@ import crypto from "crypto";
 import axios from "axios";
 import { AsyncLocalStorage } from "async_hooks";
 import { prisma } from "../prisma";
+import { UAParser } from "ua-parser-js";
 
 const INGESTION_API_URL = process.env.INGESTION_API_URL || "http://localhost:8000/events";
 
@@ -82,6 +83,7 @@ interface SessionProfile {
 
 interface RequestTelemetryContext {
   sessionId?: string;
+  userAgent?: string;
 }
 
 const requestTelemetryContext = new AsyncLocalStorage<RequestTelemetryContext>();
@@ -95,7 +97,8 @@ function firstHeaderValue(value: string | string[] | undefined): string | undefi
 
 export function requestTelemetryMiddleware(req: Request, _res: Response, next: NextFunction): void {
   const sessionId = firstHeaderValue(req.headers["x-session-id"]) || firstHeaderValue(req.headers["x-nexabank-session-id"]);
-  requestTelemetryContext.run({ sessionId }, next);
+  const userAgent = firstHeaderValue(req.headers["user-agent"]);
+  requestTelemetryContext.run({ sessionId, userAgent }, next);
 }
 
 const GEO_PROFILES: GeoProfile[] = [
@@ -227,6 +230,16 @@ function getSessionProfile(sessionId: string, metadata: Record<string, unknown> 
     realContinent: safeMetadata.continent ? String(safeMetadata.continent) : undefined,
   };
 
+  // A3: Real device from User-Agent
+  const ua = requestTelemetryContext.getStore()?.userAgent;
+  if (ua) {
+    const parser = new UAParser(ua);
+    const dt = parser.getDevice().type;
+    profile.deviceType = dt === "mobile" ? "mobile" : dt === "tablet" ? "tablet" : "desktop";
+    // We found a real device, so it's not simulated anymore.
+    profile.simulatedKeys = profile.simulatedKeys.filter(k => k !== "device_type");
+  }
+
   if (sessionProfiles.size >= MAX_SESSION_PROFILES) {
     let oldestKey: string | undefined;
     let oldestSeen = Infinity;
@@ -242,151 +255,10 @@ function getSessionProfile(sessionId: string, metadata: Record<string, unknown> 
   return profile;
 }
 
-/**
- * Validates and auto-corrects event names to strict [page].[feature].[status] taxonomy.
- * Logs a warning when correction happens so developers can fix instrumentation.
- */
 function enforceTaxonomy(eventName: string): string {
-  const strictRegex = /^[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*\.[a-z][a-z0-9_]*$/;
-  const normalizePart = (part: string): string => part.replace(/[^a-z0-9_]/g, "_").replace(/^_+|_+$/g, "") || "core";
-  const normalizeStatus = (status: string): string => {
-    if (status === "error" || status === "fail") return "failed";
-    if (status === "viewed") return "view";
-    if (status === "access") return "success";
-    return status;
-  };
-  const splitFeatureStatus = (token: string): { feature: string; status: string } => {
-    const t = normalizePart(token);
-    const suffixMap: Array<[string, string]> = [
-      ["_success", "success"],
-      ["_failed", "failed"],
-      ["_error", "failed"],
-      ["_view", "view"],
-      ["_access", "success"],
-      ["_action", "action"],
-    ];
-    for (const [suffix, status] of suffixMap) {
-      if (t.endsWith(suffix) && t.length > suffix.length) {
-        return { feature: normalizePart(t.slice(0, -suffix.length)), status };
-      }
-    }
-    return { feature: t, status: "action" };
-  };
-
-  const normalizedInput = String(eventName || "")
-    .trim()
-    .toLowerCase()
-    .replace(/-/g, "_");
-
-  if (strictRegex.test(normalizedInput)) {
-    const [page, feature, status] = normalizedInput.split(".");
-    if (["free", "pro", "core", "enterprise", "lending"].includes(page)) {
-      const split = splitFeatureStatus(status);
-      const candidate = `${normalizePart(feature)}.${split.feature}.${normalizeStatus(split.status)}`;
-      if (strictRegex.test(candidate)) {
-        return candidate;
-      }
-    }
-    if (page === "auth" && (feature === "login" || feature === "register")) {
-      return `${feature}.auth.${normalizeStatus(status)}`;
-    }
-    return `${page}.${feature}.${normalizeStatus(status)}`;
-  }
-
-  // Explicit legacy → canonical mappings
-  const LEGACY_MAP: Record<string, string> = {
-    'login': 'login.auth.success',
-    'login_success': 'login.auth.success',
-    'login_failed': 'login.auth.failed',
-    'register': 'register.auth.success',
-    'register_success': 'register.auth.success',
-    'dashboard_view': 'dashboard.page.view',
-    'accounts_view': 'accounts.page.view',
-    'account_view': 'accounts.page.view',
-    'transactions_view': 'transactions.page.view',
-    'transaction_view': 'transactions.page.view',
-    'payees_view': 'payees.page.view',
-    'payee_added': 'payees.add_payee.success',
-    'payee_edited': 'payees.edit_payee.success',
-    'payee_deleted': 'payees.remove_payee.success',
-    'payee_removed': 'payees.remove_payee.success',
-    'payees': 'payees.page.view',
-    'payment_completed': 'transactions.pay_now.success',
-    'payment_failed': 'transactions.pay_now.failed',
-    // Added during the NexaBank telemetry audit: transactionRoutes.ts's POST /transactions
-    // handler was firing the untaxonomized literal "transfer_completed" for every TRANSFER
-    // regardless of outcome. With no LEGACY_MAP entry it fell through to the generic fallback
-    // (core.transfer_completed.action), which no contract references -- an invisible silent
-    // zero, verified through the real chain. Mirrors the payment_* pair immediately above.
-    'transfer_completed': 'transactions.transfer.success',
-    'transfer_failed': 'transactions.transfer.failed',
-    'loan_applied': 'loans.applied.success',
-    'loan_approved': 'loans.approved.success',
-    'loans_page_view': 'loans.page.view',
-    'kyc_started': 'loans.kyc_started.success',
-    'kyc_completed': 'loans.kyc_completed.success',
-    'kyc_failed': 'loans.kyc_failed.failed',
-    'kyc_abandoned': 'loans.kyc_abandoned.failed',
-    'profile_view': 'profile.page.view',
-    'profile_updated': 'profile.edit_details.success',
-    'pro_unlocked': 'pro.features_unlock.success',
-    'pro_license_unlocked': 'pro.features_unlock.success',
-    'pro_feature_usage': 'dashboard.feature.view',
-    'feature_view': 'dashboard.feature.view',
-    'wealth_rebalance': 'wealth_management_pro.rebalance.success',
-    'ai_insight_download': 'ai_insights.book.success',
-    'crypto_trading': 'crypto_trading.page.view',
-    'wealth_management_pro': 'wealth_management.page.view',
-    'bulk_payroll_processing': 'bulk_payroll_processing.batch.success',
-    'ai_insights': 'ai_insights.page.view',
-    'page_view': 'dashboard.page.view',
-    'location_captured': 'profile.location.success',
-  };
-
-  const mapped = LEGACY_MAP[normalizedInput];
-  if (mapped) {
-    console.warn(`[TAXONOMY] Auto-corrected "${eventName}" → "${mapped}"`);
-    return mapped;
-  }
-
-  const parts = normalizedInput.split(".").filter(Boolean);
-  while (parts.length >= 3 && ["free", "pro", "core", "enterprise", "lending"].includes(parts[0])) {
-    parts.shift();
-  }
-
-  if (parts.length === 3 && parts[0] === "auth" && (parts[1] === "login" || parts[1] === "register")) {
-    const candidate = `${parts[1]}.auth.${normalizeStatus(parts[2])}`;
-    if (strictRegex.test(candidate)) {
-      console.warn(`[TAXONOMY] Normalized "${eventName}" → "${candidate}"`);
-      return candidate;
-    }
-  }
-
-  if (parts.length === 2) {
-    const page = normalizePart(parts[0]);
-    const { feature, status } = splitFeatureStatus(parts[1]);
-    const candidate = `${page}.${feature}.${normalizeStatus(status)}`;
-    if (strictRegex.test(candidate)) {
-      console.warn(`[TAXONOMY] Upgraded 2-part event "${eventName}" → "${candidate}"`);
-      return candidate;
-    }
-  }
-
-  if (parts.length >= 3) {
-    const page = normalizePart(parts[0]);
-    const status = normalizeStatus(normalizePart(parts[parts.length - 1]));
-    const feature = normalizePart(parts.slice(1, -1).join("_")) || "action";
-    const candidate = `${page}.${feature}.${status}`;
-    if (strictRegex.test(candidate)) {
-      console.warn(`[TAXONOMY] Normalized "${eventName}" → "${candidate}"`);
-      return candidate;
-    }
-  }
-
-  // Generic fallback: wrap unknown events so they still have 3 segments
-  const safe = `core.${normalizePart(normalizedInput)}.action`;
-  console.warn(`[TAXONOMY] Unknown event "${eventName}" → "${safe}"`);
-  return safe;
+  // A1 (Track A/B Sync): Reduce enforceTaxonomy to a passthrough.
+  // The pipeline's Silver transform now owns canonicalisation and will reject unknown names.
+  return String(eventName || "").trim();
 }
 
 /**
@@ -671,6 +543,20 @@ export async function trackEvent(
     const hashedUserId = customerId ? hashUserId(customerId) : `anon_${hashUserId(anonSessionId).slice(0, 32)}`;
     const sessionId = getSessionId(metadata);
     const metadataWithSession: Record<string, unknown> = { ...metadata, session_id: sessionId };
+    
+    // A3: Real geo from branch
+    if (customerId && !metadataWithSession.country) {
+      const customer = await prisma.customer.findUnique({
+        where: { id: customerId },
+        include: { branch: true }
+      });
+      if (customer?.branch) {
+        metadataWithSession.country = customer.branch.country;
+        metadataWithSession.city = customer.branch.city;
+        metadataWithSession.continent = customer.branch.region;
+      }
+    }
+
     const row = await prisma.event.create({
       data: {
         eventName,
