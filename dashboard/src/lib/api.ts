@@ -933,14 +933,17 @@ export const dashboardAPI = {
 
   /** Latest persona narrative with its evidence card. Persona is resolved server-side. */
   async getIntelligenceInsight(
-    tenants: string[], kpiId?: string, persona?: string,
+    tenants: string[], kpiId?: string, persona?: string, days?: number,
   ): Promise<IntelligenceInsight | null> {
     try {
       const kpi = kpiId ? `&kpi_id=${encodeURIComponent(kpiId)}` : '';
       // The server still resolves the persona; sending one can only narrow, never widen.
       const view = persona ? `&persona=${encodeURIComponent(persona)}` : '';
+      // The window on screen. Without it the server ranks across all three at once and can
+      // answer a 30-day question with a 90-day finding.
+      const range = days ? `&days=${days}` : '';
       const response = await apiClient.get<{ insight: IntelligenceInsight | null }>(
-        `/intelligence/insight?tenants=${encodeURIComponent(tenants.join(','))}${kpi}${view}`);
+        `/intelligence/insight?tenants=${encodeURIComponent(tenants.join(','))}${kpi}${view}${range}`);
       return response.data.insight ?? null;
     } catch (error) {
       console.error('Failed to fetch intelligence insight', error);

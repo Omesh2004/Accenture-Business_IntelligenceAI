@@ -140,6 +140,12 @@ export default function InsightRail({ answer }: { answer: AgentAnswer }) {
                            text-slate-500">
             Key drivers
           </span>
+          {/* The same contributions the waterfall plots, as a share of the total movement rather
+              than in the metric's units. Both are correct and they are not the same number, so
+              each has to say which it is. */}
+          <span className="mb-3 block text-[length:var(--step--1a)] text-slate-400">
+            share of the movement
+          </span>
           <ul className="space-y-3">
             {drivers.series.slice(0, 4).map((s, i) => {
               const w = weight(s.value);

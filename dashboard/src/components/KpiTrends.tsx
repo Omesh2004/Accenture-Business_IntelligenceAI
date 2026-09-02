@@ -154,11 +154,35 @@ export default function KpiTrends(
                              tickFormatter={(v: number) => (k.unit === 'rate'
                                ? `${Math.round(v * 100)}%`
                                : v >= 1000 ? `${Math.round(v / 1000)}k` : `${Math.round(v)}`)} />
+                      {/* One row, one verdict. The two Areas overlap by design -- markWindow
+                          also marks the points either side of a breach so the red segment joins
+                          up -- so the default tooltip listed the same reading twice, once as
+                          "Outside the range" and once as "Inside the range". The band itself
+                          settles it, so the verdict is computed here rather than read off
+                          whichever series happened to be under the cursor. */}
                       <Tooltip
-                        formatter={(v: unknown, n: unknown) => [fmt(k.unit, Number(v ?? 0)),
-                          n === 'inWindow' ? 'Outside the range' : 'Inside the range']}
-                        contentStyle={{ borderRadius: 12, border: '1px solid var(--hairline)',
-                                        fontSize: 12, boxShadow: 'var(--shadow-card)' }} />
+                        content={({ active, payload, label }) => {
+                          if (!active || !payload?.length) return null;
+                          const row = payload[0].payload as Marked;
+                          const value = row.normal ?? row.inWindow;
+                          if (value == null) return null;
+                          const out = hasBand && (value < lower! || value > upper!);
+                          return (
+                            <div className="rounded-xl border bg-white px-3 py-2 shadow-[var(--shadow-card)]"
+                                 style={{ borderColor: 'var(--hairline)' }}>
+                              <p className="text-[length:var(--step--1a)] text-slate-400">{String(label)}</p>
+                              <p className="num text-[length:var(--step--1)] font-semibold text-slate-900">
+                                {fmt(k.unit, value)}
+                              </p>
+                              {hasBand && (
+                                <p className="text-[length:var(--step--1a)]"
+                                   style={{ color: out ? OUTSIDE : INSIDE }}>
+                                  {out ? 'outside the expected range' : 'within the expected range'}
+                                </p>
+                              )}
+                            </div>
+                          );
+                        }} />
 
                       {/* The range itself, drawn as the region it is. A reader can then SEE the
                           line leave it, instead of being told in a caption which days did. */}

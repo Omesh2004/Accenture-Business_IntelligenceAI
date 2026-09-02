@@ -175,8 +175,9 @@ export default function IntelligencePage() {
   const [auditOpen, setAuditOpen] = useState(false);
 
   const { data: insight, isLoading } = useQuery({
-    queryKey: ['intelligenceInsight', tenantsParam, persona],
-    queryFn: () => dashboardAPI.getIntelligenceInsight(tenantsParam, undefined, persona || undefined),
+    queryKey: ['intelligenceInsight', tenantsParam, persona, rangeDays],
+    queryFn: () =>
+      dashboardAPI.getIntelligenceInsight(tenantsParam, undefined, persona || undefined, rangeDays),
     staleTime: 30 * 1000,
     retry: 1,
   });

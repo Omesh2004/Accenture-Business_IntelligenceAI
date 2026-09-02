@@ -6,6 +6,7 @@ additive across cells (CLAUDE.md, Never do).
 """
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, field
 from itertools import combinations
 
@@ -13,6 +14,8 @@ from api.intelligence import config
 from api.intelligence.ids import cause_id, round6
 from api.intelligence.metrics import Window
 from api.intelligence.stages import psqueeze
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -61,15 +64,57 @@ def _as_rate_shares(leaves: dict, weights: tuple[float, float] | None) -> dict:
     return {cell: (v / d_now, b / d_base) for cell, (v, b) in leaves.items()}
 
 
+def _declined(ctx, note: str) -> "LocalizeResult":
+    """Every inconclusive exit, logged against the KPI it happened on.
+
+    Revenue published zero causes for weeks and the reason was never written down anywhere, so
+    the dashboard showed an empty attribution card with no way to tell a genuine "no segment is
+    concentrated" from a stage that had failed to run at all.
+    """
+    logger.info("localize declined for %s: %s", getattr(ctx, "kpi_id", "?"), note)
+    return LocalizeResult(inconclusive=True, note=note)
+
+
+def _moving_line(ctx, metric_layer, contract, baseline_window) -> dict | None:
+    """For an additive KPI with several lines, the one that actually moved.
+
+    Revenue is fee_revenue + interest_accrued + pro_revenue, and this used to take fundamentals[0]
+    -- fee_revenue -- whatever the movement was made of. Interest accrued is by far the larger
+    line, so a revenue move driven by it was searched inside a component that had not changed:
+    no cell moved in the headline direction, every one was filtered out, and revenue published
+    zero causes while every other KPI published several.
+
+    CLAUDE.md section 5 says money is explained by which fee line moved, so choosing the line
+    with the largest absolute movement IS the decomposition, not a shortcut past it.
+    """
+    lines = list(contract.fundamentals or [])
+    if not lines:
+        return None
+    if len(lines) == 1:
+        return lines[0]
+    best, best_move = None, -1.0
+    for spec in lines:                       # each is a {kpi_id, fundamental, ...} spec
+        try:
+            now = metric_layer.fundamental_total(ctx.tenant_id, spec, ctx.window)
+            was = metric_layer.fundamental_total(ctx.tenant_id, spec, baseline_window)
+        except Exception:                                            # noqa: BLE001
+            continue
+        move = abs(float(now) - float(was))
+        if move > best_move:
+            best, best_move = spec, move
+    # Every line flat or unreadable: fall back to the declared order rather than returning none,
+    # so the caller still gets a search instead of an abstention.
+    return best or lines[0]
+
+
 def run(ctx, metric_layer, anomaly: dict, dims: list[str], baseline_window) -> LocalizeResult:
     contract = ctx.contract
     if not dims:
-        return LocalizeResult(inconclusive=True,
-                              note="no admissible dimensions -- see contract dimensions.allowed")
+        return _declined(ctx, "no admissible dimensions -- see contract dimensions.allowed")
 
-    fundamental = contract.numerator() or (contract.fundamentals[0] if contract.fundamentals else None)
+    fundamental = contract.numerator() or _moving_line(ctx, metric_layer, contract, baseline_window)
     if fundamental is None:
-        return LocalizeResult(inconclusive=True, note="contract declares no fundamental")
+        return _declined(ctx, "contract declares no fundamental")
 
     direction = int(anomaly.get("direction", -1))
     max_depth = min(contract.max_depth, len(dims))
@@ -114,8 +159,7 @@ def run(ctx, metric_layer, anomaly: dict, dims: list[str], baseline_window) -> L
                 ranked.append((combo, cell, delta, base_v))
 
     if not ranked:
-        return LocalizeResult(inconclusive=True,
-                              note="movement not explained by the available dimensions")
+        return _declined(ctx, "movement not explained by the available dimensions")
 
     # Share of the fundamental's total movement -- pooling overlapping depths would give
     # every cell an identical 1/N share.
@@ -155,10 +199,10 @@ def run(ctx, metric_layer, anomaly: dict, dims: list[str], baseline_window) -> L
         margin = 1.0 + config.LOCALIZE_BASE_RATE_MARGIN
         if not any(abs(delta) > total_move * _population_share(delta, base_v) * margin
                    for _, _, delta, base_v in ranked):
-            return LocalizeResult(
-                inconclusive=True,
-                note="every cell moved in proportion to its share of the population, so no "
-                     "segment is concentrated enough to be called a driver")
+            return _declined(
+                ctx,
+                "every cell moved in proportion to its share of the population, so no "
+                "segment is concentrated enough to be called a driver")
 
     # Every tie is broken, so rank-1 cannot flip between identical runs. PSqueeze already
     # ordered by explanatory power; re-sorting on raw delta would throw that away and hand the

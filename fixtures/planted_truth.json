@@ -1,14 +1,12 @@
 {
-  "generated_at": "2026-09-02T08:50:16.922Z",
+  "generated_at": "2026-09-02T12:07:37.922Z",
   "plan": {
     "tenantId": "bank_a",
     "customers": 4000,
     "days": 55,
     "seed": 20260831,
     "reset": true,
-    "templates": [
-      "failure_burst"
-    ]
+    "templates": []
   },
   "written": {
     "customers": 4000,
@@ -16,16 +14,5 @@
     "transactions": 151694,
     "applications": 1344
   },
-  "planted": [
-    {
-      "tenant_id": "bank_a",
-      "scenario": "failure_burst",
-      "kpi_id": "transaction_failure_rate",
-      "anomaly_days": 7,
-      "planted_segment": {},
-      "expected_direction": "up",
-      "expected_rank1_dimension": "",
-      "expected_verdict": "pass"
-    }
-  ]
+  "planted": []
 }
