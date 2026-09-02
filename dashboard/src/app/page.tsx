@@ -91,11 +91,11 @@ export default function AppSelectorPage() {
             </div>
             <div className="flex items-center gap-3">
               {userRole === 'super_admin' ? (
-                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider bg-blue-50 text-blue-700 border border-blue-100">
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[length:var(--step--1a)] font-bold uppercase tracking-wider bg-blue-50 text-blue-700 border border-blue-100">
                   Super Admin
                 </span>
               ) : (
-                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[11px] font-bold uppercase tracking-wider bg-gray-100 text-gray-700 border border-gray-200">
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-[length:var(--step--1a)] font-bold uppercase tracking-wider bg-gray-100 text-gray-700 border border-gray-200">
                   App Admin
                 </span>
               )}

@@ -48,6 +48,8 @@ export interface FactPlan {
   tenantId: string;
   customers: number;
   days: number;
+  /** False keeps rows a previous run wrote. Default replaces them, so a re-run really re-runs. */
+  reset?: boolean;
   seed: number;
   templates: Template[];
   /** Restrict the write to one entity. Everything else is generated but not inserted. */
@@ -135,11 +137,58 @@ async function insertRows(table: string, cols: string[], rows: unknown[][]): Pro
   return written;
 }
 
+/**
+ * Remove the rows a previous run of this exact plan wrote, so a re-run actually rebuilds them.
+ *
+ * Every id here is derived from the seed, and the insert is ON CONFLICT DO NOTHING, so a second
+ * run was a complete no-op for anything that already existed. The dataset stayed frozen at
+ * whatever the FIRST run produced: re-running with a template changed nothing, which is why a
+ * planted movement never appeared in the warehouse and the templates looked broken.
+ *
+ * Scoped by the run's own tag, so it can only ever delete rows this generator created. Children
+ * first, to respect the foreign keys.
+ */
+async function clearPreviousRun(tag: string): Promise<void> {
+  const emailPrefix = `bulk.${tag}.%`;
+  const accPrefix = `${tag}-A%`;
+  const custIds = `SELECT id FROM "Customer" WHERE email LIKE $1`;
+
+  // Children of Account first, then children of Customer, then the two parents. Anything that
+  // references either has to go before it or Postgres refuses the delete.
+  for (const sql of [
+    `DELETE FROM "Transaction" WHERE "senderAccNo" LIKE $1 OR "receiverAccNo" LIKE $1`,
+    `DELETE FROM "Card" WHERE "accNo" LIKE $1`,
+    `DELETE FROM "Payee" WHERE "payeeAccNo" LIKE $1`,
+    `DELETE FROM "Loan" WHERE "accNo" LIKE $1`,
+  ]) {
+    await prisma.$executeRawUnsafe(sql, accPrefix);
+  }
+  for (const sql of [
+    `DELETE FROM "LoanApplication" WHERE "customerId" IN (${custIds})`,
+    `DELETE FROM "CampaignInteraction" WHERE "customerId" IN (${custIds})`,
+    `DELETE FROM "Notification" WHERE "customerId" IN (${custIds})`,
+    `DELETE FROM "UserLocation" WHERE "customerId" IN (${custIds})`,
+    `DELETE FROM "UserLicense" WHERE "customerId" IN (${custIds})`,
+    `DELETE FROM "Event" WHERE "customerId" IN (${custIds})`,
+  ]) {
+    await prisma.$executeRawUnsafe(sql, emailPrefix);
+  }
+  await prisma.$executeRawUnsafe(`DELETE FROM "Account" WHERE "accNo" LIKE $1`, accPrefix);
+  await prisma.$executeRawUnsafe(`DELETE FROM "Customer" WHERE email LIKE $1`, emailPrefix);
+}
+
+
 export async function generateFacts(plan: FactPlan) {
   const r = mulberry32(plan.seed);
   const now = new Date();
   const dayMs = 86400000;
-  const startMs = now.getTime() - plan.days * dayMs;
+  // Anchored to UTC midnight, not to the clock. Starting from `now` made every generated day
+  // run 06:00 to 06:00, so each one straddled two calendar days and the first and last calendar
+  // day each received a fraction of a bucket. Every chart then ended in a cliff -- a KPI card
+  // reading 582 above a line that fell to 21 -- which looked like a collapse and was an artefact
+  // of the bucketing. Day `days - 1` is today, and today alone is legitimately partial.
+  const midnightUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const startMs = midnightUtc - (plan.days - 1) * dayMs;
   const dayStart = (d: number) => new Date(startMs + d * dayMs);
 
   const branches = await prisma.branch.findMany({
@@ -147,6 +196,11 @@ export async function generateFacts(plan: FactPlan) {
   if (!branches.length) throw new Error("no branches: run seedReferenceData.ts first");
 
   const tag = `${plan.tenantId}-${plan.seed}`;
+  // A regenerate REPLACES this plan's rows. Without it the second run silently kept the first
+  // run's dates and values, templates included.
+  if (plan.only !== "applications" && plan.reset !== false) {
+    await clearPreviousRun(tag);
+  }
   const custCols = ["id", "name", "email", "phone", "password", "customerType", "dateOfBirth",
     "pan", "settingConfig", "address", "role", "tenantId", "kycStatus", "kycCompletedAt",
     "ageBracket", "branchCode", "employmentStatus", "incomeBracket", "lifetimeValue", "riskSegment"];
@@ -187,7 +241,20 @@ export async function generateFacts(plan: FactPlan) {
     const risk = weighted(r, RISK, [55, 33, 12]);
     // Opened uniformly across the window, so signups are a real daily series rather than a
     // single spike on day zero.
-    const openDay = Math.floor(r() * plan.days);
+    let openDay = Math.floor(r() * plan.days);
+    // Onboarding slowdown: a share of the accounts that WOULD have opened inside the affected
+    // window open earlier instead. The signups KPI is a count of openings per day, so this is
+    // the only honest way to move it -- fewer accounts on those days, not a rewritten total.
+    {
+      const b = pick(r, branches);
+      void b;
+      const probe = applyTemplates(plan.templates,
+        { day: openDay, region: "", risk: "", branch: "" }, plan.days);
+      if (probe.openRate < 1 && r() > probe.openRate) {
+        const quiet = Math.max(1, plan.days - 14);
+        openDay = Math.floor(r() * quiet);
+      }
+    }
     const accNo = `${tag}-A${String(i).padStart(6, "0")}`;
     const opened = dayStart(openDay);
     const income = weighted(r, INCOME, [22, 30, 26, 16, 6]);
@@ -220,7 +287,7 @@ export async function generateFacts(plan: FactPlan) {
       const mod = applyTemplates(plan.templates, ctx, plan.days);
 
       const n = plan.only === "applications"
-        ? 0 : Math.floor(p.spendRate * mod.txnVolume * (0.5 + r()));
+        ? 0 : Math.floor(p.spendRate * mod.txnVolume * (0.5 + r() * mod.noise));
       for (let k = 0; k < n; k++) {
         const type = weighted(r, ["PAYMENT", "TRANSFER", "WITHDRAWAL", "DEPOSIT"], [58, 20, 14, 8]);
         const [opts, w] = CHANNEL_MIX[type];
@@ -287,6 +354,7 @@ function arg(name: string, fallback: string): string {
     days: Number(arg("days", "55")),
     seed: Number(arg("seed", "20260831")),
     only: (arg("only", "") || undefined) as FactPlan["only"],
+    reset: arg("reset", "true") !== "false",
     templates: templateNames.map((n) => {
       const t = TEMPLATES[n];
       if (!t) throw new Error(`unknown template "${n}". known: ${Object.keys(TEMPLATES).join(", ")}`);

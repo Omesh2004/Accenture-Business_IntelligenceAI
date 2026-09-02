@@ -67,14 +67,15 @@ def dashboard_kpis(request: Request,
                    persona: str = Query(None)):
     tenant = _tenant(tenants)
     p = resolve_persona(request, persona)
-    hidden = hidden_kpis(p)
     start, end = _window(days)
     prev_start = start - (end - start)
     names = {k: c.name for k, c in load_declared().items()}
     out = []
+    # The portfolio is the same for every reader. Entitlement lives in the ANSWER: what the agent
+    # will discuss, which figures it may quote, and what it removes before the narrator sees the
+    # claim set. Hiding a metric from the board as well left a reader unable to tell whether the
+    # thing they own is the one that matters.
     for kpi_id in all_kpi_ids():
-        if kpi_id in hidden:
-            continue
         total = reads.kpi_total(tenant, kpi_id, start, end)
         prev = reads.kpi_total(tenant, kpi_id, prev_start, start)
         out.append({"kpi_id": kpi_id, "name": names.get(kpi_id, kpi_id),
@@ -124,7 +125,10 @@ def intelligence_insight(request: Request, tenants: str = Query(None),
     p = resolve_persona(request, persona)
     if kpi_id and kpi_id in hidden_kpis(p):
         raise HTTPException(status_code=403, detail=f"persona {p!r} may not view {kpi_id!r}")
-    row = _reader().latest_insight(tenant, p, kpi_id)
+    # Never select a finding this reader may not see. Filtering the response after the
+    # fact left the metric's name in the headline and narrative.
+    row = _reader().latest_insight(tenant, p, kpi_id,
+                                   exclude_kpis=tuple(hidden_kpis(p)))
     body = {"tenant_id": tenant, "persona": p,
             "insight": row or None,
             "detail": None if row else "no investigation has produced an insight yet"}

@@ -211,40 +211,63 @@ body {
   scrollbar-color: #E5E7EB transparent;
 }
 
+/* One family. `--font-display` and `--font-prose` are kept as aliases so existing call sites
+   keep resolving, but they are deliberately the same face: a product surface that changes
+   letterform between a heading and the sentence under it does not read as one product. */
+:root {
+  --font-display: var(--font-ui);
+  --font-prose: var(--font-ui);
+}
+
 /* ─────────────── Type scale ───────────────
-   One typographic system for the whole dashboard, so a heading means the same thing on every
-   page. Three faces, each with a job:
-     --font-ui  Inter, one family for everything. Hierarchy is weight, size and tracking.
-                Figures use tabular numerals so columns of numbers align.
-   Headings are set here rather than per-page: the reason the dashboard looked assembled from
-   parts was that each page invented its own size, weight and tracking for the same level. */
+   Accenture's system: one grotesque does the structural work, a serif takes the prose.
+
+     --font-display  Archivo, standing in for Graphik. Headings.
+     --font-ui       Archivo. Navigation, labels, controls, tables and every FIGURE.
+     --font-prose    Source Serif. The passages a reader READS rather than scans -- the
+                     narrative, the lead paragraph, a section's opening explanation.
+
+   Headings and UI share a family on purpose: that is what makes Accenture's pages feel like one
+   surface rather than a title sitting on top of an interface. The contrast a reader needs comes
+   from the serif in the prose, and from weight and tracking everywhere else. */
 
 h1, h2, h3 {
-  font-family: var(--font-display), Georgia, serif;
-  font-weight: 400;
+  font-family: var(--font-display), 'Helvetica Neue', Helvetica, Arial, sans-serif;
   color: var(--color-text-primary);
 }
-/* h4 is a card title, not a statement -- it stays in the grotesque. */
 h4 {
   font-family: var(--font-ui), 'Helvetica Neue', Helvetica, Arial, sans-serif;
   font-weight: 600;
   color: var(--color-text-primary);
 }
-/* Swiss tracking: large type tightens, small type opens up. A single family only reads as a
-   system if the optical size is corrected by hand. */
-h1 { letter-spacing: -0.018em; }
-h2 { letter-spacing: -0.014em; }
-h3 { letter-spacing: -0.010em; }
-h4 { letter-spacing: -0.010em; }
+
+/* Accenture set headlines heavy and TIGHT -- that density is most of the voice. A page title at
+   400 with default tracking reads as a caption blown up; at 700 with the tracking pulled in it
+   reads as a statement. Tracking opens back up as the type gets smaller, because the same
+   negative value that steadies a 42px line closes up a 20px one. */
+h1 { font-weight: 700; letter-spacing: -0.026em; }
+h2 { font-weight: 700; letter-spacing: -0.021em; }
+h3 { font-weight: 600; letter-spacing: -0.014em; }
+h4 { font-weight: 600; letter-spacing: -0.006em; }
 
 /* Golden-ratio scale. φ = 1.618 between major steps, √φ = 1.272 between minor ones, off a
    16px base. Every size below is a step on it, so nothing is chosen by eye. Line height runs
    the other way -- tighter as type grows -- because a display line needs less leading to hold
    together, and body needs 1.618 to stay readable. */
 :root {
-  --step--2: 0.618rem;   /* 9.9px  — micro labels           */
-  --step--1: 0.786rem;   /* 12.6px — captions, eyebrow       */
-  --step-0:  1rem;       /* 16px   — body                    */
+  /* The UI range needs finer rungs than phi alone provides. Between 12.6px and 16px there was
+     nothing, so every dense component invented its own value and the page ended up carrying
+     seventeen different sizes.
+
+     Ten pixels is the floor -- below that a label stops being readable on a laptop screen and
+     starts being texture -- so the small end runs in four equal geometric steps between 10px and
+     the 16px body, a ratio of 1.1247. That is within a rounding error of the quarter-phi step
+     the display end uses, and it means no rung on the scale is unreadable. */
+  --step--2: 0.625rem;   /* 10px   — micro labels, chips        */
+  --step--1a: 0.703rem;  /* 11.25px — dense table and axis text */
+  --step--1: 0.791rem;   /* 12.65px — captions, eyebrow         */
+  --step--0a: 0.889rem;  /* 14.2px — secondary body, controls   */
+  --step-0:  1rem;       /* 16px   — body, prose                */
   --step-1:  1.272rem;   /* 20.4px — lead, card titles       */
   --step-2:  1.618rem;   /* 25.9px — h3                      */
   --step-3:  2.058rem;   /* 32.9px — h2                      */
@@ -254,13 +277,27 @@ h4 { letter-spacing: -0.010em; }
   --leading-tight: 1.272;
 }
 
-h1 { font-size: var(--step-4); line-height: 1.12; }
-h2 { font-size: var(--step-3); line-height: 1.18; }
-h3 { font-size: var(--step-2); line-height: var(--leading-tight); }
-h4 { font-size: var(--step-1); line-height: 1.35; }
+/* Each level sits one step lower than it did. At --step-4 a page title took two lines and
+   dominated the finding underneath it, which is the wrong emphasis on a page whose job is the
+   finding. Still the same golden-ratio scale -- the whole set shifted down one rung, so the
+   intervals between levels are unchanged. */
+h1 { font-size: var(--step-3); line-height: 1.14; }
+h2 { font-size: var(--step-2); line-height: 1.22; }
+h3 { font-size: var(--step-1); line-height: 1.32; }
+h4 { font-size: var(--step-0); line-height: 1.45; }
 
-.hero-title { font-size: var(--step-5); line-height: 1.04; letter-spacing: -0.034em; font-weight: 700; }
-.lead       { font-size: var(--step-1); line-height: 1.45; color: var(--color-text-secondary); }
+.hero-title { font-size: var(--step-4); line-height: 1.06; letter-spacing: -0.030em; font-weight: 700; }
+
+/* Prose. The serif, one step up from body and looser, because it is meant to be read at length
+   rather than scanned. This is the only place the serif appears. */
+.lead, .prose {
+  font-family: var(--font-ui), 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  font-size: var(--step-0);
+  line-height: 1.62;
+  letter-spacing: 0;
+  color: var(--color-text-secondary);
+  font-weight: 400;
+}
 
 body { font-size: var(--step-0); line-height: var(--leading-body); }
 
@@ -276,6 +313,8 @@ h1.ui-label, h2.ui-label, h3.ui-label, h4.ui-label,
 /* Figures. Applied to any element showing a number that a reader will compare to another. */
 .num, .tabular, td.num, th.num {
   font-family: var(--font-ui), -apple-system, 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  /* A touch heavier and slightly wider than body: a figure a reader compares should hold its
+     own against the label beside it without becoming a heading. */
   font-variant-numeric: tabular-nums;
   font-feature-settings: 'tnum' 1, 'cv01' 1;
   font-feature-settings: 'tnum' 1;
@@ -290,6 +329,8 @@ h1.ui-label, h2.ui-label, h3.ui-label, h4.ui-label,
 
 .eyebrow {
   font-family: var(--font-ui), -apple-system, 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  /* Small caps carry poorly at 12px on a variable face left at its defaults; grading it up a
+     little restores the weight the tracking takes away. */
   font-size: var(--step--1);
   font-weight: 600;
   letter-spacing: 0.08em;
@@ -641,4 +682,117 @@ button:disabled,
   .rise, .rise-stagger > *, .sheen-once::before { animation: none !important; }
   .lift-card { transition: none; }
   .lift-card:hover { transform: none; }
+}
+
+/* ─────────────── Attention surface ───────────────
+   For the one card on a page that is asking to be used. A running border draws the eye without
+   the shouting of a filled panel, and the wave overlay ties it to the hero band so it reads as
+   part of the same product rather than a decorated box.
+
+   The border is a rotating conic gradient behind a solid inner surface: the gradient turns, the
+   card does not, so nothing reflows. `@property` makes the angle a real animatable type, which
+   is what lets the rotation run on the compositor instead of repainting a gradient every frame. */
+
+@property --sweep {
+  syntax: '<angle>';
+  initial-value: 0deg;
+  inherits: false;
+}
+
+@keyframes sweep-around { to { --sweep: 360deg; } }
+
+.attention {
+  position: relative;
+  border-radius: 18px;
+  padding: 2px;                  /* the border's thickness */
+  /* A CONTINUOUS coloured edge with a bright arc travelling round it. The first version left
+     160 degrees fully transparent, so most of the perimeter had no border at all and the effect
+     read as a rendering fault rather than as motion. */
+  background: conic-gradient(from var(--sweep),
+              var(--brand-line) 0deg,
+              var(--brand-bright) 45deg,
+              var(--brand) 85deg,
+              var(--brand-strong) 120deg,
+              var(--brand-line) 190deg,
+              var(--brand-line) 360deg);
+  animation: sweep-around 4s linear infinite;
+  box-shadow: 0 2px 8px rgb(91 33 224 / 0.10), 0 14px 34px -16px rgb(45 11 150 / 0.30);
+}
+
+/* The inner surface. Carries the wave faintly so it belongs to the hero's family.
+
+   The image goes on a pseudo-element rather than as a second background layer: blended against a
+   white card every blend mode either washes it out completely or greys the card, and opacity
+   cannot be set per background layer. A layer at 12% is the only way to get it faint AND
+   coloured. */
+.attention-inner {
+  position: relative;
+  border-radius: 16px;
+  /* Tinted toward the brand rather than plain white, so the card reads as coloured even where
+     the wave behind it is faint. */
+  background: linear-gradient(160deg, #ffffff 0%, var(--brand-soft) 100%);
+}
+.attention-inner::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: image-set(url('/dashboard-card-overlay.png') 1x);
+  background-size: cover;
+  background-position: center right;
+  border-radius: inherit;    /* clips itself, so the card need not clip its children */
+  opacity: 0.22;
+  pointer-events: none;
+}
+/* Content sits above the wave.
+
+   Deliberately no z-index: setting one made every child its own stacking context, so the persona
+   list's z-50 was trapped inside the header and the input below it painted on top. Positioned
+   children with z-index auto paint in DOM order, which already puts them above the pseudo. */
+.attention-inner > * { position: relative; }
+
+/* Border only, no wave and no tint: what the chat composer wants while the agent is working.
+   The decorated inner turned the field lavender, and a field you are typing into has to stay a
+   plain white ground. */
+.attention-plain {
+  position: relative;
+  border-radius: 16px;
+  background: #fff;
+}
+
+/* The saturated variant: the same card carrying the hero's own gradient rather than a wash of it.
+
+   A modifier rather than a change to `.attention-inner`, because the chat composer borrows that
+   class while the agent is working and has to stay white -- a text field you are typing into
+   cannot be dark. */
+.attention-inner.on-brand {
+  background-image: var(--hero-grad);
+  background-color: var(--brand-strong);   /* the floor, so it is never colourless */
+  color: #fff;
+}
+/* The wave reads as texture on a deep ground, so it carries harder here than on the pale card. */
+.attention-inner.on-brand::before {
+  opacity: 0.5;
+  mix-blend-mode: soft-light;
+}
+
+/* The persona pill sits on the deep ground here. Its own colours are set inline by the shared
+   Select, which nothing but `!important` can reach -- and the shared component must keep its
+   pale-ground styling for every other place it appears. */
+.attention-inner.on-brand button[data-testid='persona-select'] {
+  background: #fff !important;
+  border-color: transparent !important;
+  color: var(--brand-strong) !important;
+}
+.attention-inner.on-brand button[data-testid='persona-select'] svg { color: var(--brand) !important; }
+
+/* Without @property the angle cannot animate, so the gradient would sit still at 0deg and read
+   as a lopsided border. Fall back to a fixed brand edge, which is honest and quiet. */
+/* Without @property the angle cannot animate, so the gradient would sit still and read as a
+   lopsided border. A fixed brand edge is honest and quiet. */
+@supports not (background: conic-gradient(from var(--sweep), red, blue)) {
+  .attention { background: var(--brand-grad); animation: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .attention { animation: none; background: var(--brand-grad); }
 }

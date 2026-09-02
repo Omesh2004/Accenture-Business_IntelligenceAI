@@ -125,6 +125,9 @@ LLM_MAX_ATTEMPTS = _i("INTEL_LLM_MAX_ATTEMPTS", 2)
 LLM_NARRATE_SECTIONS = _s("INTEL_LLM_NARRATE_SECTIONS", "0") == "1"
 LLM_TIMEOUT_S = _i("INTEL_LLM_TIMEOUT_S", 60)
 # Room to explain. The cap is a runaway guard, not a style choice.
+# What to assume when the server does not publish its context window. Ollama does not, and its
+# own default is 2048; this must match the num_ctx the served model was built with.
+LLM_ASSUMED_CONTEXT = _i("INTEL_LLM_ASSUMED_CONTEXT", 8192)
 LLM_MAX_TOKENS = _i("INTEL_LLM_MAX_TOKENS", 1600)
 # A little warmth so the prose reads as writing. Numbers come from claims, not sampling.
 LLM_TEMPERATURE = _f("INTEL_LLM_TEMPERATURE", 0.3)

@@ -58,19 +58,21 @@ export function breachCount(points: Marked[]): number {
 
 function Legend() {
   return (
-    <div className="mb-3.5 flex flex-wrap items-center gap-x-6 gap-y-2 text-[11.5px] text-slate-500">
+    <div className="mb-4 flex flex-wrap items-center gap-x-7 gap-y-2
+                    text-[length:var(--step--1)] text-slate-500">
       <span className="inline-flex items-center gap-2">
         <span className="inline-block h-3 w-6 rounded border"
-              style={{ background: 'rgb(91 33 224 / 0.08)', borderColor: 'rgb(91 33 224 / 0.28)' }} />
-        The expected range
+              style={{ background: 'rgb(91 33 224 / 0.08)',
+                       borderColor: 'rgb(91 33 224 / 0.28)' }} />
+        Expected range
       </span>
       <span className="inline-flex items-center gap-2">
         <span className="inline-block h-0.5 w-6 rounded" style={{ background: INSIDE }} />
-        Inside it
+        Within range
       </span>
       <span className="inline-flex items-center gap-2">
         <span className="inline-block h-0.5 w-6 rounded" style={{ background: OUTSIDE }} />
-        Outside it
+        Outside range
       </span>
     </div>
   );
@@ -80,21 +82,30 @@ export default function KpiTrends(
   { series, allowed, loading }:
   { series: Record<string, KpiSeries>; allowed: string[]; loading?: boolean },
 ) {
-  const cards = useMemo(
-    () => KPI_SPECS.filter((k) => allowed.includes(k.id)).map((k) => {
+  // Every governed metric gets a chart, ordered so the ones that left their range come first.
+  // Capping the list hid two of the five the product claims to track, which is a strange thing
+  // for a page whose whole job is the portfolio.
+  const cards = useMemo(() => {
+    const built = KPI_SPECS.filter((k) => allowed.includes(k.id)).map((k) => {
       const s = series[k.id];
       const pts = markWindow(s?.points || [], s?.window);
       return { spec: k, pts, win: s?.window, outside: breachCount(pts) };
-    }),
-    [series, allowed],
-  );
+    });
+    const swing = (c: (typeof built)[number]) => {
+      if (c.pts.length < 2) return 0;
+      const first = c.pts[0].value;
+      const last = c.pts[c.pts.length - 1].value;
+      return first ? Math.abs((last - first) / first) : 0;
+    };
+    return [...built].sort((a, b) => (b.outside - a.outside) || (swing(b) - swing(a)));
+  }, [series, allowed]);
 
   return (
     <>
       <Legend />
-      {/* Two per row. Four across made every chart too narrow to read a date off, which is the
-          one thing a reader needs from a daily series. */}
-      <div className="rise-stagger grid grid-cols-1 gap-4 xl:grid-cols-2">
+      {/* Three across on a desktop, stacking down to one. Any narrower and the date axis -- the
+          one thing a reader needs from a daily series -- stops being readable. */}
+      <div className="rise-stagger grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
         {cards.map(({ spec: k, pts, win, outside }) => {
           const last = pts.length ? pts[pts.length - 1].value : 0;
           const lower = win?.lower;
@@ -103,7 +114,7 @@ export default function KpiTrends(
           return (
             <div key={k.id} className="surface lift-card p-5">
               <div className="mb-1 flex items-baseline justify-between gap-3">
-                <span className="truncate text-[10.5px] font-semibold uppercase
+                <span className="truncate text-[length:var(--step--2)] font-semibold uppercase
                                  tracking-[0.13em] text-slate-500">
                   {k.label}
                 </span>
@@ -113,20 +124,20 @@ export default function KpiTrends(
                 </span>
               </div>
 
-              <p className="mb-3 text-[11.5px]"
+              <p className="mb-3 text-[length:var(--step--1a)]"
                  style={{ color: outside ? OUTSIDE : 'var(--color-slate-400)' }}>
                 {!hasBand
-                  ? 'No expected range on record for this window'
+                  ? 'No forecast band recorded for this range yet'
                   : outside === 0
                     ? `Every day inside ${fmt(k.unit, lower!)} to ${fmt(k.unit, upper!)}`
                     : `${outside} of ${pts.length} days outside `
                       + `${fmt(k.unit, lower!)} to ${fmt(k.unit, upper!)}`}
               </p>
 
-              <div style={{ height: 190 }}>
+              <div style={{ height: 200 }}>
                 {pts.length ? (
                   <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={pts} margin={{ top: 6, right: 8, left: 0, bottom: 0 }}>
+                    <AreaChart data={pts} margin={{ top: 8, right: 14, left: 0, bottom: 0 }}>
                       <defs>
                         <linearGradient id={`fill-${k.id}`} x1="0" y1="0" x2="0" y2="1">
                           <stop offset="0%" stopColor={INSIDE} stopOpacity={0.18} />
@@ -135,9 +146,10 @@ export default function KpiTrends(
                       </defs>
                       <CartesianGrid strokeDasharray="2 5" stroke="#f0f0f6" vertical={false} />
                       <XAxis dataKey="date" tick={{ fontSize: 10.5, fill: '#9b95ad' }}
-                             tickFormatter={(d: string) => d.slice(5)} minTickGap={30}
+                             tickFormatter={(d: string) => d.slice(5)} minTickGap={18}
+                             interval="preserveStartEnd" padding={{ left: 4, right: 4 }}
                              axisLine={false} tickLine={false} />
-                      <YAxis tick={{ fontSize: 10.5, fill: '#9b95ad' }} width={48}
+                      <YAxis tick={{ fontSize: 10.5, fill: '#9b95ad' }} width={42}
                              axisLine={false} tickLine={false} domain={['auto', 'auto']}
                              tickFormatter={(v: number) => (k.unit === 'rate'
                                ? `${Math.round(v * 100)}%`
@@ -164,7 +176,7 @@ export default function KpiTrends(
                     </AreaChart>
                   </ResponsiveContainer>
                 ) : (
-                  <div className="grid h-full place-items-center text-[12.5px] text-slate-400">
+                  <div className="grid h-full place-items-center text-[length:var(--step--1)] text-slate-400">
                     {loading ? 'Loading series' : 'No series for this window'}
                   </div>
                 )}

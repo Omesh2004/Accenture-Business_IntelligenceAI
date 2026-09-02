@@ -67,13 +67,13 @@ export function Panel({
       >
         <div className="min-w-0">
           <h4
-            className="truncate text-[12.5px] font-semibold"
+            className="truncate text-[length:var(--step--1)] font-semibold"
             style={{ color: INK.textSoft, fontFamily: FONT.sans, letterSpacing: 0 }}
           >
             {title}
           </h4>
           {subtitle && (
-            <p className="truncate text-[10.5px]" style={{ color: INK.textFaint }}>
+            <p className="truncate text-[length:var(--step--2)]" style={{ color: INK.textFaint }}>
               {subtitle}
             </p>
           )}
@@ -85,7 +85,7 @@ export function Panel({
 
       {footer && (
         <footer
-          className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 text-[10.5px]"
+          className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 text-[length:var(--step--2)]"
           style={{ borderTop: `1px solid ${INK.hairline}`, color: INK.textFaint, fontFamily: FONT.mono }}
         >
           {footer}
@@ -98,7 +98,7 @@ export function Panel({
 export function SourceChip({ source }: { source: string }) {
   return (
     <span
-      className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px]"
+      className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[length:var(--step--2)]"
       style={{ background: INK.surface, color: INK.textFaint, fontFamily: FONT.mono, border: `1px solid ${INK.hairline}` }}
     >
       <Database className="h-2.5 w-2.5" />
@@ -139,11 +139,11 @@ export function StatLegend({ stats, unit = '' }: { stats: Stats; unit?: string }
     <div className="flex flex-wrap gap-x-5 gap-y-1">
       {cells.map(([label, value]) => (
         <span key={label} className="flex items-baseline gap-1.5">
-          <span className="text-[10px] tracking-wider uppercase" style={{ color: INK.textFaint }}>
+          <span className="text-[length:var(--step--2)] tracking-wider uppercase" style={{ color: INK.textFaint }}>
             {label}
           </span>
           <span
-            className="text-[11.5px]"
+            className="text-[length:var(--step--1a)]"
             style={{ color: INK.textSoft, fontFamily: FONT.mono, fontVariantNumeric: 'tabular-nums' }}
           >
             {compact(value)}
@@ -194,17 +194,17 @@ export function BarGauge({
       {rows.map((row, i) => (
         <div key={`${row.label}-${i}`} className="grid grid-cols-[1fr_auto] gap-x-3 gap-y-1">
           <div className="min-w-0">
-            <p className="truncate text-[12.5px]" style={{ color: INK.text }}>
+            <p className="truncate text-[length:var(--step--1)]" style={{ color: INK.text }}>
               {row.label}
             </p>
             {row.sub && (
-              <p className="truncate text-[10px] tracking-wider uppercase" style={{ color: INK.textFaint }}>
+              <p className="truncate text-[length:var(--step--2)] tracking-wider uppercase" style={{ color: INK.textFaint }}>
                 {row.sub}
               </p>
             )}
           </div>
           <span
-            className="self-center text-[13px] font-semibold"
+            className="self-center text-[length:var(--step--1)] font-semibold"
             style={{ color: INK.text, fontFamily: FONT.mono, fontVariantNumeric: 'tabular-nums' }}
           >
             {compact(row.value)}
@@ -225,7 +225,7 @@ export function BarGauge({
         </div>
       ))}
       {!rows.length && (
-        <p className="py-6 text-center text-[12.5px]" style={{ color: INK.textFaint }}>
+        <p className="py-6 text-center text-[length:var(--step--1)]" style={{ color: INK.textFaint }}>
           No rows to display.
         </p>
       )}
@@ -277,7 +277,7 @@ export const TimeSeriesPanel = memo(function TimeSeriesPanel({
   if (!points.length) {
     return (
       <Panel title={title} subtitle={subtitle}>
-        <p className="px-4 py-10 text-center text-[12.5px]" style={{ color: INK.textFaint }}>
+        <p className="px-4 py-10 text-center text-[length:var(--step--1)]" style={{ color: INK.textFaint }}>
           No series is available for this metric.
         </p>
       </Panel>
@@ -290,7 +290,7 @@ export const TimeSeriesPanel = memo(function TimeSeriesPanel({
       subtitle={subtitle}
       right={
         <span
-          className="text-[18px]"
+          className="text-[length:var(--step-1)]"
           style={{ color: INK.text, fontFamily: FONT.mono, fontVariantNumeric: 'tabular-nums' }}
         >
           {compact(stats.last)}

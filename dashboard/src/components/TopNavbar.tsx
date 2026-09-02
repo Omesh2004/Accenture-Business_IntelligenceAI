@@ -286,7 +286,7 @@ function TopNavbar() {
                           {tenant.name}
                         </span>
                         {tenant.eventCount > 0 && (
-                          <span className="text-[10px] text-gray-400 font-mono">
+                          <span className="text-[length:var(--step--2)] text-gray-400 font-mono">
                             {tenant.eventCount.toLocaleString()}
                           </span>
                         )}
@@ -307,7 +307,7 @@ function TopNavbar() {
           <div ref={profileRef} className="relative">
             <button
               onClick={() => setShowProfileDropdown(!showProfileDropdown)}
-              className="w-8 h-8 cursor-pointer rounded-full bg-[#1a73e8] flex items-center justify-center text-white text-[13px] font-medium hover:bg-blue-700 transition-colors duration-200 uppercase"
+              className="w-8 h-8 cursor-pointer rounded-full bg-[#1a73e8] flex items-center justify-center text-white text-[length:var(--step--1)] font-medium hover:bg-blue-700 transition-colors duration-200 uppercase"
               id="profile-btn"
             >
               {session?.user?.name
@@ -322,7 +322,7 @@ function TopNavbar() {
                     {session?.user?.name ?? 'Admin User'}
                   </p>
                   <p className="text-xs text-gray-500 truncate">{session?.user?.email}</p>
-                  <span className="inline-block mt-1 px-2 py-0.5 bg-blue-50 text-blue-700 text-[10px] font-bold rounded uppercase tracking-wide">
+                  <span className="inline-block mt-1 px-2 py-0.5 bg-blue-50 text-blue-700 text-[length:var(--step--2)] font-bold rounded uppercase tracking-wide">
                     {session?.user?.role?.replace('_', ' ')}
                   </span>
                 </div>

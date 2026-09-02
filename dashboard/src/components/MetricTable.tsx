@@ -11,10 +11,19 @@ import React, { useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { TrendingDown, TrendingUp } from 'lucide-react';
 import { KPI_SPECS, type KpiSeries } from '@/hooks/useKpiSeries';
-import { fmt } from './KpiTrends';
+import { breachCount, fmt, markWindow } from './KpiTrends';
 
-/** A rise is the bad direction here, so colour follows meaning rather than sign. */
+/** A rise is the bad direction here, so the CHANGE figure follows meaning rather than sign. */
 const RISE_IS_BAD = new Set(['transaction_failure_rate']);
+
+/* One meaning per colour, shared with the charts above:
+     purple  the metric stayed inside its expected range
+     crimson some day in the window fell outside it
+   The line used to be coloured by DIRECTION instead, so the same KPI came out purple in its
+   chart and red in this row -- two colour systems on one page, neither of them stated. Direction
+   is carried by the change figure on the right, which is the only place it belongs. */
+const INSIDE = 'var(--brand)';
+const OUTSIDE = 'var(--fall)';
 
 /**
  * The path, drawn into a fixed box at a fixed ratio.
@@ -25,8 +34,8 @@ const RISE_IS_BAD = new Set(['transaction_failure_rate']);
  * in the next. A fixed box makes every row identical.
  */
 function Path({ points, colour }: { points: { value: number }[]; colour: string }) {
-  const W = 240;
-  const H = 26;
+  const W = 260;
+  const H = 30;
   const d = useMemo(() => {
     if (points.length < 2) return '';
     const values = points.map((p) => p.value);
@@ -36,7 +45,7 @@ function Path({ points, colour }: { points: { value: number }[]; colour: string 
       .map((p, i) => {
         const x = (i / (points.length - 1)) * W;
         // Headroom top and bottom so a peak is not clipped by the stroke width.
-        const y = H - 3 - ((p.value - lo) / span) * (H - 6);
+        const y = H - 4 - ((p.value - lo) / span) * (H - 8);
         return `${i ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)}`;
       })
       .join(' ');
@@ -44,13 +53,16 @@ function Path({ points, colour }: { points: { value: number }[]; colour: string 
 
   if (!d) return <span className="block" style={{ height: H }} />;
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none"
-         className="block" aria-hidden>
-      <motion.path
-        d={d} fill="none" stroke={colour} strokeWidth={1.75} vectorEffect="non-scaling-stroke"
+    // `width: 100%` as a style rather than a class, so the SVG fills the cell whatever the
+    // breakpoint. An animated `pathLength` used to draw these: on a re-render the tween
+    // restarted from zero, and with five rows re-rendering as the series loaded the line was
+    // routinely left part-drawn, which read as a chart that stopped halfway through the window.
+    // The path is static now and the row itself carries the entrance.
+    <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" aria-hidden
+         style={{ width: '100%', height: H, display: 'block' }}>
+      <path
+        d={d} fill="none" stroke={colour} strokeWidth={1.85} vectorEffect="non-scaling-stroke"
         strokeLinecap="round" strokeLinejoin="round"
-        initial={{ pathLength: 0 }} animate={{ pathLength: 1 }}
-        transition={{ duration: 0.9, ease: [0.22, 1, 0.36, 1] }}
       />
     </svg>
   );
@@ -64,11 +76,26 @@ export default function MetricTable(
     () => KPI_SPECS.filter((k) => allowed.includes(k.id)).map((k) => {
       const pts = series[k.id]?.points || [];
       const now = pts.length ? pts[pts.length - 1].value : 0;
-      // Against the start of the window on screen, which is the period the header names.
-      const then = pts.length ? pts[0].value : 0;
-      const change = then ? ((now - then) / Math.abs(then)) * 100 : 0;
+      // The end of the window against the start of it, each averaged over a third of the days
+      // that actually carry data.
+      //
+      // Two single days cannot do this job. Against day one of a 90-day range every row read
+      // 0.0%, because the range reaches back before the bank existed and day one was a real
+      // zero. Against the first day that HAS data it read 3575%, because that day is the
+      // ramp-up edge and four accounts is not a baseline. Averaging both ends is stable and
+      // says what a reader means by "how much has this moved".
+      // Same band test the chart applies, so a row and its chart cannot disagree.
+      const marked = markWindow(pts, series[k.id]?.window);
+      const outside = breachCount(marked) > 0;
+      const live = pts.filter((p) => p.value !== 0);
+      const mean = (xs: typeof live) =>
+        (xs.length ? xs.reduce((a, p) => a + p.value, 0) / xs.length : 0);
+      const slice = Math.max(1, Math.floor(live.length / 3));
+      const then = mean(live.slice(0, slice));
+      const later = mean(live.slice(-slice));
+      const change = then ? ((later - then) / Math.abs(then)) * 100 : 0;
       const rose = change >= 0;
-      return { spec: k, pts, now, change: Math.abs(change), rose,
+      return { spec: k, pts, now, change: Math.abs(change), rose, outside,
                good: RISE_IS_BAD.has(k.id) ? !rose : rose };
     }),
     [series, allowed],
@@ -77,19 +104,24 @@ export default function MetricTable(
   if (!rows.length) return null;
 
   return (
-    <div className="surface overflow-hidden">
-      <table className="w-full border-collapse">
+    // Scrolls inside its own card on a narrow screen rather than forcing the page sideways.
+    <div className="surface overflow-x-auto">
+      <table className="w-full min-w-[620px] table-fixed border-collapse">
         <thead>
-          <tr className="border-b border-slate-100 text-[10.5px] font-semibold uppercase
+          <tr className="border-b border-slate-100 text-[length:var(--step--2)] font-semibold uppercase
                          tracking-[0.13em] text-slate-500">
-            <th className="w-[30%] px-6 py-3.5 text-left font-semibold">Metric</th>
-            <th className="w-[16%] px-3 py-3.5 text-right font-semibold">Current</th>
+            <th className="w-[28%] px-6 py-3.5 text-left font-semibold">Metric</th>
+            {/* Centred, not right-aligned. Pushed to the right edge of its cell the reading sat
+                as far from the label it belongs to as the column allowed, opening a gap wide
+                enough to read as an empty column. */}
+            <th className="w-[13%] px-3 py-3.5 text-center font-semibold">Current</th>
+            {/* The trend column takes whatever is left, so the line always spans the cell. */}
             <th className="px-6 py-3.5 text-center font-semibold">Trend (last {days} days)</th>
-            <th className="w-[14%] px-6 py-3.5 text-right font-semibold">Change</th>
+            <th className="w-[15%] px-6 py-3.5 text-right font-semibold">Change</th>
           </tr>
         </thead>
         <tbody>
-          {rows.map(({ spec: k, pts, now, change, rose, good }, i) => {
+          {rows.map(({ spec: k, pts, now, change, rose, good, outside }, i) => {
             const Arrow = rose ? TrendingUp : TrendingDown;
             const colour = good ? 'var(--rise)' : 'var(--fall)';
             return (
@@ -101,14 +133,14 @@ export default function MetricTable(
                 className="border-b border-slate-100 transition-colors last:border-b-0
                            hover:bg-slate-50/70"
               >
-                <td className="truncate px-6 py-4 text-[13.5px] text-slate-700">{k.label}</td>
-                <td className="num px-3 py-4 text-right text-[15px] font-semibold text-slate-900">
+                <td className="truncate px-6 py-4 text-[length:var(--step--1)] text-slate-700">{k.label}</td>
+                <td className="num px-3 py-4 text-center text-[length:var(--step--0a)] font-semibold text-slate-900">
                   {pts.length ? fmt(k.unit, now) : '--'}
                 </td>
                 <td className="px-6 py-4 align-middle">
-                  <Path points={pts} colour={good ? 'var(--brand)' : 'var(--fall)'} />
+                  <Path points={pts} colour={outside ? OUTSIDE : INSIDE} />
                 </td>
-                <td className="px-6 py-4 text-right text-[13px] font-medium"
+                <td className="px-4 py-4 text-right text-[length:var(--step--1)] font-medium"
                     style={{ color: colour }}>
                   <span className="inline-flex items-center justify-end gap-1">
                     <Arrow className="h-3.5 w-3.5" />

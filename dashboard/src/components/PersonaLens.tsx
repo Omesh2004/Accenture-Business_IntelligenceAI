@@ -72,7 +72,7 @@ export default function PersonaLens({
       aria-label="Viewing as"
     >
       <div className="flex flex-wrap items-center gap-2.5">
-        <span className="mr-1 text-[10.5px] font-medium uppercase tracking-[0.18em] text-white/70">
+        <span className="mr-1 text-[length:var(--step--2)] font-medium uppercase tracking-[0.18em] text-white/70">
           Viewing as
         </span>
         {list.map((p) => {
@@ -81,7 +81,7 @@ export default function PersonaLens({
             <button
               key={p.id}
               onClick={() => onChange(p.id as PersonaId)}
-              className={`relative cursor-pointer rounded-full px-4 py-1.5 text-[13px] transition-colors duration-200
+              className={`relative cursor-pointer rounded-full px-4 py-1.5 text-[length:var(--step--1)] transition-colors duration-200
                           ${active ? 'text-[#3d12c9]' : 'text-white/85 hover:text-white'}`}
             >
               {/* One shared pill slides between personas rather than four fading independently. */}
@@ -104,7 +104,7 @@ export default function PersonaLens({
           <button
             onClick={() => setRangeOpen((v) => !v)}
             className="flex cursor-pointer items-center gap-2 rounded-full border border-white/25
-                       bg-white/10 px-3.5 py-1.5 text-[13px] text-white transition-colors
+                       bg-white/10 px-3.5 py-1.5 text-[length:var(--step--1)] text-white transition-colors
                        duration-200 hover:bg-white/20"
           >
             <Calendar className="h-3.5 w-3.5 opacity-80" />
@@ -125,7 +125,7 @@ export default function PersonaLens({
                   <button
                     key={r}
                     onClick={() => { dispatch(setTimeRange(r)); setRangeOpen(false); }}
-                    className={`w-full cursor-pointer rounded-lg px-3 py-2 text-left text-[13px]
+                    className={`w-full cursor-pointer rounded-lg px-3 py-2 text-left text-[length:var(--step--1)]
                                 transition-colors ${r === timeRange
                                   ? 'font-medium text-[color:var(--brand)]'
                                   : 'text-slate-600 hover:bg-slate-50'}`}
@@ -142,7 +142,7 @@ export default function PersonaLens({
 
       <div className="mt-5 flex flex-wrap gap-x-14 gap-y-3">
         <div>
-          <span className="block text-[10.5px] font-medium uppercase tracking-[0.18em] text-white/60">
+          <span className="block text-[length:var(--step--2)] font-medium uppercase tracking-[0.18em] text-white/60">
             Leads with
           </span>
           <AnimatePresence mode="wait">
@@ -152,14 +152,14 @@ export default function PersonaLens({
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -5 }}
               transition={{ duration: 0.24, ease: EASE }}
-              className="mt-1 text-[14.5px]"
+              className="mt-1 text-[length:var(--step--0a)]"
             >
               {lens.leads}
             </motion.p>
           </AnimatePresence>
         </div>
         <div>
-          <span className="block text-[10.5px] font-medium uppercase tracking-[0.18em] text-white/60">
+          <span className="block text-[length:var(--step--2)] font-medium uppercase tracking-[0.18em] text-white/60">
             Withheld
           </span>
           <AnimatePresence mode="wait">
@@ -169,7 +169,7 @@ export default function PersonaLens({
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -5 }}
               transition={{ duration: 0.24, ease: EASE }}
-              className="mt-1 text-[14.5px]"
+              className="mt-1 text-[length:var(--step--0a)]"
             >
               {lens.hides.length
                 ? `${lens.hides.join(', ')}: removed before the answer is built`
@@ -180,7 +180,7 @@ export default function PersonaLens({
       </div>
 
       {current?.remit && (
-        <p className="mt-5 border-t border-white/15 pt-3.5 text-[12.5px] text-white/75">
+        <p className="mt-5 border-t border-white/15 pt-3.5 text-[length:var(--step--1)] text-white/75">
           {current.remit}
         </p>
       )}

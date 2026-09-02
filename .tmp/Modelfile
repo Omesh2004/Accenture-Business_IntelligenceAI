@@ -1,0 +1,6 @@
+FROM qwen2.5:3b-instruct
+
+# The narrator sends the whole signal card set: roughly 4.5k tokens of prompt before it writes a
+# word. Ollama's default context is 2048, and it TRUNCATES silently rather than refusing, so the
+# model would have been narrating from a claim set with the middle cut out.
+PARAMETER num_ctx 8192

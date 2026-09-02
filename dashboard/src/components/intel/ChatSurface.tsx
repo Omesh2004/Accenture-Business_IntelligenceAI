@@ -48,7 +48,7 @@ function Elapsed({ from }: { from: number }) {
     return () => window.clearInterval(id);
   }, []);
   return (
-    <span style={{ color: INK.textFaint, fontFamily: FONT.mono }} className="text-[11px]">
+    <span style={{ color: INK.textFaint, fontFamily: FONT.mono }} className="text-[length:var(--step--1a)]">
       {((now - from) / 1000).toFixed(1)}s
     </span>
   );
@@ -81,9 +81,11 @@ function UserTurn({ text }: { text: string }) {
       transition={{ duration: 0.3, ease: EASE }}
       className="flex justify-end"
     >
+      {/* Same size as the answer beneath it. A question set smaller than its reply reads as a
+          caption on someone else's text. */}
       <div
-        className="max-w-[78%] rounded-2xl px-4 py-2.5 text-[14.5px] leading-[1.6]"
-        style={{ background: INK.sunken, color: INK.text }}
+        className="max-w-[78%] rounded-2xl px-4 py-2.5 leading-[1.62]"
+        style={{ background: INK.sunken, color: INK.text, fontSize: 'var(--step-0)' }}
       >
         {text}
       </div>
@@ -167,14 +169,14 @@ function AssistantTurn({
       <div className="flex items-center gap-2">
         <span
           data-testid="agent-answer-persona"
-          className="text-[11px] font-semibold"
+          className="text-[length:var(--step--1a)] font-semibold"
           style={{ color: INK.accent }}
         >
           {answer?.persona_label || answer?.persona || 'Analyst'}
         </span>
         {answer?.kpi_id && (
           <span
-            className="rounded px-1.5 py-0.5 text-[10px]"
+            className="rounded px-1.5 py-0.5 text-[length:var(--step--2)]"
             style={{ background: INK.sunken, color: INK.textFaint, fontFamily: FONT.mono }}
           >
             {answer.kpi_id}
@@ -194,7 +196,10 @@ function AssistantTurn({
 
       {/* The opening line types; everything structured below it appears once typing is done, so a
           reader is not chasing a moving layout while a table renders beneath it. */}
-      <div data-testid="agent-answer-text" className="text-[14.5px] leading-[1.7]" style={{ color: INK.text }}>
+      {/* The lead sentence is the one passage a reader reads rather than scans, so it takes the
+          serif. Everything structural around it stays in the grotesque. */}
+      <div data-testid="agent-answer-text" className="leading-[1.62]"
+           style={{ color: INK.text, fontFamily: FONT.prose, fontSize: 'var(--step-0)' }}>
         {live && !typed ? (
           <TextType
             as="p"
@@ -221,13 +226,14 @@ function AssistantTurn({
       {typed && answer && (
         <>
           <Reveal delay={0}>
-            <AnswerCards answer={answer} visuals={answer.visuals || []} />
+            <AnswerCards answer={answer} visuals={answer.visuals || []} live={live} />
           </Reveal>
           {charts.length > 0 && (
             <Reveal delay={0.34}>
+              {/* Two per row at most. Three across left each chart about 220px, which is not
+                  enough for an axis label or a driver's name, so every one of them truncated. */}
               <div className={`grid grid-cols-1 gap-3 ${
-                charts.length === 1 ? '' : charts.length === 2 ? 'lg:grid-cols-2'
-                                                              : 'lg:grid-cols-2 xl:grid-cols-3'}`}>
+                charts.length === 1 ? '' : 'lg:grid-cols-2'}`}>
                 {charts.map((v, i) => (
                   <Chart key={`${v.tool}-${v.kind}-${i}`} visual={v} />
                 ))}
@@ -245,13 +251,13 @@ function AssistantTurn({
         >
           <details className="surface group mt-3 overflow-hidden">
             <summary className="flex cursor-pointer select-none items-center gap-2 px-5 py-3
-                                text-[10.5px] font-semibold uppercase tracking-[0.14em]
+                                text-[length:var(--step--2)] font-semibold uppercase tracking-[0.14em]
                                 text-slate-500 transition-colors hover:text-slate-700">
               <span className="inline-block h-1.5 w-1.5 rounded-full"
                     style={{ background: 'var(--brand)' }} />
               How this answer was derived
             </summary>
-            <div className="border-t border-slate-100">
+            <div className="border-t border-slate-100 pb-1">
           <AgentConsole
             gates={answer.rail || []}
             steps={answer.trace || []}
@@ -281,7 +287,7 @@ function AssistantTurn({
               <button
                 key={q}
                 onClick={() => onFollowUp?.(q)}
-                className="cursor-pointer rounded-full border px-3 py-1.5 text-[12px]
+                className="cursor-pointer rounded-full border px-3 py-1.5 text-[length:var(--step--1)]
                            transition-colors duration-200"
                 style={{ borderColor: INK.hairline, background: INK.surface,
                          color: INK.textSoft }}
@@ -295,7 +301,7 @@ function AssistantTurn({
 
       {typed && sources.length > 0 && (
         <div className="flex flex-wrap items-center gap-1.5">
-          <span className="text-[10px] tracking-[0.16em] uppercase" style={{ color: INK.textFaint }}>
+          <span className="text-[length:var(--step--2)] tracking-[0.16em] uppercase" style={{ color: INK.textFaint }}>
             Sources
           </span>
           {sources.map((c) => (
@@ -303,7 +309,7 @@ function AssistantTurn({
               key={`${c.tool}-${c.source}`}
               data-testid="agent-citation"
               title={`${c.tool} read ${c.source}`}
-              className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px]"
+              className="inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[length:var(--step--2)]"
               style={{
                 borderColor: INK.hairline,
                 background: INK.surface,
@@ -518,7 +524,7 @@ function ChatSurface({
               style={{ background: 'var(--brand-grad)' }}>
           <Sparkles className="h-3.5 w-3.5 text-white" />
         </span>
-        <span className="text-[13.5px] font-semibold"
+        <span className="text-[length:var(--step--1)] font-semibold"
               style={{ color: INK.text, fontFamily: FONT.sans }}>
           AI Analyst
         </span>
@@ -544,7 +550,7 @@ function ChatSurface({
               title="Start a new conversation"
               aria-label="Start a new conversation"
               className="mr-1 flex cursor-pointer items-center gap-1.5 rounded-full px-3 py-1.5
-                         text-[12px] font-medium text-white transition-transform duration-200
+                         text-[length:var(--step--1)] font-medium text-white transition-transform duration-200
                          hover:scale-[1.03]"
               style={{ background: 'var(--brand-grad)' }}
             >
@@ -611,7 +617,7 @@ function ChatSurface({
                     speed={1.6}
                     color={INK.textFaint}
                     shineColor={INK.accent}
-                    className="text-[13px] font-medium"
+                    className="text-[length:var(--step--1)] font-medium"
                   />
                   <Elapsed from={startedAt} />
                 </div>
@@ -631,7 +637,7 @@ function ChatSurface({
 
           {error && (
             <p
-              className="rounded-xl px-3 py-2 text-[12.5px]"
+              className="rounded-xl px-3 py-2 text-[length:var(--step--1)]"
               style={{ background: INK.dangerSoft, color: INK.danger }}
             >
               {error}
@@ -644,7 +650,7 @@ function ChatSurface({
 
        {/* Only shown once there is something to summarise, and only for the newest answer. */}
        {latestAnswer && !running && (
-         <div className="hidden min-h-0 xl:flex">
+         <div className="hidden min-h-0 lg:flex">
            <InsightRail answer={latestAnswer} />
          </div>
        )}
@@ -656,7 +662,7 @@ function ChatSurface({
               questions sits between the reader and the thing they asked for, and reads as part
               of the answer rather than as a prompt. Follow-ups live under the answer instead. */}
           {messages.length === 0 && !running && suggestions.length > 0 && (
-            <div className="mb-3 flex flex-wrap gap-1.5">
+            <div className="mb-3 flex flex-wrap justify-center gap-1.5">
               {suggestions.map((s, i) => (
                 <motion.button
                   key={s}
@@ -664,7 +670,7 @@ function ChatSurface({
                   initial={{ opacity: 0, y: 4 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ delay: Math.min(i * 0.05, 0.3), duration: 0.3, ease: EASE }}
-                  className="cursor-pointer rounded-full border px-3.5 py-1.5 text-[12.5px]"
+                  className="cursor-pointer rounded-full border px-3.5 py-1.5 text-[length:var(--step--1)]"
                   style={{ borderColor: INK.hairline, background: INK.surface, color: INK.textSoft }}
                 >
                   {s}
@@ -673,18 +679,22 @@ function ChatSurface({
             </div>
           )}
 
+          {/* While the agent is working the composer takes the running border, so the wait has a
+              visible owner. A spinner in the corner says something is happening; a border around
+              the box the question went into says THIS is what is happening. */}
           <form
             onSubmit={(e) => {
               e.preventDefault();
               submit(question);
             }}
-            className="rounded-3xl border"
-            style={{
+            className={running ? 'attention !rounded-3xl' : 'rounded-3xl border'}
+            style={running ? undefined : {
               borderColor: INK.hairlineStrong,
               background: INK.surface,
               boxShadow: '0 1px 2px rgba(18,19,26,.04), 0 8px 28px rgba(18,19,26,.06)',
             }}
           >
+           <div className={running ? 'attention-plain !rounded-[22px]' : ''}>
             <textarea
               ref={inputRef}
               value={question}
@@ -699,12 +709,12 @@ function ChatSurface({
               maxLength={500}
               placeholder="Ask about any governed metric, what moved, why, and what to do about it."
               data-focus-frame=""
-              className="w-full resize-none border-0 bg-transparent px-5 pt-4 pb-1 text-[15px] leading-[1.6] outline-none"
+              className="w-full resize-none border-0 bg-transparent px-5 pt-4 pb-1 text-[length:var(--step--0a)] leading-[1.6] outline-none"
               style={{ color: INK.text, fontFamily: FONT.sans }}
             />
             <div className="flex items-center gap-2 px-3 pb-2.5">
               <span
-                className="rounded-full px-2.5 py-1 text-[10px] font-semibold tracking-[0.16em] uppercase"
+                className="rounded-full px-2.5 py-1 text-[length:var(--step--2)] font-semibold tracking-[0.16em] uppercase"
                 style={{ background: INK.accentSoft, color: INK.accent }}
               >
                 Evidence-bound
@@ -728,8 +738,9 @@ function ChatSurface({
                 )}
               </motion.button>
             </div>
+           </div>
           </form>
-          <p className="mt-2 text-center text-[10.5px]" style={{ color: INK.textFaint }}>
+          <p className="mt-2 text-center text-[length:var(--step--2)]" style={{ color: INK.textFaint }}>
             Answers come from recorded findings only. Where the evidence does not support one, the
             agent abstains.
           </p>

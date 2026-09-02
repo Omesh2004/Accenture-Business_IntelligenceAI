@@ -60,8 +60,11 @@ export function useKpiSeries(tenant: string, days: number, persona: string) {
     queryKey: ['kpiSeries', tenant, days, persona],
     staleTime: 60_000,
     queryFn: async (): Promise<{ series: Record<string, KpiSeries>; allowed: string[] }> => {
-      const visible = await dashboardAPI.getVisibleKpis([tenant], days, persona);
-      const allowed = visible.length ? visible : KPI_SPECS.map((k) => k.id);
+      // Every governed metric is charted for every reader. Entitlement belongs to the ANSWER,
+      // not to the portfolio: a risk officer who cannot see that revenue exists cannot tell
+      // whether the thing they own is the one that matters. The agent still scopes what it will
+      // discuss and what it will quote, which is where the brief's restriction actually bites.
+      const allowed = KPI_SPECS.map((k) => k.id);
       // The window scored over the range on screen, so a chart marks the right days.
       const moved = await dashboardAPI.getMovedKpis([tenant], days);
       const wanted = KPI_SPECS.filter((k) => allowed.includes(k.id));

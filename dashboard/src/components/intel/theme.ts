@@ -63,9 +63,15 @@ export const GATE_COLOR: Record<string, string> = {
 export const RANK_SCALE = ['#4338ca', '#5b52d6', '#7469e0', '#8d82e9', '#a79cf1', '#c1b8f8'];
 
 export const FONT = {
-  display: 'var(--font-display), Georgia, serif',
-  sans: 'var(--font-inter), system-ui, sans-serif',
-  mono: 'var(--font-mono), ui-monospace, SFMono-Regular, monospace',
+  // `--font-inter` was never defined: the variable is `--font-ui`, so every inline style
+  // in the chat quietly fell back to system-ui and the conversation was set in a
+  // different face from the rest of the product.
+  sans: 'var(--font-ui), system-ui, sans-serif',
+  display: 'var(--font-display), system-ui, sans-serif',
+  // Kept so call sites resolve; deliberately the same face as the rest.
+  prose: 'var(--font-ui), system-ui, sans-serif',
+  // No monospace family is loaded; the stack's own fallbacks are the real face here.
+  mono: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
 } as const;
 
 /**

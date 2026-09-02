@@ -30,7 +30,11 @@ BRONZE = "bronze"
 EXTRACT_URL = os.environ.get("EXTRACT_API_URL", "http://nexabank-backend:5000/api")
 EXTRACT_TOKEN = os.environ.get("EXTRACT_API_TOKEN", "")
 PAGE_SIZE = int(os.environ.get("EXTRACT_PAGE_SIZE", "1000"))
-MAX_PAGES = int(os.environ.get("EXTRACT_MAX_PAGES", "200"))
+# A safety stop, not a budget. At 200 pages a full extract quietly ended after 200,000 source
+# rows: the bank has more than that, so bronze held history up to one arbitrary day and every
+# downstream number for the days after it read zero. The cap has to sit well above the size of
+# the source, or it silently truncates the warehouse.
+MAX_PAGES = int(os.environ.get("EXTRACT_MAX_PAGES", "5000"))
 HTTP_TIMEOUT_S = int(os.environ.get("EXTRACT_TIMEOUT_S", "30"))
 
 # entity -> (_source_id, the record's id field, the record's version-clock field)
@@ -98,6 +102,7 @@ def _extract_watermarked(entity: str, full: bool) -> int:
     cursor_id = "" if full else read_cursor_id(source_id, entity)
     extracted_at = _now()
     total, max_ts = 0, since
+    page_watermark = since
     for _ in range(MAX_PAGES):
         page = _fetch(entity, {"since": since.isoformat(), "since_id": cursor_id,
                                "limit": PAGE_SIZE})
@@ -117,10 +122,18 @@ def _extract_watermarked(entity: str, full: bool) -> int:
                          json.dumps(r, default=str, sort_keys=True), extracted_at])
         total += _land(rows)
         since = _dt(page.get("watermark")) or max_ts
+        # The cursor the NEXT run resumes from has to be the one the source paginates on.
+        # `max_ts` is the newest row VERSION seen, and for transactions the payload carries no
+        # version field at all, so it fell back to `occurred_at` -- event time. Storing that as
+        # the cursor mixed two clocks: the next run asked for `updatedOn > <an occurred_at>`.
+        page_watermark = max(page_watermark, _dt(page.get("watermark")) or EPOCH)
         cursor_id = page_cur
         if not page.get("has_more"):
             break
-    write_watermark(source_id, entity, max_ts, total, cursor_id=cursor_id)
+    else:
+        logger.warning("%s: stopped at the %d page safety cap with more rows on the source; "
+                       "raise EXTRACT_MAX_PAGES", entity, MAX_PAGES)
+    write_watermark(source_id, entity, page_watermark or max_ts, total, cursor_id=cursor_id)
     return total
 
 

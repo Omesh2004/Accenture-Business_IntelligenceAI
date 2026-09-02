@@ -77,11 +77,12 @@ REGISTRY: dict[str, Persona] = {
         kpi_preference=("revenue", "loan_approval_volume"),
         # Money broken into its lines, and where it is heading.
         chain_bias=("factor", "forecast", "action"),
-        examples=("Which metric moved most this week?",
-                  "What drove the change in revenue?",
+        # Openers, not follow-ups. Every one names a metric and stands on its own, because on a
+        # fresh conversation there is nothing for "this figure" or "this analysis" to refer to --
+        # and examples[0] is also offered bare as "Try: ..." when a question cannot be answered.
+        examples=("What drove the change in revenue?",
                   "What does the forecast say for revenue?",
-                  "How reliable is the revenue figure?",
-                  "What did this analysis cost to produce?"),
+                  "Which metric moved most this week?"),
         max_tools_per_round=2, max_rounds=2, detail="summary",
     ),
     "ops_manager": Persona(
@@ -91,8 +92,11 @@ REGISTRY: dict[str, Persona] = {
         greeting="Good to see you. I report on where operations moved and what can be done.",
         intents=frozenset({"cause", "action", "trust", "freshness", "status",
                            "catalog", "definition", "ranking", "trend", "greeting", "help"}),
-        owner_roles=frozenset({"lending_ops", "digital_channels", "growth_analytics",
-                               "retail_banking", "analytics"}),
+        # `onboarding_ops` owns every KYC lever in contracts/levers.yaml, and this persona IS the
+        # onboarding manager. Leaving it out meant the one reader who can fix a KYC leak was told
+        # "no lever here is yours to pull" and handed their own action to someone else.
+        owner_roles=frozenset({"onboarding_ops", "lending_ops", "digital_channels",
+                               "growth_analytics", "retail_banking", "analytics"}),
         lead_in={
             "cause": "Operational position:",
             "action": "Recommended action:",
@@ -103,10 +107,8 @@ REGISTRY: dict[str, Persona] = {
         # Where it leaked, and the lever that closes it.
         chain_bias=("cause", "action"),
         examples=("Why did KYC completion rate fall?",
-                  "Where is the drop concentrated?",
-                  "What action is recommended, and who owns it?",
-                  "Is the loan approval volume reliable enough to act on?",
-                  "How current is the data behind this?"),
+                  "Where is the KYC drop concentrated by segment?",
+                  "What action is recommended for KYC completion, and who owns it?"),
         max_tools_per_round=3, max_rounds=3, detail="standard",
     ),
     "analyst": Persona(
@@ -127,10 +129,7 @@ REGISTRY: dict[str, Persona] = {
         # The path, the attribution and how it was arrived at.
         chain_bias=("trend", "cause", "factor", "trust"),
         examples=("Why did KYC completion rate fall, and where is it concentrated?",
-                  "Was the change price, volume or mix?",
                   "Show the forecast band for transaction failure rate.",
-                  "How reliable is this figure, and which checks passed?",
-                  "What did this analysis cost in tokens and latency?",
                   "Which KPIs do you track?"),
         max_tools_per_round=4, max_rounds=3, detail="full",
     ),
@@ -141,7 +140,10 @@ REGISTRY: dict[str, Persona] = {
         greeting="Good to see you. I report on onboarding and credit exposure, and what is provable.",
         intents=frozenset({"cause", "action", "trust", "forecast", "freshness", "status",
                            "catalog", "definition", "ranking", "trend", "greeting", "help"}),
-        owner_roles=frozenset({"lending_ops", "retail_banking", "growth_analytics"}),
+        # Risk owns the controls on onboarding integrity and on payments failures, which is what
+        # its remit names. Without these it could describe an exposure and never act on one.
+        owner_roles=frozenset({"onboarding_ops", "payments_ops", "lending_ops",
+                               "retail_banking", "growth_analytics"}),
         lead_in={
             "cause": "Risk position:",
             "action": "Required control action:",
@@ -153,10 +155,8 @@ REGISTRY: dict[str, Persona] = {
         # Exposure, and whether the finding is provable.
         chain_bias=("cause", "trust", "action"),
         examples=("Why did KYC completion rate fall?",
-                  "Is the loan approval rate verified and safe to act on?",
-                  "Where is the KYC drop concentrated by segment?",
-                  "What control action is recommended for loan approvals?",
-                  "How current is the data behind these figures?"),
+                  "Is the loan approval volume verified and safe to act on?",
+                  "What control action is recommended for loan approvals?"),
         max_tools_per_round=3, max_rounds=3, detail="full",
     ),
 }

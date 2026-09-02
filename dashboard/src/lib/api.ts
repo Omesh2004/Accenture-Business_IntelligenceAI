@@ -856,11 +856,19 @@ export const dashboardAPI = {
         + (days ? `&days=${days}` : ''));
       const out: Record<string, MovedWindow> = {};
       for (const i of r.data?.insights || []) {
-        if (!i.anomaly_id || !i.window_start) continue;
+        if (!i.kpi_id) continue;
+        // A band and an anomaly are two different facts, and requiring both dropped every metric
+        // that is behaving. The one KPI sitting INSIDE its range has no anomaly to carry a
+        // window, so it was skipped here -- which left every panel downstream showing nothing but
+        // breaches and reporting "4 of 4 outside" when the true reading was 4 of 5.
+        // The forecast band stands on its own; the shaded window is the part that needs the
+        // anomaly, and 1970 is how a null window start arrives over the wire.
+        const start = String(i.window_start || '').slice(0, 10);
+        const scored = Boolean(i.anomaly_id) && start > '1971-01-01';
         out[i.kpi_id] = {
           // Dates only. The series is day-grain, so a timestamp would never match a tick.
-          start: String(i.window_start).slice(0, 10),
-          end: String(i.window_end || '').slice(0, 10),
+          start: scored ? start : '',
+          end: scored ? String(i.window_end || '').slice(0, 10) : '',
           direction: Number(i.direction ?? 0),
           severity: String(i.severity || ''),
           lower: i.band_lower == null ? undefined : Number(i.band_lower),

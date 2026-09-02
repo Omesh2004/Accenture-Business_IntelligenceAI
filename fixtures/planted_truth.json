@@ -1,33 +1,30 @@
 {
-  "generated_at": "2026-09-02T05:01:33.932Z",
+  "generated_at": "2026-09-02T08:50:16.922Z",
   "plan": {
     "tenantId": "bank_a",
     "customers": 4000,
     "days": 55,
     "seed": 20260831,
+    "reset": true,
     "templates": [
-      "spend_slump_region"
+      "failure_burst"
     ]
   },
   "written": {
     "customers": 4000,
     "accounts": 4000,
-    "transactions": 141052,
-    "applications": 1383
+    "transactions": 151694,
+    "applications": 1344
   },
   "planted": [
     {
       "tenant_id": "bank_a",
-      "scenario": "spend_slump_region",
-      "kpi_id": "revenue",
-      "anomaly_days": 14,
-      "planted_segment": {
-        "region": [
-          "Asia"
-        ]
-      },
-      "expected_direction": "down",
-      "expected_rank1_dimension": "region",
+      "scenario": "failure_burst",
+      "kpi_id": "transaction_failure_rate",
+      "anomaly_days": 7,
+      "planted_segment": {},
+      "expected_direction": "up",
+      "expected_rank1_dimension": "",
       "expected_verdict": "pass"
     }
   ]

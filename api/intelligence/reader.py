@@ -55,7 +55,8 @@ def _loads(value: Any, default):
 
 
 def latest_insight(tenant_id: str, persona: str = "analyst",
-                   kpi_id: str | None = None, window_days: int | None = None) -> dict | None:
+                   kpi_id: str | None = None, window_days: int | None = None,
+                   exclude_kpis: tuple[str, ...] | list[str] = ()) -> dict | None:
     """The insight most worth reading for a tenant/persona, with evidence and engine breakdown.
 
     `generated_at` is pinned to the window end for determinism, so every insight in a sweep shares
@@ -70,6 +71,11 @@ def latest_insight(tenant_id: str, persona: str = "analyst",
         f"  SELECT * FROM {DB}.insights FINAL WHERE tenant_id = %(t)s AND persona = %(p)s "
         + ("  AND window_days = %(w)s " if window_days else "")
         + ("  AND kpi_id = %(k)s " if kpi_id else "")
+        # Entitlement is applied HERE, not by blanking fields on the way out. Redacting
+        # afterwards returned a Revenue finding to Operations with its kpi_id nulled and its
+        # headline and narrative still naming Revenue: the restriction leaked the very thing it
+        # was meant to withhold, and the missing id crashed the page that rendered it.
+        + ("  AND kpi_id NOT IN %(x)s " if exclude_kpis else "")
         + ") AS i LEFT JOIN ("
           f"  SELECT anomaly_id, max(materiality) AS materiality, max(detected_at) AS detected_at "
           f"  FROM {DB}.anomalies FINAL WHERE tenant_id = %(t)s "
@@ -85,6 +91,8 @@ def latest_insight(tenant_id: str, persona: str = "analyst",
     params = {"t": tenant_id, "p": persona, "declared": declared}
     if kpi_id:
         params["k"] = kpi_id
+    if exclude_kpis:
+        params["x"] = tuple(exclude_kpis)
     if window_days:
         params["w"] = int(window_days)
     rows = _ch().query(sql, params)
@@ -239,7 +247,10 @@ def recommendations(tenant_id: str, limit: int = 20, anomaly_id: str | None = No
     rows = _ch().query(
         f"SELECT rec_id, anomaly_id, action, lever, owner_role, expected_impact, status "
         f"FROM {DB}.recommendations FINAL WHERE {where} "
-        "ORDER BY rec_id ASC LIMIT %(n)s",
+        # `investigate` is the declared fallback: what Decide proposes when it has no localized
+        # driver to act on. Ordering by rec_id let that outrank a real lever written for the same
+        # anomaly, so a reader was told to go and look into it while a repair sat one row below.
+        "ORDER BY lever = 'investigate' ASC, rec_id ASC LIMIT %(n)s",
         params,
     )
     out = []

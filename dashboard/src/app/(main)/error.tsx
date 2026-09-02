@@ -36,7 +36,7 @@ export default function DashboardError({
               The page failed while loading its data. This is usually the Analytics API being
               unreachable rather than a problem with the data itself, nothing has been changed.
             </p>
-            <p className="mt-3 break-words rounded-xl border border-slate-200 bg-slate-50 p-3 font-mono text-[11px] text-slate-600">
+            <p className="mt-3 break-words rounded-xl border border-slate-200 bg-slate-50 p-3 font-mono text-[length:var(--step--1a)] text-slate-600">
               {error.message || 'Unknown error'}
               {error.digest ? ` (digest ${error.digest})` : ''}
             </p>

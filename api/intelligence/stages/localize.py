@@ -24,6 +24,43 @@ class LocalizeResult:
     note: str = ""
 
 
+def ratio_weights(ctx, metric_layer, contract, baseline_window) -> tuple[float, float] | None:
+    """The denominator totals for the scored and baseline windows, or None when not a ratio.
+
+    A rate is N/D. Decomposing only N answers a different question: for KYC the completion RATE
+    fell while completions themselves ROSE, because starts rose faster. Every numerator cell then
+    moved UP against a movement recorded as DOWN, the direction filter rejected all of them, and
+    Localize reported that no segment was concentrated enough to be a driver -- of a leak that is
+    plainly visible by region in the warehouse.
+
+    With both totals in hand a cell's contribution becomes n_i/D, whose change across the two
+    windows sums EXACTLY to the change in the rate. That is additive across cells, which is what
+    the contribution figures have to be, and it is still computed on the underlying counts rather
+    than on the rate itself.
+    """
+    if not contract.is_ratio:
+        return None
+    den = contract.denominator()
+    if den is None:
+        return None
+    try:
+        d_now = float(metric_layer.fundamental_total(ctx.tenant_id, den, ctx.window))
+        d_base = float(metric_layer.fundamental_total(ctx.tenant_id, den, baseline_window))
+    except Exception:                                               # noqa: BLE001
+        return None
+    if d_now <= 0 or d_base <= 0:
+        return None
+    return d_now, d_base
+
+
+def _as_rate_shares(leaves: dict, weights: tuple[float, float] | None) -> dict:
+    """Rescale raw counts into each cell's share of the rate, when the KPI is one."""
+    if not weights:
+        return leaves
+    d_now, d_base = weights
+    return {cell: (v / d_now, b / d_base) for cell, (v, b) in leaves.items()}
+
+
 def run(ctx, metric_layer, anomaly: dict, dims: list[str], baseline_window) -> LocalizeResult:
     contract = ctx.contract
     if not dims:
@@ -37,6 +74,9 @@ def run(ctx, metric_layer, anomaly: dict, dims: list[str], baseline_window) -> L
     direction = int(anomaly.get("direction", -1))
     max_depth = min(contract.max_depth, len(dims))
     min_vol = contract.min_segment_volume
+    # For a ratio every cell is measured as its share of the rate, so the parts sum to the
+    # movement the anomaly recorded rather than to the numerator's own movement.
+    weights = ratio_weights(ctx, metric_layer, contract, baseline_window)
 
     ranked: list[tuple[tuple, tuple, float, float]] = []  # (dims, cell, delta, baseline_value)
     truncated = False
@@ -44,7 +84,7 @@ def run(ctx, metric_layer, anomaly: dict, dims: list[str], baseline_window) -> L
     # PSqueeze first (CLAUDE.md section 9). It needs the leaves -- the finest cells -- so it can
     # cluster by deviation and test the ripple effect; one query gives them all.
     ps = _psqueeze_causes(ctx, metric_layer, fundamental, dims, direction, max_depth,
-                          min_vol, baseline_window)
+                          min_vol, baseline_window, weights)
     if ps:
         ranked = ps
         method = "psqueeze"
@@ -61,6 +101,9 @@ def run(ctx, metric_layer, anomaly: dict, dims: list[str], baseline_window) -> L
             except Exception:
                 truncated = True
                 continue
+            if weights:
+                d_now, d_base = weights
+                pairs = {c: (v / d_now, b / d_base) for c, (v, b) in pairs.items()}
             for cell, (cur_v, base_v) in pairs.items():
                 delta = cur_v - base_v
                 # Only cells moving the same way as the headline can explain it.
@@ -80,6 +123,11 @@ def run(ctx, metric_layer, anomaly: dict, dims: list[str], baseline_window) -> L
     try:
         now_total = metric_layer.fundamental_total(ctx.tenant_id, fundamental, ctx.window)
         was_total = metric_layer.fundamental_total(ctx.tenant_id, fundamental, baseline_window)
+        if weights:
+            # Same units as the cells: the rate itself, so a contribution is a share of the
+            # movement the reader was told about rather than of the numerator's own movement.
+            d_now, d_base = weights
+            now_total, was_total = now_total / d_now, was_total / d_base
         total_move = abs(now_total - was_total)
     except Exception:
         total_move = 0.0
@@ -162,7 +210,7 @@ def run(ctx, metric_layer, anomaly: dict, dims: list[str], baseline_window) -> L
 
 
 def _psqueeze_causes(ctx, metric_layer, fundamental, dims, direction, max_depth, min_vol,
-                     baseline_window):
+                     baseline_window, weights=None):
     """PSqueeze per dimension, then rank the dimensions by how well each explains.
 
     gold.kpi_daily_by_dim is grained one dimension per row, so there are no cross-dimensional
@@ -184,6 +232,10 @@ def _psqueeze_causes(ctx, metric_layer, fundamental, dims, direction, max_depth,
         try:
             leaf_dims, leaves = metric_layer.leaf_cells(ctx.tenant_id, fundamental,
                                                         ctx.window, long_base, min_vol)
+            # The long baseline is scaled to this window's length before it is turned into
+            # shares, so the two sides of the comparison cover the same span.
+            leaves = {c: (v, b * scale) for c, (v, b) in leaves.items()}
+            leaves = _as_rate_shares(leaves, weights)
         except Exception:
             leaf_dims, leaves = [], {}
         usable = [d for d in leaf_dims if d in dims]
@@ -212,6 +264,10 @@ def _psqueeze_causes(ctx, metric_layer, fundamental, dims, direction, max_depth,
             raw = metric_layer.cell_deltas(ctx.tenant_id, fundamental, [dim],
                                            ctx.window, long_base, min_vol)
             cells = {k: (cur, base * scale) for k, (cur, base) in raw.items()}
+            # Same units as the cube path above. Left as raw counts this fallback handed the
+            # concentration guard a count to compare against a rate, so a cell's "share of the
+            # population" came out at 72 and every candidate was rejected.
+            cells = _as_rate_shares(cells, weights)
         except Exception:
             continue
         if len(cells) < config.PSQUEEZE_MIN_LEAVES:

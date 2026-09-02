@@ -83,245 +83,99 @@ export interface TemplateRun {
   passes?: number
 }
 
-interface Template {
+export interface Template {
   id: string
   label: string
   /** What the operator should expect to see move, in plain language. */
   expect: string
   /** The starting-point override this template fills the controls with. */
   build: () => BehaviorPayload | null
+  /**
+   * The banking-fact template this plants, from nexabank/src/simulate/templates.ts.
+   *
+   * Present means the run rebuilds FACTS -- the source every KPI value comes from -- rather than
+   * only emitting a clickstream, which cannot move a KPI at all.
+   */
+  factTemplate?: string
   /** Fast-mode run settings this template needs. Applied to the controls on selection. */
   run?: TemplateRun
 }
 
 /**
- * Templates are pre-filled targeting setups. Every id below is a real canonical event or
- * route from the catalog; the backend drops anything it does not recognise. Numbers scale
- * the generator's baseline rates (BASELINE_BEHAVIOR in simulationBehavior.ts).
+ * One template per governed KPI, plus a baseline and a false-positive check.
+ *
+ * The previous list targeted CLICKSTREAM events. Per docs/DATA_MODEL.md every KPI value comes
+ * from the daily banking snapshot and the clickstream is behavioural context, so those templates
+ * could not move a single number on the dashboard however hard they were aimed -- and a run of
+ * twenty users could not shift a metric computed over four thousand customers in any case.
+ *
+ * Each of these names a `factTemplate` instead: the run rebuilds the banking facts with that
+ * anomaly applied, so the movement exists in the source the KPIs are actually built from. The
+ * engine still has to find it.
  */
-// The seed the paired loan-demo templates share. Both must regenerate the SAME customer-days:
-// step 2 replaces step 1's applications rather than adding a second, healthier cohort beside them.
-const LOAN_DEMO_SEED = 4242
-
 export const TEMPLATES: Template[] = [
   {
     id: "baseline",
     label: "Baseline — no change",
-    expect: "Normal traffic. Use this to establish history before introducing a movement.",
+    expect:
+      "Rebuilds the bank with no movement planted. Every KPI should read inside its expected " +
+      "range and the agent should report nothing material. Record this as the BEFORE state.",
     build: () => null,
+    factTemplate: "baseline",
   },
   {
-    id: "demo_loan_step1_healthy",
-    label: "Demo step 1 · Loan approvals healthy (reset)",
+    id: "kyc_leak_single_region",
+    label: "KYC completion falls — one region",
     expect:
-      "Clears the mock loan history and rebuilds 30 quiet days at ~0.60 approval. loan_approval_rate reads inside its band and the agent reports no movement. This is the BEFORE state to record. Only the loan table is cleared, so the revenue, deposit and KYC movements are left alone. Fast mode.",
+      "Onboarding leaks in Europe for nine days. KYC Completion Rate drops below its band and " +
+      "Localize should name the region rather than spreading the cause across the cube.",
     build: () => null,
-    run: { seed: LOAN_DEMO_SEED, purgeTables: ["fact_loan_applications"], count: 121, days: 30, passes: 4 },
+    factTemplate: "kyc_leak_single_region",
   },
   {
-    id: "demo_loan_step2_freeze",
-    label: "Demo step 2 · Loan approvals freeze",
+    id: "failure_burst",
+    label: "Transaction failures spike",
     expect:
-      "Re-runs the SAME customers and days as step 1, approving none of the last 7 days. Approvals go to 0.000 while applications hold, so the break is at the decision step and not in demand. loan_approval_rate falls from ~0.62 to ~0.08, well outside its 0.38 to 0.77 band. Run step 1 first: without that history there is nothing to measure the fall against.",
-    build: () => ({
-      windowDays: 7,
-      targets: [{ kind: "event", id: "loan.approved.success", traffic: 0 }],
-    }),
-    run: { seed: LOAN_DEMO_SEED, count: 121, days: 30, passes: 4 },
+      "A payments incident over the last seven days. Transaction Failure Rate rises sharply and " +
+      "is graded urgent; fee revenue follows it down.",
+    build: () => null,
+    factTemplate: "failure_burst",
   },
   {
-    id: "kyc_drop_segment",
-    label: "KYC completions fall — mobile users in India",
-    expect:
-      "loan.kyc_completed.success thinned to ~20%, scoped to device_type=mobile AND location=India. Starts hold; loan applications dip downstream a few days later.",
-    build: () => ({
-      windowDays: 5,
-      segment: { device_type: "mobile", location: "India" },
-      targets: [{ kind: "event", id: "loan.kyc_completed.success", traffic: 0.2 }],
-    }),
-  },
-  {
-    id: "kyc_drop_global",
-    label: "KYC completions fall — all traffic",
-    expect:
-      "loan.kyc_completed.success thinned everywhere, with no single segment to blame — a harder case to explain than the scoped one.",
-    build: () => ({
-      windowDays: 5,
-      targets: [{ kind: "event", id: "loan.kyc_completed.success", traffic: 0.25 }],
-    }),
-  },
-  {
-    id: "kyc_failures",
-    label: "KYC verification fails more often (rejections)",
-    expect:
-      "Starts hold steady but loan.kyc failures rise ~4x and completions fall, so the funnel narrows at verification rather than at entry.",
-    build: () => ({
-      windowDays: 5,
-      targets: [{ kind: "event", id: "loan.kyc.failure", failure: 4 }],
-    }),
-  },
-  {
-    id: "approval_slowdown",
-    label: "Loan approvals slow down",
-    expect:
-      "loan.approved.success thinned to ~25% while loan.applied.success holds (a reduction does not drag its funnel down), so the drop is at the approval step, not demand.",
-    build: () => ({
-      windowDays: 6,
-      targets: [{ kind: "event", id: "loan.approved.success", traffic: 0.25 }],
-    }),
-  },
-  {
-    id: "demand_spike",
+    id: "loan_demand_spike",
     label: "Loan demand spikes",
     expect:
-      "loan.applied.success x4; the KYC steps that feed it rise proportionally (safeguard on), and approvals follow at the usual rate.",
-    build: () => ({
-      windowDays: 5,
-      targets: [{ kind: "event", id: "loan.applied.success", traffic: 4 }],
-    }),
+      "Applications surge for ten days and approvals follow. Loan Approval Volume rises above " +
+      "its band with no fault anywhere in the funnel.",
+    build: () => null,
+    factTemplate: "loan_demand_spike",
   },
   {
-    id: "shift_mobile",
-    label: "Population shifts to mobile",
+    id: "spend_slump_region",
+    label: "Revenue falls — one region",
     expect:
-      "The device mix moves without any rate changing. Aggregate KPIs may barely move while the population underneath them changes — a genuinely harder inference.",
-    build: () => ({ windowDays: 6, mix: { deviceWeights: { mobile: 9, desktop: 1, tablet: 1 } } }),
+      "Card spend in Asia collapses to under half for a fortnight. Revenue falls with no cause " +
+      "inside the onboarding funnel, which is what makes it a revenue story and not a KYC one.",
+    build: () => null,
+    factTemplate: "spend_slump_region",
   },
   {
-    id: "shift_india",
-    label: "Population shifts to India",
-    expect: "The geography mix concentrates on location=India, again with no rate change.",
-    build: () => ({ windowDays: 6, mix: { countryWeights: { India: 9, USA: 1, "United Kingdom": 1 } } }),
-  },
-  {
-    id: "pro_collapse",
-    label: "Pro conversions collapse",
+    id: "signup_slowdown",
+    label: "New account signups slow",
     expect:
-      "features.unlock failure raised ~6x, so far fewer users go pro and pro_revenue falls downstream. Its figures are modelled per conversion — the event count is the real quantity.",
-    build: () => ({
-      windowDays: 5,
-      targets: [{ kind: "event", id: "features.unlock.failed", failure: 6 }],
-    }),
+      "Fewer accounts opened over the last ten days, with nothing wrong downstream. New Account " +
+      "Signups falls while KYC and approvals hold.",
+    build: () => null,
+    factTemplate: "signup_slowdown",
   },
   {
-    id: "pro_errors",
-    label: "Pro feature errors spike",
+    id: "noise_only",
+    label: "Noise only — nothing planted",
     expect:
-      "Failure raised ~6x on every pro feature route, so .failure events rise sharply against flat .success events — the split between them is the signal.",
-    build: () => ({
-      windowDays: 4,
-      targets: [
-        { kind: "route", id: "/pro-feature?id=crypto-trading", failure: 6 },
-        { kind: "route", id: "/pro-feature?id=wealth-management-pro", failure: 6 },
-        { kind: "route", id: "/pro-feature?id=bulk-payroll-processing", failure: 6 },
-        { kind: "route", id: "/pro-feature?id=ai-insights", failure: 6 },
-      ],
-    }),
-  },
-  {
-    id: "role_violations",
-    label: "Unauthorized access burst",
-    expect:
-      "auth.role.violation (baseline rate 0) injected in volume with the realism safeguard OFF — a categorical anomaly unconnected to normal traffic.",
-    build: () => ({
-      windowDays: 3,
-      targets: [{ kind: "event", id: "auth.role.violation", traffic: 12 }],
-      relaxJourney: true,
-    }),
-  },
-
-  // ── Governed-KPI scenarios ────────────────────────────────────────────────────────────────
-  //
-  // The templates above target an EVENT and leave which KPI moves to be worked out. These name
-  // the governed contract they are built to move, and size the movement against that metric's own
-  // noise. That second part is what the earlier ones got wrong in practice: a drop the generator
-  // faithfully produced still sat inside the forecast band, so Detect stayed quiet and the run
-  // looked broken. A band is fitted on the metric's own history, so how far a movement must travel
-  // to count is a property of the metric, not a number that transfers between them.
-  //
-  //   loan_approval_rate      band ~0.78 wide on a few dozen applications a day -> needs a collapse
-  //   kyc_completion_rate     band ~0.15 wide on hundreds of events a day       -> a third is plenty
-  //   digital_adoption_rate   band ~0.02 wide, pinned at 1.0                    -> very sensitive
-  //
-  // Run "Build baseline history" first on a quiet tenant. Without dense history behind it the band
-  // is fitted on noise, and nothing short of a collapse will ever clear it.
-  {
-    id: "baseline_history",
-    label: "Build baseline history — no movement",
-    expect:
-      "High volume, no rate change, so every KPI gets a dense and quiet history. Detect scores against a band fitted on this, and a band fitted on thin data is too wide for any real movement to clear. Run this before planting anything.",
-    build: () => ({ windowDays: 0 }),
-  },
-  {
-    id: "kpi_kyc_collapse",
-    label: "KPI · KYC completion rate collapses",
-    expect:
-      "kyc_completion_rate falls from ~0.68 to ~0.20 for five days while starts hold. KYC carries hundreds of events a day, so its band is narrow and this clears it comfortably. Loan applications dip a few days later as the funnel narrows.",
-    build: () => ({
-      windowDays: 5,
-      targets: [{ kind: "event", id: "loan.kyc_completed.success", traffic: 0.3 }],
-    }),
-  },
-  {
-    id: "kpi_approval_freeze",
-    label: "KPI · Loan approvals freeze",
-    expect:
-      "loan_approval_rate falls from ~0.62 to ~0.06 for five days while applications hold, so the drop is at the decision step and not in demand. Deliberately severe: this metric's band is wide, and a milder cut stays inside it.",
-    build: () => ({
-      windowDays: 5,
-      targets: [{ kind: "event", id: "loan.approved.success", traffic: 0.1 }],
-    }),
-  },
-  {
-    id: "kpi_digital_outage",
-    label: "KPI · Digital channels degrade",
-    expect:
-      "digital_adoption_rate falls from 1.00 to ~0.45 as transactions move to BRANCH and ATM. Its band is only a couple of points wide, so this is the sharpest signal available and the easiest to localize.",
-    build: () => ({
-      windowDays: 4,
-      targets: [{ kind: "event", id: "transaction.pay_now.success", traffic: 0.45 }],
-    }),
-  },
-  {
-    id: "kpi_activation_stall",
-    label: "KPI · Product activations stall",
-    expect:
-      "new_product_activations falls as card activation drops from ~0.18 to ~0.02. A count rather than a rate, so the movement reads directly in volume.",
-    build: () => ({
-      windowDays: 5,
-      targets: [{ kind: "event", id: "card.activation.success", traffic: 0.1 }],
-    }),
-  },
-  {
-    id: "kpi_acquisition_burn",
-    label: "KPI · Acquisition cost rises",
-    expect:
-      "campaign_reach halves, so cost_per_acquisition rises: the same spend converts fewer customers. A currency metric, and one of the few whose movement is an INCREASE.",
-    build: () => ({
-      windowDays: 6,
-      targets: [{ kind: "event", id: "campaign.interaction.success", traffic: 0.5 }],
-    }),
-  },
-  {
-    id: "kpi_kyc_india_mobile",
-    label: "KPI · KYC falls, mobile users in India only",
-    expect:
-      "The same KYC collapse, confined to device_type=mobile AND location=India. The aggregate moves less, so this is the case that separates a real driver from noise: Localize should name that cell rather than spreading the loss across the cube.",
-    build: () => ({
-      windowDays: 5,
-      segment: { device_type: "mobile", location: "India" },
-      targets: [{ kind: "event", id: "loan.kyc_completed.success", traffic: 0.2 }],
-    }),
-  },
-  {
-    id: "kpi_noise_control",
-    label: "KPI · Noise control (should NOT be flagged)",
-    expect:
-      "A movement deliberately smaller than the metric's own daily variation: KYC completion moved barely a tenth. Detect should stay quiet. Use it to check the engine distinguishes a real movement from ordinary noise, rather than flagging anything that moves.",
-    build: () => ({
-      windowDays: 4,
-      targets: [{ kind: "event", id: "loan.kyc_completed.success", traffic: 0.92 }],
-    }),
+      "Variance without a level change. The engine must NOT report an anomaly; this is the " +
+      "false-positive check, and a finding here is a bug.",
+    build: () => null,
+    factTemplate: "noise_only",
   },
 ]
 

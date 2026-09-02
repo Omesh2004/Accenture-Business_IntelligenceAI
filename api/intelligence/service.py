@@ -50,7 +50,8 @@ async def run_forecast_batch(interval_minutes: int = None) -> None:
                 win = current_window()
                 hist = Window(win.start - timedelta(days=config.BASELINE_DAYS), win.start)
                 contracts = load_all(ml, tenant, win)
-                n = orch.run_forecast_batch(tenant, contracts, hist, win.start)
+                n = orch.run_forecast_batch(tenant, contracts, hist, win.start,
+                                            config.WINDOW_DAYS)
                 logger.info("forecast batch: tenant=%s bands=%d", tenant, n)
         except Exception:
             logger.exception("forecast batch failed")
