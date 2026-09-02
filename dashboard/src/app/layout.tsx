@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
-import { Inter, Instrument_Serif } from "next/font/google";
+import { Geologica, Roboto_Flex } from "next/font/google";
 import "./globals.css";
 import StoreProvider from "@/lib/StoreProvider";
 import AuthProvider from "@/components/AuthProvider";
@@ -9,22 +9,31 @@ import { Toaster } from "sonner";
 import QueryProvider from "@/lib/QueryProvider";
 
 /**
- * Two roles, no more. Inter is Helvetica's screen-native descendant and sets everything a reader
- * uses -- labels, body, controls and every FIGURE, with tabular numerals so columns align.
- * Instrument Serif sets page and section titles only: high contrast against the grotesque, which
- * is what makes a title read as a statement instead of a bigger label.
+ * Two roles, no more.
+ *
+ * Geologica sets headings: a variable grotesque with enough weight range to carry a page title
+ * without shouting, and enough character at large sizes to read as a statement rather than a
+ * bigger label.
+ *
+ * Roboto Flex sets everything a reader uses -- labels, body, controls and every FIGURE. Its
+ * optical sizing keeps small labels legible at 10px and long prose comfortable at 16, and its
+ * tabular numerals keep a column of numbers aligned, which matters on every table here.
+ *
+ * Both are loaded through next/font, so the files are self-hosted and there is no render-blocking
+ * request to Google on first paint.
  */
-const ui = Inter({
+const display = Geologica({
   subsets: ["latin"],
-  weight: ["300", "400", "500", "600", "700", "800"],
-  variable: "--font-ui",
+  weight: ["300", "400", "500", "600", "700"],
+  variable: "--font-display",
   display: "swap",
 });
 
-const display = Instrument_Serif({
+const ui = Roboto_Flex({
   subsets: ["latin"],
-  weight: "400",
-  variable: "--font-display",
+  // A variable axis, so one file covers every weight the scale asks for.
+  weight: ["300", "400", "500", "600", "700"],
+  variable: "--font-ui",
   display: "swap",
 });
 

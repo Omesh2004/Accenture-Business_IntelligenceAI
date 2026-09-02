@@ -213,29 +213,50 @@ body {
 
 /* ─────────────── Type scale ───────────────
    One typographic system for the whole dashboard, so a heading means the same thing on every
-   page. Three faces, each with a job:
-     --font-ui  Inter, one family for everything. Hierarchy is weight, size and tracking.
-                Figures use tabular numerals so columns of numbers align.
-   Headings are set here rather than per-page: the reason the dashboard looked assembled from
-   parts was that each page invented its own size, weight and tracking for the same level. */
+   page. Two faces, each with a job:
+
+     --font-display  Geologica. Headings only. A variable grotesque with real weight range, so a
+                     title carries by WEIGHT rather than by size alone.
+     --font-ui       Roboto Flex. Everything a reader uses: labels, body, controls and every
+                     FIGURE. Optical sizing keeps a 10px label legible and 16px prose comfortable
+                     off the same file; tabular numerals keep columns of numbers aligned.
+
+   Both are grotesques, so hierarchy cannot lean on a serif/sans contrast the way it did before.
+   It comes from weight, size, tracking and colour instead -- which is the more durable system,
+   and the reason headings are set here rather than reinvented per page. */
+
+/* The variable axes, stated once. Left to their defaults these faces render noticeably lighter
+   and looser than the scale assumes. */
+:root {
+  --geologica-axes: "slnt" 0, "CRSV" 0, "SHRP" 0;
+  --roboto-axes: "slnt" 0, "wdth" 100, "GRAD" 0, "XOPQ" 96, "XTRA" 468, "YOPQ" 79,
+                 "YTAS" 750, "YTDE" -203, "YTFI" 738, "YTLC" 514, "YTUC" 712;
+}
 
 h1, h2, h3 {
-  font-family: var(--font-display), Georgia, serif;
-  font-weight: 400;
+  font-family: var(--font-display), 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  font-optical-sizing: auto;
+  font-variation-settings: var(--geologica-axes);
   color: var(--color-text-primary);
 }
-/* h4 is a card title, not a statement -- it stays in the grotesque. */
+/* h4 is a card title, not a statement -- it stays in the text face. */
 h4 {
   font-family: var(--font-ui), 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  font-optical-sizing: auto;
+  font-variation-settings: var(--roboto-axes);
   font-weight: 600;
   color: var(--color-text-primary);
 }
-/* Swiss tracking: large type tightens, small type opens up. A single family only reads as a
-   system if the optical size is corrected by hand. */
-h1 { letter-spacing: -0.018em; }
-h2 { letter-spacing: -0.014em; }
-h3 { letter-spacing: -0.010em; }
-h4 { letter-spacing: -0.010em; }
+
+/* Weight carries the hierarchy now that both faces are grotesques: a page title is heavier than
+   a section, which is heavier than a card. Tracking runs the other way -- large type tightens,
+   small type opens up -- because a single family only reads as a system when the optical size is
+   corrected by hand. Geologica is a wide face, so the large steps tighten further than a
+   narrower grotesque would need. */
+h1 { font-weight: 600; letter-spacing: -0.028em; }
+h2 { font-weight: 600; letter-spacing: -0.022em; }
+h3 { font-weight: 500; letter-spacing: -0.014em; }
+h4 { letter-spacing: -0.008em; }
 
 /* Golden-ratio scale. φ = 1.618 between major steps, √φ = 1.272 between minor ones, off a
    16px base. Every size below is a step on it, so nothing is chosen by eye. Line height runs
@@ -254,15 +275,20 @@ h4 { letter-spacing: -0.010em; }
   --leading-tight: 1.272;
 }
 
-h1 { font-size: var(--step-4); line-height: 1.12; }
-h2 { font-size: var(--step-3); line-height: 1.18; }
+h1 { font-size: var(--step-4); line-height: 1.10; }
+h2 { font-size: var(--step-3); line-height: 1.16; }
 h3 { font-size: var(--step-2); line-height: var(--leading-tight); }
 h4 { font-size: var(--step-1); line-height: 1.35; }
 
-.hero-title { font-size: var(--step-5); line-height: 1.04; letter-spacing: -0.034em; font-weight: 700; }
+.hero-title { font-size: var(--step-5); line-height: 1.02; letter-spacing: -0.036em; font-weight: 700; }
 .lead       { font-size: var(--step-1); line-height: 1.45; color: var(--color-text-secondary); }
 
-body { font-size: var(--step-0); line-height: var(--leading-body); }
+body {
+  font-size: var(--step-0);
+  line-height: var(--leading-body);
+  font-optical-sizing: auto;
+  font-variation-settings: var(--roboto-axes);
+}
 
 /* An opt-out for headings that are really labels — a card title inside a dense panel, where a
    serif at 13px reads as decoration rather than hierarchy. */
@@ -276,6 +302,9 @@ h1.ui-label, h2.ui-label, h3.ui-label, h4.ui-label,
 /* Figures. Applied to any element showing a number that a reader will compare to another. */
 .num, .tabular, td.num, th.num {
   font-family: var(--font-ui), -apple-system, 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  /* A touch heavier and slightly wider than body: a figure a reader compares should hold its
+     own against the label beside it without becoming a heading. */
+  font-variation-settings: var(--roboto-axes), "wdth" 102;
   font-variant-numeric: tabular-nums;
   font-feature-settings: 'tnum' 1, 'cv01' 1;
   font-feature-settings: 'tnum' 1;
@@ -290,6 +319,9 @@ h1.ui-label, h2.ui-label, h3.ui-label, h4.ui-label,
 
 .eyebrow {
   font-family: var(--font-ui), -apple-system, 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  /* Small caps carry poorly at 12px on a variable face left at its defaults; grading it up a
+     little restores the weight the tracking takes away. */
+  font-variation-settings: var(--roboto-axes), "GRAD" 40;
   font-size: var(--step--1);
   font-weight: 600;
   letter-spacing: 0.08em;
