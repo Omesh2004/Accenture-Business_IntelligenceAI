@@ -42,6 +42,19 @@ function IntelligenceAsk({
   const [fullscreen, setFullscreen] = useState(true);
   const [seed, setSeed] = useState('');
   const [restored, setRestored] = useState(0);
+  const [provider, setProvider] = useState<string>(() => {
+    if (typeof window !== 'undefined') {
+      return localStorage.getItem('selected_llm_provider') || 'ollama';
+    }
+    return 'ollama';
+  });
+
+  const handleProviderChange = useCallback((p: string) => {
+    setProvider(p);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('selected_llm_provider', p);
+    }
+  }, []);
 
   const { data: choices } = useQuery({
     queryKey: ['intelligencePersonas', tenants],
@@ -91,17 +104,17 @@ function IntelligenceAsk({
     ) =>
       dashboardAPI
         .streamIntelligence(tenants, question, active || undefined, handlers, signal, days,
-                            history)
+                            history, provider)
         .catch(async (err) => {
           if ((err as Error)?.name === 'AbortError') return;
           // Streaming is delivery, not the answer. If a proxy buffers SSE the batch route still
           // produces the identical payload, so a question is never lost to transport.
           const result = await dashboardAPI.askIntelligence(
-            tenants, question, active || undefined, days, history);
+            tenants, question, active || undefined, days, history, provider);
           if (result) handlers.onAnswer(result);
           else handlers.onError('The agent could not be reached.');
         }),
-    [tenants, active, days],
+    [tenants, active, days, provider],
   );
 
   const launch = (q: string) => {
@@ -135,6 +148,18 @@ function IntelligenceAsk({
                 hint: p.remit,
                 testId: `persona-${p.id}`,
               }))}
+            />
+          )}
+          {!open && (
+            <Select
+              testId="provider-select"
+              ariaLabel="LLM Model"
+              value={provider}
+              onChange={handleProviderChange}
+              options={[
+                { value: 'ollama', label: '🦙 Local Ollama (GPU)', hint: 'Docker Qwen 2.5 3B', testId: 'provider-ollama' },
+                { value: 'groq', label: '⚡ Groq / Grok API', hint: 'Cloud Llama 3.3 70B', testId: 'provider-groq' },
+              ]}
             />
           )}
           {restored > 0 && (
@@ -217,6 +242,8 @@ function IntelligenceAsk({
                 persona={active}
                 onPersonaChange={onPersonaChange}
                 choices={choices ?? undefined}
+                provider={provider}
+                onProviderChange={handleProviderChange}
                 onAsk={ask}
                 seed={seed}
                 onSeedConsumed={() => setSeed('')}

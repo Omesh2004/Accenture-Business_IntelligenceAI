@@ -189,7 +189,7 @@ services:
       - EXTRACT_API_URL=http://nexabank-backend:5000/api
       - EXTRACT_API_TOKEN=${EXTRACT_API_TOKEN:-local-dev-extract-token}
       - INTELLIGENCE_LLM=${INTELLIGENCE_LLM:-1}
-      - VLLM_URL=${VLLM_URL:-http://host.docker.internal:11434/v1}
+      - VLLM_URL=${VLLM_URL:-http://ollama:11434/v1}
       - METRIC_API_URL=http://analytics-api:8001
     volumes:
       - ./api:/app/api
@@ -216,10 +216,13 @@ services:
       - CLICKHOUSE_HOST=clickhouse
       - CLICKHOUSE_USER=default
       - CLICKHOUSE_PASSWORD=clickhouse
-      - VLLM_URL=${VLLM_URL:-http://host.docker.internal:11434/v1}
+      - VLLM_URL=${VLLM_URL:-http://ollama:11434/v1}
       - INTELLIGENCE_LLM=${INTELLIGENCE_LLM:-1}
       - METRIC_API_TENANTS=${METRIC_API_TENANTS:-nexabank}
     volumes:
+      # Live-mount the app so local api/ edits take effect without an image rebuild
+      # (the `intelligence` service already does this).
+      - ./api:/app/api:ro
       # Contracts are configuration, not code: both readers must see the same file.
       - ./contracts:/app/contracts:ro
     # Phase 4: the Metric API is the doorway. Phase 5 folds the dashboard + /intelligence/*
@@ -228,7 +231,35 @@ services:
     restart: unless-stopped
 
   # ═══════════════════════════════════════════════════════════
-  # vLLM High-Throughput Inference Server
+  # Ollama-backed local model server (OpenAI-compatible /v1)
+  # The narrator + agent point here by default (VLLM_URL=http://ollama:11434/v1).
+  # Override VLLM_URL in .env to use a model server on the host instead.
+  # ═══════════════════════════════════════════════════════════
+
+  ollama:
+    image: omesh2004/ollama-fininsights:latest
+    container_name: fininsights-ollama
+    ports:
+      - "11434:11434"
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+      - OLLAMA_KEEP_ALIVE=24h
+      - OLLAMA_NUM_PARALLEL=4
+    volumes:
+      - ollama_data:/root/.ollama
+    # GPU passthrough. Drop this `deploy:` block to run Ollama on CPU.
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  # ═══════════════════════════════════════════════════════════
+  # vLLM High-Throughput Inference Server — legacy, kept for reference.
+  # The app default now targets the `ollama` service above.
   # ═══════════════════════════════════════════════════════════
 
   vllm-server:
@@ -406,4 +437,6 @@ volumes:
   zookeeper_logs:
     driver: local
   vllm_data:
+    driver: local
+  ollama_data:
     driver: local

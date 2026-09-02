@@ -44,6 +44,9 @@ BASELINE_RATES = {
     "pro_conversion": 0.12, "digital_share": 1.00, "withdrawal_weight": 20, "txn_max_per_day": 4,
     # share of transactions that fail -> transaction_failure_rate
     "txn_failure": 0.015,
+    # share of the accounts that WOULD open in the moved window that still open there; the rest
+    # open earlier instead. <1 slows the signups KPI. Only bites when create_accounts=True.
+    "open_rate": 1.0,
 }
 _UNBOUNDED_RATES = {"withdrawal_weight", "txn_max_per_day"}
 
@@ -83,11 +86,14 @@ def _branches(tenant_id: str) -> list[dict]:
 
 
 def _existing_accounts(tenant_id: str) -> list[dict]:
+    # Real extracted customers first, fast-minted ones after — so a create_accounts=false run
+    # simulates the real bank when it has one, and still has a stable population to act on after
+    # a full reset has wiped the real facts and rebuilt the base from fast seeds.
     rows = ch_client.query(
         f"SELECT account_no, customer_id, branch_code, region, country, opened_at "
         f"FROM {SILVER}.fact_account_openings FINAL "
-        "WHERE tenant_id = %(t)s AND NOT startsWith(customer_id, 'fast_') "
-        "ORDER BY account_no", {"t": tenant_id})
+        "WHERE tenant_id = %(t)s "
+        "ORDER BY startsWith(customer_id, 'fast_') ASC, account_no ASC", {"t": tenant_id})
     return [dict(r) for r in rows]
 
 
@@ -138,16 +144,23 @@ def resolve_behavior(behavior: dict | None) -> tuple[dict, int, dict]:
             rates[key] = value
     window = int(behavior.get("window_days") or 0)
     segment = {k: str(v) for k, v in (behavior.get("segment") or {}).items()
-               if k in ("country", "device_type", "channel") and v}
+               if k in ("country", "device_type", "channel", "region", "risk_segment") and v}
     return rates, max(0, window), segment
 
 
-def _in_segment(segment: dict, country: str, device: str) -> bool:
+def _in_segment(segment: dict, country: str, device: str,
+                region: str = "", risk: str = "") -> bool:
     if not segment:
         return True
     if "country" in segment and segment["country"].lower() != country.lower():
         return False
     if "device_type" in segment and segment["device_type"].lower() != device.lower():
+        return False
+    # region/risk let a template concentrate a movement in one cell of the fact cube the way the
+    # slow generator's `segment: {region: [...]}` does, so Localize has something to name.
+    if "region" in segment and segment["region"].lower() != region.lower():
+        return False
+    if "risk_segment" in segment and segment["risk_segment"].lower() != risk.lower():
         return False
     return True
 
@@ -211,6 +224,14 @@ def generate(tenant_id: str = "nexabank", users: int = 100, days: int = 30,
             branch = random.choice(branches)
             opened = start + timedelta(days=random.randint(0, max(0, days - 1)),
                                        seconds=random.randint(0, 86399))
+            # open_rate < 1: an account that would have opened inside the moved window opens
+            # earlier instead. Moving the opening — not deleting the customer — is the only honest
+            # way to bend a daily count of openings (signups KPI).
+            open_rate = moved.get("open_rate", 1.0)
+            if open_rate < 1.0 and window_days and window_from > 0:
+                if (opened - start).days >= window_from and random.random() > open_rate:
+                    opened = start + timedelta(days=random.randint(0, window_from - 1),
+                                               seconds=random.randint(0, 86399))
             acc_no = "FAST%s%06d" % (run.upper(), u)
             _core(cid, "customers", "nexabank_crm", {
                 "customer_id": cid, "tenant_id": tenant_id, "age_bracket": random.choice(AGE),
@@ -231,7 +252,8 @@ def generate(tenant_id: str = "nexabank", users: int = 100, days: int = 30,
             branch = by_code.get(account["branch_code"]) or random.choice(branches)
             opened = account["opened_at"]
 
-        in_seg = _in_segment(segment, branch["country"], device)
+        in_seg = _in_segment(segment, branch["country"], device,
+                             branch.get("region", ""), risk)
         active_days = sorted(random.sample(range(days), k=min(days, random.randint(1, 12))))
         for d in active_days:
             hot = in_seg and d >= window_from
@@ -365,18 +387,29 @@ _PURGE = {
     "bronze.core_banking": "startsWith(lower(record_id), 'fast')",
     "bronze.events": "_ingest_path = 'dev_seed'",
 }
+# `full=True` widens the predicate to every fact-producing row for the tenant, so a demo can be
+# rebuilt from fast seeds alone and a fast-planted movement is not diluted by the ~290k real
+# extracted transactions. `branches` / `campaigns` are spared — silver.dim_branch must survive or
+# the next generate() has no geography. Destructive and opt-in: the pipeline's extract loop
+# re-lands the real history on its next tick, so pair a full purge with a fresh baseline seed.
+_PURGE_FULL = {
+    "bronze.core_banking": "entity NOT IN ('branches', 'campaigns')",
+    "bronze.events": "event_id != ''",
+}
 
 
-def purge(tenant_id: str = "nexabank", tables: list[str] | None = None) -> dict:
-    wanted = list(tables) if tables else list(_PURGE)
-    unknown = [t for t in wanted if t not in _PURGE]
+def purge(tenant_id: str = "nexabank", tables: list[str] | None = None,
+          full: bool = False) -> dict:
+    table_preds = _PURGE_FULL if full else _PURGE
+    wanted = list(tables) if tables else list(table_preds)
+    unknown = [t for t in wanted if t not in table_preds]
     if unknown:
         raise ValueError("not tables dev-seed writes: %s" % ", ".join(sorted(unknown)))
     removed = {}
     client = _client()
     try:
         for table in wanted:
-            pred = _PURGE[table]
+            pred = table_preds[table]
             n = client.query(
                 f"SELECT count() FROM {table} WHERE tenant_id = %(t)s AND {pred}",
                 parameters={"t": tenant_id}).result_rows[0][0]

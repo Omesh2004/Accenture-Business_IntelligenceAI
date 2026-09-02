@@ -85,6 +85,7 @@ export default function AdminSimulatePage() {
    const [days, setDays] = useState(30)
    const [tenantId, setTenantId] = useState("")
    const [loading, setLoading] = useState(false)
+   const [resetting, setResetting] = useState(false)
    const [result, setResult] = useState<SimulationResult | null>(null)
    const [bankList, setBankList] = useState<BankOption[]>([])
    const [activeStep, setActiveStep] = useState(0)
@@ -104,6 +105,12 @@ export default function AdminSimulatePage() {
   // population every time gave each run its own cohort, so openings spiked on every run and a
   // planted rate movement was diluted by arrivals rather than measured against a stable base.
   const [createAccounts, setCreateAccounts] = useState(false)
+  // Population a fact-template run rebuilds. A template regenerates the WHOLE bank so the
+  // movement exists in the source every KPI is built from — the "User Count" field above does
+  // not apply to it. It barely changes the run's wall time (the warehouse re-extract dominates),
+  // but below ~2,500 the KYC funnel gets too thin per day for the engine to detect a planted
+  // leak reliably (contract min_denominator), so 4,000 is the default.
+  const [plantPopulation, setPlantPopulation] = useState(4000)
 
   const { isAuth } = UserData()
 
@@ -179,6 +186,43 @@ export default function AdminSimulatePage() {
   const formatDuration = (s: number) =>
     s < 90 ? `${s} seconds` : s < 5400 ? `${Math.round(s / 60)} minutes` : `${(s / 3600).toFixed(1)} hours`
 
+  // A fact-template run does NOT follow the per-user formula above: it regenerates the population
+  // in Postgres and then re-extracts the WHOLE transaction history through the warehouse
+  // (`/refresh?full=true`). Measured on this stack the re-extract dominates and the total is a
+  // roughly flat 5–6 minutes — population barely moves it (2,500 and 4,000 both land near 6 min)
+  // until Track B stops the full re-extract (see docs/audit/TRACK_A_B_SYNC.md §8c).
+  //
+  // Fast mode never takes that path: it writes bronze straight to ClickHouse via the pipeline's
+  // `/dev/seed` and runs the transforms in place (~15–25s). A selected template's movement is
+  // translated into /dev/seed's rate/window/segment knobs and planted there too, then the
+  // intelligence engine is re-scored so the chatbot reflects it within ~30–60s.
+  const isFactRun = Boolean(activeTemplate?.factTemplate) && !fastMode
+  const fastPlantsScenario = Boolean(activeTemplate?.factTemplate) && templateId !== "baseline" && fastMode
+  const plantEstimateSeconds = 360
+
+  // Wipe the fact history and rebuild a clean baseline from fast seeds, so a fast-planted scenario
+  // is not drowned out by the ~290k real extracted transactions. Deliberate and destructive.
+  const handleReset = async () => {
+    if (!window.confirm(
+      "Reset demo data?\n\nThis wipes the transaction / loan / account history and seeds a fresh " +
+      "baseline bank (~60s). Do this once before a demo, then run templates in fast mode to plant " +
+      "scenarios on top. Branch and campaign reference data is kept.")) return
+    setResetting(true)
+    setResult(null)
+    try {
+      await measureAndTrack('admin_simulate.reset_demo', async () => {
+        const res = await axios.post(`${API_BASE_URL}/events/simulate/reset`, {},
+          { withCredentials: true, timeout: 6 * 60 * 1000 })
+        setResult(res.data)
+      })
+      toast.success("Demo data reset — clean baseline seeded")
+    } catch (err: any) {
+      toast.error(resolveErrorMessage(err))
+    } finally {
+      setResetting(false)
+    }
+  }
+
   const handleSimulate = async () => {
       // The slow-mode caps exist because every user costs hundreds of remote Postgres round
       // trips. Fast mode does not pay that, so it can go much wider.
@@ -203,15 +247,20 @@ export default function AdminSimulatePage() {
     setResult(null)
     try {
       await measureAndTrack('admin_simulate.run_simulation', async () => {
-            // A template that names a fact template plants a movement in the banking facts --
-            // the source every KPI value is built from. The clickstream run below cannot move a
-            // KPI at all, so a template that is meant to shift the dashboard has to take this
-            // route instead.
+            // A fact template plants a movement in the banking facts — the source every KPI value
+            // is built from. Slow mode does it by regenerating the real facts (the `/plant` path,
+            // ~6 min). Fast mode passes the template name to `/events/simulate`, which translates
+            // it into /dev/seed's knobs and plants the same movement straight into ClickHouse
+            // (~20s) then re-scores the engine.
             const factTemplate = activeTemplate?.factTemplate
-            if (factTemplate) {
+            if (factTemplate && !fastMode) {
+              const safePopulation = Number.isFinite(plantPopulation)
+                ? Math.max(2500, Math.min(Math.floor(plantPopulation), 8000))
+                : 4000
+              if (safePopulation !== plantPopulation) setPlantPopulation(safePopulation)
               const planted = await axios.post(
                 `${API_BASE_URL}/events/simulate/plant`,
-                { template: factTemplate, days: safeDays },
+                { template: factTemplate, days: safeDays, customers: safePopulation },
                 { withCredentials: true, timeout: 25 * 60 * 1000 },
               )
               setResult(planted.data)
@@ -221,6 +270,9 @@ export default function AdminSimulatePage() {
                `${API_BASE_URL}/events/simulate`,
                { count: safeCount, days: safeDays, tenantId, behavior,
                  mode: fastMode ? "fast" : "slow", purgeFirst: fastMode && purgeFirst,
+                 // Fast mode only: name the template so the backend plants its movement through
+                 // /dev/seed. Slow-mode non-template runs leave this unset.
+                 factTemplate: fastMode ? (factTemplate ?? undefined) : undefined,
                  // A paired demo needs both runs to land on the same customer-days, so the seed
                  // travels with the template rather than being re-rolled per run.
                  seed: activeRun?.seed, purgeTables: activeRun?.purgeTables,
@@ -327,17 +379,39 @@ export default function AdminSimulatePage() {
                        </Select>
                     </div>
 
-                              <div className="space-y-2">
-                                  <Label className="text-xs font-black uppercase text-zinc-400">User Count (Max 100)</Label>
-                                  <Input
-                                     type="number" 
-                                     value={count} 
-                                     onChange={(e: ChangeEvent<HTMLInputElement>) => setCount(Number(e.target.value))}
-                                     min={1}
-                                     max={100}
-                                     className="h-12 rounded-2xl font-bold border-zinc-100"
-                                  />
-                              </div>
+                              {isFactRun ? (
+                                <div className="space-y-2">
+                                    <Label className="text-xs font-black uppercase text-zinc-400">Population to rebuild (2,500–8,000)</Label>
+                                    <Input
+                                       type="number"
+                                       value={plantPopulation}
+                                       onChange={(e: ChangeEvent<HTMLInputElement>) => setPlantPopulation(Number(e.target.value))}
+                                       min={2500}
+                                       max={8000}
+                                       step={500}
+                                       className="h-12 rounded-2xl font-bold border-zinc-100"
+                                    />
+                                    <p className="text-xs text-zinc-500 font-medium">
+                                       A template regenerates the whole bank, so "User Count" does not apply. Below
+                                       ~2,500 the funnel gets too thin per day and the engine can miss the planted
+                                       movement; 4,000 is the safe default.
+                                    </p>
+                                </div>
+                              ) : (
+                                <div className="space-y-2">
+                                    <Label className="text-xs font-black uppercase text-zinc-400">
+                                       User Count (Max {fastMode ? '5,000' : '100'})
+                                    </Label>
+                                    <Input
+                                       type="number"
+                                       value={count}
+                                       onChange={(e: ChangeEvent<HTMLInputElement>) => setCount(Number(e.target.value))}
+                                       min={1}
+                                       max={fastMode ? 5000 : 100}
+                                       className="h-12 rounded-2xl font-bold border-zinc-100"
+                                    />
+                                </div>
+                              )}
 
                               <div className="space-y-2">
                                   <Label className="text-xs font-black uppercase text-zinc-400">Historical Days (Max 60)</Label>
@@ -391,8 +465,8 @@ export default function AdminSimulatePage() {
                                        </p>
                                        <p className="text-xs text-zinc-500 font-medium mt-0.5">
                                           {fastMode
-                                             ? 'Writes the analytics tables directly. Mock data only: no bank records, and the ingestion path is not exercised.'
-                                             : 'Every row goes through Postgres, ingestion, Kafka and the worker — this is what proves the pipeline works.'}
+                                             ? 'Writes bronze straight to ClickHouse and runs the transforms in place — about 15–25 seconds. A selected template is planted here too, then the engine is re-scored so the chatbot catches up in ~30–60s. Mock data (no bank records).'
+                                             : 'Every row goes through Postgres, ingestion, Kafka and the worker — this is what proves the pipeline works, and it plants the movement in the real facts.'}
                                        </p>
                                     </div>
                                     <button
@@ -407,6 +481,20 @@ export default function AdminSimulatePage() {
                                        <span className={`block h-5 w-5 bg-white rounded-full shadow transform transition-transform ${fastMode ? 'translate-x-5' : 'translate-x-0.5'}`} />
                                     </button>
                                  </div>
+
+                                 {fastPlantsScenario && (
+                                    <div className="rounded-xl border border-violet-200 bg-violet-50 px-3 py-2">
+                                       <p className="text-xs font-bold text-violet-900">
+                                          Fast plant: "{activeTemplate?.label}"
+                                       </p>
+                                       <p className="text-[11px] text-violet-700 mt-0.5">
+                                          Seed a clean baseline first (Baseline template, "Clear previously
+                                          fast-seeded data first" ticked), then run this — the movement lands in the
+                                          recent window on top of that history. KPI moves on the dashboard in ~20s;
+                                          the chatbot explains it ~30–60s later.
+                                       </p>
+                                    </div>
+                                 )}
 
                                  {fastMode && (
                                     <label className="flex items-center gap-2 text-xs font-medium text-zinc-600 cursor-pointer">
@@ -434,7 +522,20 @@ export default function AdminSimulatePage() {
 
                                  {/* Only shown when the run is actually long enough to matter. A
                                      warning on every run is a warning nobody reads. */}
-                                 {!fastMode && slowEstimateSeconds > 60 && (
+                                 {isFactRun ? (
+                                    <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2">
+                                       <p className="text-xs font-bold text-amber-800">
+                                          This template rebuilds the whole bank — expect roughly {formatDuration(plantEstimateSeconds)}, and it is not stuck.
+                                       </p>
+                                       <p className="text-[11px] text-amber-700 mt-0.5">
+                                          It regenerates {plantPopulation.toLocaleString()} customers in Postgres and
+                                          re-extracts the transaction history through the warehouse so the planted
+                                          movement exists in the source the KPIs are built from. The re-extract is the
+                                          slow part and runs at a roughly fixed cost. Leave the tab open; the request
+                                          runs to completion.
+                                       </p>
+                                    </div>
+                                 ) : !fastMode && slowEstimateSeconds > 60 && (
                                     <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2">
                                        <p className="text-xs font-bold text-amber-800">
                                           This run will take roughly {formatDuration(slowEstimateSeconds)}.
@@ -448,14 +549,33 @@ export default function AdminSimulatePage() {
                                  )}
                               </div>
 
-                    <Button 
+                    <Button
                       className="w-full h-14 rounded-2xl bg-black hover:bg-violet-700 text-white font-black shadow-lg shadow-violet-200 transition-all cursor-pointer"
                       onClick={handleSimulate}
-                      disabled={loading || !tenantId}
+                      disabled={loading || resetting || !tenantId}
                     >
                        {loading ? <Loader2 className="mr-2 animate-spin h-5 w-5" /> : <Play className="mr-2 h-5 w-5" />}
                        {loading ? 'Processing...' : 'Run Simulation'}
                     </Button>
+
+                    {/* Demo prep. Clears the fact history so a fast-planted scenario is not
+                        drowned out by the real extracted transactions. Run once, then plant. */}
+                    <div className="pt-3 border-t border-zinc-100 space-y-2">
+                       <button
+                          type="button"
+                          onClick={handleReset}
+                          disabled={loading || resetting}
+                          className="w-full h-11 rounded-2xl border border-rose-200 bg-rose-50 text-rose-700 font-bold text-sm hover:bg-rose-100 transition-colors cursor-pointer disabled:opacity-50 flex items-center justify-center gap-2"
+                       >
+                          {resetting ? <Loader2 className="animate-spin h-4 w-4" /> : null}
+                          {resetting ? 'Rebuilding baseline…' : 'Reset demo data (clean baseline, ~60s)'}
+                       </button>
+                       <p className="text-[11px] text-zinc-500 font-medium leading-relaxed">
+                          Do this <span className="font-semibold">once before a demo</span>: wipes the
+                          transaction / loan / account history and seeds a fresh baseline bank so a fast-mode
+                          template run visibly moves the KPI. Keeps branches &amp; campaigns.
+                       </p>
+                    </div>
                  </CardContent>
               </Card>
 

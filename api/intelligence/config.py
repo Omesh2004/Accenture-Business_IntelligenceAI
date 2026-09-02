@@ -102,9 +102,30 @@ VERIFIER_TOLERANCE = _f("INTEL_VERIFIER_TOLERANCE", 0.01)
 # --- llm (optional; the layer is complete without it) -----------------------
 LLM_ENABLED = _s("INTELLIGENCE_LLM", "0") == "1"
 LLM_BASE_URL = _s("VLLM_URL", "http://vllm-server:8000/v1")
+LLM_API_KEY = _s("LLM_API_KEY", _s("GROQ_API_KEY", ""))
 # Empty means "ask the server what it serves" -- no model name is assumed anywhere.
 LLM_MODEL = _s("INTEL_LLM_MODEL", "")
 LLM_MAX_ATTEMPTS = _i("INTEL_LLM_MAX_ATTEMPTS", 2)
+
+
+def set_provider(provider: str | None) -> None:
+    """Dynamically set the active LLM provider for requests ('ollama' or 'groq')."""
+    global LLM_ENABLED, LLM_BASE_URL, LLM_API_KEY, LLM_MODEL
+    if not provider:
+        return
+    p = provider.strip().lower()
+    if p in ("groq", "grok"):
+        LLM_ENABLED = True
+        LLM_BASE_URL = "https://api.groq.com/openai/v1"
+        LLM_API_KEY = os.environ.get("GROQ_API_KEY", "")
+        LLM_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
+    elif p == "ollama":
+        LLM_ENABLED = True
+        LLM_BASE_URL = os.environ.get("VLLM_URL", "http://ollama:11434/v1")
+        LLM_API_KEY = ""
+        LLM_MODEL = "qwen2.5:3b-instruct"
+    elif p in ("deterministic", "off", "0"):
+        LLM_ENABLED = False
 
 # Let the model re-word each part of an ANSWER. Off by default, and the default is a measurement
 # rather than caution: on the 1.5B tier that fits a 6GB card, rewriting degraded the answer in

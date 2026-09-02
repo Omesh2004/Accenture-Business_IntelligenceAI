@@ -332,6 +332,8 @@ function ChatSurface({
   persona,
   onPersonaChange,
   choices,
+  provider,
+  onProviderChange,
   onAsk,
   seed,
   onSeedConsumed,
@@ -343,6 +345,8 @@ function ChatSurface({
   persona: string;
   onPersonaChange?: (p: string) => void;
   choices?: PersonaChoices;
+  provider?: string;
+  onProviderChange?: (p: string) => void;
   onAsk: (
     question: string,
     handlers: {
@@ -543,6 +547,16 @@ function ChatSurface({
             }))}
           />
         )}
+        <Select
+          testId="provider-select"
+          ariaLabel="LLM Engine"
+          value={provider || 'ollama'}
+          onChange={(v) => onProviderChange?.(v)}
+          options={[
+            { value: 'ollama', label: '🦙 Local Ollama (GPU)', hint: 'Docker Qwen 2.5 3B', testId: 'provider-ollama' },
+            { value: 'groq', label: '⚡ Groq / Grok API', hint: 'Cloud Llama 3.3 70B', testId: 'provider-groq' },
+          ]}
+        />
         <div className="ml-auto flex items-center gap-1">
           {messages.length > 0 && (
             <button

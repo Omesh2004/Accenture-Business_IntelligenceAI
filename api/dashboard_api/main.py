@@ -15,7 +15,7 @@ from datetime import date, datetime, timedelta
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
@@ -24,12 +24,32 @@ from api.metric_api import reads
 from api.contracts_loader import all_kpi_ids, KPI_REGISTRY, load_declared
 from api.middleware import resolve_persona, selectable_personas, filter_revenue, hidden_kpis
 from api.schemas import OutcomeRequest, AskRequest
+from api.websocket_manager import manager, start_websocket_background_tasks
 
 TENANT_DEFAULT = os.environ.get("DASHBOARD_TENANT", "nexabank")
 
 app = FastAPI(title="FinInsights Dashboard API")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 app.include_router(metric_router)
+
+
+@app.on_event("startup")
+async def startup_event():
+    await start_websocket_background_tasks()
+
+
+@app.websocket("/ws/dashboard/{tenant_id}")
+async def websocket_endpoint(websocket: WebSocket, tenant_id: str):
+    await manager.connect(websocket, tenant_id)
+    try:
+        while True:
+            data = await websocket.receive_text()
+            if data == "ping":
+                await websocket.send_text("pong")
+    except WebSocketDisconnect:
+        manager.disconnect(websocket, tenant_id)
+    except Exception:
+        manager.disconnect(websocket, tenant_id)
 
 
 def _tenant(tenants: str | None) -> str:
@@ -142,13 +162,16 @@ def intelligence_insight(request: Request, tenants: str = Query(None),
 
 @app.post("/intelligence/rescore")
 def intelligence_rescore(tenants: str = Query(None), days: int = Query(0, ge=0, le=365),
-                         all_windows: bool = Query(False)):
+                         all_windows: bool = Query(False), kpi_id: str = Query(None)):
     """Re-run the investigation sweep now, for one window or for all of them.
 
     The service sweeps on a timer. This is for the moment a movement has just been planted in
     NexaBank and pushed through the pipeline: without it the engine keeps answering from the last
     tick, and an anomaly that already exists in the data reads as "no material movement" until the
     clock comes round.
+
+    `kpi_id` (comma-separated) scopes the sweep to the KPIs a planted scenario actually touches,
+    so the simulate console can trigger this and get a fresh answer back in ~30s instead of ~80.
     """
     from api.intelligence import config as icfg
     from api.intelligence.orchestrator import Orchestrator
@@ -161,12 +184,13 @@ def intelligence_rescore(tenants: str = Query(None), days: int = Query(0, ge=0, 
     windows = ([days] if days
                else list(icfg.WINDOW_CHOICES) if all_windows
                else [icfg.WINDOW_DAYS])
+    kpi_ids = [k.strip() for k in (kpi_id or "").split(",") if k.strip()] or None
     orch = Orchestrator(MetricAPIClient())
     out = []
     for span in windows:
         try:
             results = orch.sweep(tenant, current_window(span), dataset=icfg.DATASET,
-                                 run_forecast=True)
+                                 kpi_ids=kpi_ids, run_forecast=True)
             out.append({"window_days": span, "investigations": len(results),
                         "anomalies": sum(1 for r in results if r.get("anomaly"))})
         except Exception as exc:                                    # noqa: BLE001
@@ -275,7 +299,8 @@ def intelligence_ask_stream(request: Request, req: AskRequest):
 
         try:
             res = loop.run(tenant, question, p, emit=emit,
-                           window_days=int(req.days or 0), history=req.history or [])
+                           window_days=int(req.days or 0), history=req.history or [],
+                           provider=req.provider)
         except Exception as exc:
             yield frame("error", {"detail": str(exc)})
             return
@@ -301,7 +326,7 @@ def intelligence_ask(request: Request, req: AskRequest):
     if not question:
         raise HTTPException(status_code=400, detail="question is required")
     res = loop.run(tenant, question, p, window_days=int(req.days or 0),
-                   history=req.history or [])
+                   history=req.history or [], provider=req.provider)
     # Entitlement is applied inside the agent before assembly; this is belt and braces at the
     # boundary, so a new field can never leak a hidden KPI.
     return filter_revenue(p, res.as_dict())

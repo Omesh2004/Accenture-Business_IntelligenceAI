@@ -155,6 +155,13 @@ async function clearPreviousRun(tag: string): Promise<void> {
 
   // Children of Account first, then children of Customer, then the two parents. Anything that
   // references either has to go before it or Postgres refuses the delete.
+  //
+  // Every row this generator writes is tagged: accounts as `${tag}-A…`, customers as
+  // `bulk.${tag}.…@nexabank.test`. Scoping the deletes to those prefixes with a plain LIKE keeps
+  // this to one indexable scan per table. An earlier revision widened each delete with correlated
+  // `IN (SELECT accNo FROM Account WHERE customerId IN (SELECT …))` sub-queries against the
+  // ~250k-row Transaction table with no supporting index, which added tens of seconds to every
+  // plant run and got worse as the table grew.
   for (const sql of [
     `DELETE FROM "Transaction" WHERE "senderAccNo" LIKE $1 OR "receiverAccNo" LIKE $1`,
     `DELETE FROM "Card" WHERE "accNo" LIKE $1`,
@@ -347,6 +354,7 @@ function arg(name: string, fallback: string): string {
   return i >= 0 && process.argv[i + 1] ? process.argv[i + 1] : fallback;
 }
 
+function runCli() {
   const templateNames = arg("templates", "").split(",").filter(Boolean);
   const plan: FactPlan = {
     tenantId: arg("tenant", "bank_a"),
@@ -387,3 +395,15 @@ function arg(name: string, fallback: string): string {
       await prisma.$disconnect();
       process.exit(1);
     });
+}
+
+const isDirectRun =
+  typeof process !== "undefined" &&
+  Boolean(process.argv[1]) &&
+  (process.argv[1].endsWith("generateFacts.ts") ||
+   process.argv[1].endsWith("generateFacts.js") ||
+   process.argv[1].endsWith("generateFacts"));
+
+if (isDirectRun) {
+  runCli();
+}

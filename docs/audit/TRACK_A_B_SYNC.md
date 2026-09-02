@@ -323,6 +323,59 @@ Flag your intent; not blocking either way.
 
 ---
 
+## 8c. Raised by Track A — `/refresh?full=true` and bronze growth (needs a Track B call)
+
+`POST /events/simulate/plant` (the Simulate console's anomaly path) regenerates the banking
+facts in Postgres and then calls `POST {pipeline}/refresh?full=true` so the planted movement
+lands before the next scheduled tick.
+
+`full=true` is **required** here, not a convenience: `clearPreviousRun` deletes and re-inserts
+the run's rows with **back-dated** `occurred_at` / `opened_at` (the last N days), so an
+incremental extract — whose watermark already sits at "now" from the previous sweep — skips every
+regenerated row. Track A cannot make this incremental.
+
+The cost: `core_banking._land()` **appends** to `bronze.core_banking` (plain `MergeTree`, "multiple
+extracted versions of the same `record_id` coexist"). Every plant run adds another full copy
+(~150k transaction rows at 4,000 customers), all into the current `toYYYYMM(_extracted_at)`
+partition. `silver_facts.py` then collapses an ever-larger set on each run, so **plant runs get
+slower the more often you plant** — measured 304s → 342s across two consecutive runs on the
+current dataset.
+
+Options for Track B (pick one):
+1. Purge `bronze.core_banking` for the tenant before a `full=true` sweep (a `full` sweep is a
+   full replace anyway) — a flag on `/refresh`, or fold it into `run_extract(full=True)`.
+2. `ReplacingMergeTree(_extracted_at)` keyed on `(tenant_id, entity, record_id, _source_updated_at)`
+   so re-lands dedupe on merge instead of accumulating.
+3. A TTL on `_extracted_at` (keep, say, 2 days of extract history).
+
+Measured: a plant run is a roughly **flat ~5–6 minutes** whatever the population (2,500 customers
+took 363s, 4,000 took 304–342s) because the full re-extract of the existing history dominates,
+not the regen. Until Track B addresses this, Track A only (a) shows the operator an honest "~6
+min, not stuck" estimate and (b) reverted a `clearPreviousRun` change that was widening the
+delete step with un-indexed correlated sub-queries.
+
+**Fast mode is the demo path.** The Simulate console's fast toggle routes to
+`POST {pipeline}/dev/seed` for *every* run (previously the `factTemplate` branch always won and
+the toggle was dead). It writes bronze straight to ClickHouse and runs the transforms in place —
+~15–25s. A selected template is planted here too: `nexabank`'s `/events/simulate` translates the
+template's `effect` modifiers into `/dev/seed`'s rate / window / segment knobs (which now include
+`region` / `risk_segment` and an `open_rate` knob), then fires a **scoped**
+`POST {analytics}/intelligence/rescore?kpi_id=…` over the movement window + 30d so the chatbot
+reflects it in ~30–75s instead of at the 3-minute sweep.
+
+**Dilution required a reset action.** A fast seed (≤5k users, ~10–65k txns) cannot move a KPI
+computed over the ~290k real extracted transactions — the aggregate barely shifts and Detect
+stays quiet. `POST /events/simulate/reset` (new, admin, deliberate) does a **full** `/dev/seed`
+purge (`purge_full`: every fact-producing bronze row for the tenant, `branches`/`campaigns`
+kept), then mints a fresh 5k-customer baseline in ClickHouse and re-scores every KPI. After that a
+fast template run steps the KPI cleanly — verified: failure-rate baseline ~1.4% → ~9% in the
+7-day window, engine reports "rose 596% (urgent)", chatbot localises and explains it. The
+incremental extract is watermark-guarded so it does **not** re-flood the real history back; only a
+slow `/events/simulate/plant` (`full=true` re-extract) would.
+
+`/dev/seed`'s `run_transforms_for_seed()` still re-derives all silver/gold from all bronze, so it
+drifts up as bronze grows — options 1–3 above fix that for both paths.
+
 ## 9. Track A checklist (pull from here as you go)
 
 - [ ] A1 — `enforceTaxonomy` → passthrough / shape-check only

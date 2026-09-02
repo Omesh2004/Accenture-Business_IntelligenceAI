@@ -425,12 +425,16 @@ def _rail_for(observations: list[planner.Observation], verified: bool | None,
 
 
 def run(tenant_id: str, question: str, persona: str, engine: str = "auto", emit=None,
-        window_days: int = 0, history=None) -> Result:
+        window_days: int = 0, history=None, provider: str | None = None) -> Result:
     """Answer a question. `emit`, when given, receives each trace step as it happens.
 
     `window_days` is the caller's standing choice, normally the dashboard's range dropdown. A
     question that names its own period overrides it for this turn.
     """
+    if provider:
+        config.set_provider(provider)
+        llm_client.reset_probe()
+
     persona = persona if persona in config.PERSONAS else config.DEFAULT_PERSONA
     profile = personas.get(persona)
     trace = Trace(emit)

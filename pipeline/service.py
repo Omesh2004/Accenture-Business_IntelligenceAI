@@ -140,6 +140,10 @@ class DevSeedRequest(BaseModel):
     passes: int = 1
     purge_first: bool = False
     purge_tables: list[str] | None = None
+    # purge_full widens purge_first to every fact-producing row for the tenant (not just the
+    # 'fast%' ones), so a demo can be rebuilt from fast seeds with no dilution from the real
+    # extracted history. Destructive; pair with create_accounts=true and a baseline seed.
+    purge_full: bool = False
     behavior: dict | None = None
     create_accounts: bool = False
 
@@ -168,7 +172,8 @@ async def dev_seed(req: DevSeedRequest):
     _require_dev_seed()
     from pipeline.dev import seed as devseed
     try:
-        removed = (devseed.purge(req.tenant_id, req.purge_tables) if req.purge_first else {})
+        removed = (devseed.purge(req.tenant_id, req.purge_tables, full=req.purge_full)
+                   if (req.purge_first or req.purge_full) else {})
         passes = max(1, min(int(req.passes or 1), 10))
         written: dict = {}
         for i in range(passes):
@@ -196,7 +201,8 @@ async def dev_seed_purge(req: DevSeedRequest):
     from pipeline.dev import seed as devseed
     try:
         return {"tenant_id": req.tenant_id,
-                "purged": await asyncio.to_thread(devseed.purge, req.tenant_id, req.purge_tables)}
+                "purged": await asyncio.to_thread(devseed.purge, req.tenant_id,
+                                                  req.purge_tables, req.purge_full)}
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
 

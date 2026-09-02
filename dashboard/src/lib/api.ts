@@ -1000,13 +1000,13 @@ export const dashboardAPI = {
    *  because RBACMiddleware reads tenant from the query string, not the body. */
   async askIntelligence(
     tenants: string[], question: string, persona?: string, days?: number,
-    history?: ChatTurn[],
+    history?: ChatTurn[], provider?: string,
   ): Promise<AgentAnswer | null> {
     try {
       const response = await apiClient.post<AgentAnswer>(
         `/intelligence/ask?tenants=${encodeURIComponent(tenants.join(','))}`,
         { question, ...(persona ? { persona } : {}), ...(days ? { days } : {}),
-          ...(history?.length ? { history } : {}) });
+          ...(history?.length ? { history } : {}), ...(provider ? { provider } : {}) });
       return response.data;
     } catch (error) {
       console.error('Failed to ask the intelligence agent', error);
@@ -1053,6 +1053,7 @@ export const dashboardAPI = {
     signal?: AbortSignal,
     days?: number,
     history?: ChatTurn[],
+    provider?: string,
   ): Promise<void> {
     const headers = { 'Content-Type': 'application/json', ...(await rbacHeaders()) };
     const url =
@@ -1062,7 +1063,7 @@ export const dashboardAPI = {
       headers,
       body: JSON.stringify(
         { question, ...(persona ? { persona } : {}), ...(days ? { days } : {}),
-          ...(history?.length ? { history } : {}) }),
+          ...(history?.length ? { history } : {}), ...(provider ? { provider } : {}) }),
       signal,
     });
     if (!response.ok || !response.body) {

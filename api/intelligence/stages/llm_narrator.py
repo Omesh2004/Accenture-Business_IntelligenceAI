@@ -34,7 +34,10 @@ def resolve_model(force: bool = False) -> str | None:
     if _resolved_model and not force:
         return _resolved_model
     try:
-        req = urllib.request.Request(f"{config.LLM_BASE_URL}/models", method="GET")
+        headers = {}
+        if getattr(config, "LLM_API_KEY", ""):
+            headers["Authorization"] = f"Bearer {config.LLM_API_KEY}"
+        req = urllib.request.Request(f"{config.LLM_BASE_URL}/models", headers=headers, method="GET")
         with urllib.request.urlopen(req, timeout=config.LLM_DISCOVERY_TIMEOUT_S) as resp:
             models = (json.loads(resp.read().decode("utf-8")) or {}).get("data") or []
         _resolved_model = models[0].get("id") if models else None
@@ -45,6 +48,7 @@ def resolve_model(force: bool = False) -> str | None:
 
 # How much of the method to keep, per persona depth. The model decides WORDING; it does not get
 # to decide how much method a reader is shown, because that is the persona contract.
+# (Restored during the ollama merge — build_prompt below still references these.)
 _DEPTH_BRIEF = {
     "summary": "Lead with the financial consequence. State the movement and what it is worth. "
                "Do not name statistical method.",
@@ -61,14 +65,6 @@ _LENGTH = {"summary": "Two sentences.", "standard": "Two to three sentences.",
 
 
 def build_prompt(claim_set: narrate.ClaimSet, persona: str, template_body: str) -> str:
-    """Compact signal cards only -- never raw query output. Also the injection surface.
-
-    The persona reaches the model as a READER BRIEF, not as a bare id. It used to interpolate
-    `persona` directly, so the prompt said "a narrative for a cfo" and the model had no idea what
-    a CFO wants; persona then changed only the LENGTH of the answer, never its emphasis. Voice is
-    exactly what a model should own. Entitlement is not, and does not appear here at all: the
-    claim set has already been filtered, so the model cannot widen it by writing differently.
-    """
     profile = personas.get(persona)
     depth = profile.detail
     cards = {
@@ -103,10 +99,13 @@ def build_prompt(claim_set: narrate.ClaimSet, persona: str, template_body: str) 
 
 
 def _post(payload: dict) -> dict:
+    headers = {"Content-Type": "application/json"}
+    if getattr(config, "LLM_API_KEY", ""):
+        headers["Authorization"] = f"Bearer {config.LLM_API_KEY}"
     req = urllib.request.Request(
         f"{config.LLM_BASE_URL}/chat/completions",
         data=json.dumps(payload).encode("utf-8"),
-        headers={"Content-Type": "application/json"}, method="POST")
+        headers=headers, method="POST")
     with urllib.request.urlopen(req, timeout=config.LLM_TIMEOUT_S) as resp:
         return json.loads(resp.read().decode("utf-8"))
 

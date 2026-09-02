@@ -27,6 +27,8 @@ class AskRequest(BaseModel):
     tenant_id: str | None = None
     #: The page's range selector. A question naming its own period overrides it for that turn.
     days: int | None = None
+    #: Choice of model provider: 'ollama' | 'groq' | 'grok' | 'deterministic'
+    provider: str | None = None
     #: Recent turns, oldest first, so a follow-up like "what about the others?" can be resolved
     #: against what was just discussed. Text only; the agent re-reads every figure itself.
     history: list[Turn] | None = None

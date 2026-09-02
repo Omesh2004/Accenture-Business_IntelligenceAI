@@ -613,6 +613,107 @@ router.post(
   }
 );
 
+// ─── POST /events/simulate/reset ──────────────────────────────
+// Rebuild the demo dataset from fast seeds only.
+//
+// The dashboard KPIs are computed over the whole population. The real extracted NexaBank history
+// (~290k transactions) so dominates that a fast-seeded scenario movement is statistically
+// invisible next to it. This wipes the fact history (branches/campaigns kept) and mints a fresh
+// baseline population straight in ClickHouse, so a subsequent fast-mode template run actually
+// breaks the KPI's band. ~60s. Deliberate and destructive — never runs on its own.
+//
+// The pipeline's incremental extract is watermark-guarded, so it does NOT re-flood the real
+// history back in on its next tick; only a slow `/events/simulate/plant` (full re-extract) would.
+router.post(
+  "/events/simulate/reset",
+  isLoggedIn,
+  isAdmin,
+  async (req: Request, res: Response): Promise<void> => {
+    const analyticsTenant = toAnalyticsTenant("bank_a");
+    const users = Math.max(1000, Math.min(Number((req.body as { users?: number })?.users) || 5000, 5000));
+    const days = Math.max(30, Math.min(Number((req.body as { days?: number })?.days) || 60, 120));
+    const passes = Math.max(1, Math.min(Number((req.body as { passes?: number })?.passes) || 3, 5));
+    try {
+      const started = Date.now();
+      const r = await axios.post(`${PIPELINE_URL}/dev/seed`, {
+        tenant_id: analyticsTenant,
+        users, days, passes,
+        purge_full: true,
+        // No real accounts survive the wipe, so the baseline population is minted here.
+        create_accounts: true,
+        // A fixed seed so a re-reset reproduces the same baseline bank.
+        seed: 20260901,
+      }, { timeout: 300000 });
+      const w = (r.data?.written ?? {}) as Record<string, number>;
+      // Re-score every KPI over the two windows the dashboard shows, so the board reads a clean
+      // baseline (no material movement anywhere) right after the reset.
+      for (const win of [7, 30]) {
+        axios.post(`${ANALYTICS_API_URL}/intelligence/rescore` +
+          `?tenants=${encodeURIComponent(analyticsTenant)}&days=${win}`, {},
+          { timeout: 240000 }).catch(() => {});
+      }
+      res.status(200).json({
+        ok: true, message: "Demo data reset — fresh baseline seeded",
+        resolvedTenant: analyticsTenant, runMs: Date.now() - started,
+        users: w.users ?? users, days: w.days ?? days, passes,
+        transactionsCreated: w.fact_transactions ?? 0,
+        note: "Baseline is clean. Run a template in fast mode to plant a scenario on top of it.",
+        ...r.data,
+      });
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
+      res.status(502).json({ error: "Demo reset failed", detail: detail || String(err) });
+    }
+  }
+);
+
+/**
+ * Fast-mode scenario planting.
+ *
+ * The slow `/events/simulate/plant` path regenerates the real banking facts with a template
+ * applied (~6 min). Fast mode cannot do that, but it can reproduce the SAME movement cheaply by
+ * translating the template's `effect` modifiers into the rate / window / segment knobs the
+ * pipeline's `POST /dev/seed` already understands, which writes bronze straight to ClickHouse.
+ *
+ * The two generators have different baselines, so a modifier that is *set outright* in the fact
+ * generator (kycCompletion, failureRate) maps to `/dev/seed`'s own baseline for that rate, and a
+ * *multiplier* (applicationRate, txnVolume) scales `/dev/seed`'s baseline.
+ */
+type FactTemplateShape = {
+  effect: Record<string, number>;
+  segment?: { region?: string[]; risk?: string[] };
+  lastDays: number;
+  kpi?: string;
+};
+
+function factTemplateToBehavior(t: FactTemplateShape):
+    { rates: Record<string, number>; window_days: number; segment?: Record<string, string> } | null {
+  const e = t.effect || {};
+  const rates: Record<string, number> = {};
+  // `/dev/seed` BASELINE_RATES the multiplier-style modifiers scale from.
+  const DS_LOAN_APPLICATION = 0.5;
+  const DS_TXN_MAX_PER_DAY = 4;
+  if (typeof e.kycCompletion === "number") rates.kyc_completion = e.kycCompletion;
+  if (typeof e.failureRate === "number") rates.txn_failure = e.failureRate;
+  if (typeof e.approvalRate === "number") rates.loan_approval = e.approvalRate;
+  if (typeof e.applicationRate === "number")
+    rates.loan_application = Math.min(1, DS_LOAN_APPLICATION * e.applicationRate);
+  if (typeof e.txnVolume === "number")
+    rates.txn_max_per_day = Math.max(0, DS_TXN_MAX_PER_DAY * e.txnVolume);
+  if (typeof e.openRate === "number") rates.open_rate = e.openRate;
+  // `noise` widens variance without a level change; `/dev/seed` has no such knob and the engine
+  // is expected NOT to fire on it, so plain baseline generation is the right behaviour.
+  if (!Object.keys(rates).length) return null;
+  const segment: Record<string, string> = {};
+  if (t.segment?.region?.length) segment.region = t.segment.region[0];
+  if (t.segment?.risk?.length) segment.risk_segment = t.segment.risk[0];
+  return {
+    rates,
+    window_days: t.lastDays,
+    ...(Object.keys(segment).length ? { segment } : {}),
+  };
+}
+
 // ─── POST /events/simulate ────────────────────────────────────
 // Admin only: stochastic user journey simulation.
 // Auth: mounted without router-level isLoggedIn (see app.ts), so the guard is
@@ -669,10 +770,43 @@ router.post(
       try {
         const analyticsTenant = toAnalyticsTenant(tenantId);
         const started = Date.now();
+        const seedDays = Number.isFinite(rawDays)
+          ? Math.max(1, Math.min(Math.floor(rawDays), 365)) : 30;
+
+        // A fact template selected under fast mode plants its movement through /dev/seed's
+        // rate/window/segment knobs rather than the slow fact regeneration. `baseline` and the
+        // no-template case fall through as a plain volume seed.
+        let behavior = (req.body as { behavior?: unknown })?.behavior ?? null;
+        let createAccounts = Boolean((req.body as { createAccounts?: unknown })?.createAccounts);
+        const factTemplate = String((req.body as { factTemplate?: unknown })?.factTemplate || "").trim();
+        let plantedKpis: string[] = [];
+        let rescoreWindows: number[] = [];
+        if (factTemplate && factTemplate !== "baseline") {
+          const { TEMPLATES: FACT_TEMPLATES } = await import("../simulate/templates");
+          const tpl = FACT_TEMPLATES[factTemplate] as unknown as FactTemplateShape | undefined;
+          if (!tpl) {
+            res.status(400).json({ error: `unknown template "${factTemplate}"`,
+                                   known: Object.keys(FACT_TEMPLATES) });
+            return;
+          }
+          const b = factTemplateToBehavior(tpl);
+          if (b) {
+            behavior = b;
+            // Account-opening movements only exist when fast mode mints a population.
+            if (typeof tpl.effect?.openRate === "number") createAccounts = true;
+            plantedKpis = [tpl.kpi, "revenue"].filter((k): k is string => Boolean(k));
+            // Re-score over the window the movement actually lives in (plus 30d, the dashboard's
+            // usual view) — not the full seed history, where a 7-day burst washes out.
+            rescoreWindows = Array.from(new Set([
+              Math.max(7, Number(tpl.lastDays) || 7), 30,
+            ]));
+          }
+        }
+
         const r = await axios.post(`${PIPELINE_URL}/dev/seed`, {
           tenant_id: analyticsTenant,
           users: Number.isFinite(rawCount) ? Math.max(1, Math.min(Math.floor(rawCount), 5000)) : 100,
-          days: Number.isFinite(rawDays) ? Math.max(1, Math.min(Math.floor(rawDays), 365)) : 30,
+          days: seedDays,
           purge_first: Boolean((req.body as { purgeFirst?: unknown })?.purgeFirst),
           // Scoped reset: clearing one KPI's history must not take the others' with it. Omitted
           // means every table, which is the pre-existing behaviour.
@@ -687,8 +821,8 @@ router.post(
           passes: Number.isFinite((req.body as { passes?: number })?.passes)
             ? (req.body as { passes?: number }).passes
             : 1,
-          behavior: (req.body as { behavior?: unknown })?.behavior ?? null,
-          create_accounts: Boolean((req.body as { createAccounts?: unknown })?.createAccounts),
+          behavior,
+          create_accounts: createAccounts,
         }, { timeout: 300000 });
         // Report through the SAME field names slow mode uses. The console reads flat
         // `simulatedUsers` / `eventsCreated` / `transactionsCreated`, while the generator returns
@@ -696,6 +830,22 @@ router.post(
         // just written a thousand events looked like a no-op. Teaching the UI two response shapes
         // would leave the same trap for the next reader; one shape is the fix.
         const w = (r.data?.written ?? {}) as Record<string, number>;
+
+        // Nudge the intelligence engine so the chatbot reflects the plant now instead of at the
+        // next 3-minute sweep. Fire-and-forget: one scoped sweep still takes ~30s and the
+        // operator watches the KPI move on the dashboard (pipeline transforms already ran) while
+        // it works. `plantedKpis` empty for a plain volume seed -> nothing to re-score.
+        let rescoreTriggered = false;
+        if (plantedKpis.length) {
+          rescoreTriggered = true;
+          const kpiParam = encodeURIComponent(plantedKpis.join(","));
+          for (const win of (rescoreWindows.length ? rescoreWindows : [seedDays])) {
+            const url = `${ANALYTICS_API_URL}/intelligence/rescore` +
+              `?tenants=${encodeURIComponent(analyticsTenant)}&days=${win}&kpi_id=${kpiParam}`;
+            axios.post(url, {}, { timeout: 240000 }).catch(() => { /* the timed sweep still runs */ });
+          }
+        }
+
         res.status(200).json({
           message: "Fast seed complete (pipeline bypassed)",
           mode: "fast",
@@ -707,6 +857,12 @@ router.post(
           eventsCreated: w.events_raw ?? 0,
           loanApplicationsCreated: w.fact_loan_applications ?? 0,
           simulatedDays: w.days ?? 0,
+          plantedTemplate: factTemplate && factTemplate !== "baseline" ? factTemplate : null,
+          plantedKpis,
+          rescoreTriggered,
+          rescoreNote: rescoreTriggered
+            ? "KPIs updated on the dashboard now; the chatbot picks up the movement in ~30-60s."
+            : undefined,
           ...r.data,
         });
       } catch (err: unknown) {
