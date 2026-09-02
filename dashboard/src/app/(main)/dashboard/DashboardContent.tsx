@@ -37,7 +37,7 @@ export default function DashboardContent() {
       <PersonaLens persona={persona} onChange={setPersona} />
 
       <section id="kpi-section" aria-label="Key performance indicators">
-        <div className="rise-stagger grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
+        <div className="rise-stagger grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {kpiMetrics.map((metric) => (
             <KPICard key={metric.id} metric={metric} spark={series[metric.id]?.points} />
           ))}

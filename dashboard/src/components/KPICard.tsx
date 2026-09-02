@@ -84,8 +84,8 @@ function KPICard({ metric, spark = [] }: { metric: KPIMetric; spark?: SeriesPoin
         )}
       </div>
 
-      <p className="num mb-4 text-slate-900" style={{ fontSize: 'var(--step-4)', fontWeight: 600,
-                                                      letterSpacing: '-0.03em', lineHeight: 1 }}>
+      <p className="num mb-4 text-slate-900" style={{ fontSize: 'var(--step-3)', fontWeight: 600,
+                                                      letterSpacing: '-0.02em', lineHeight: 1.05 }}>
         {metric.value}
       </p>
 

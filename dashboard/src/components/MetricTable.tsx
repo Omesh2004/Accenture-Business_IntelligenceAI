@@ -44,8 +44,8 @@ function Path({ points, colour }: { points: { value: number }[]; colour: string 
 
   if (!d) return <span className="block" style={{ height: H }} />;
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none"
-         className="block" aria-hidden>
+    <svg viewBox={`0 0 ${W} ${H}`} height={H} preserveAspectRatio="none"
+         className="block w-full" aria-hidden>
       <motion.path
         d={d} fill="none" stroke={colour} strokeWidth={1.85} vectorEffect="non-scaling-stroke"
         strokeLinecap="round" strokeLinejoin="round"
@@ -78,13 +78,13 @@ export default function MetricTable(
 
   return (
     <div className="surface overflow-hidden">
-      <table className="w-full border-collapse">
+      <table className="w-full table-fixed border-collapse">
         <thead>
           <tr className="border-b border-slate-100 text-[10.5px] font-semibold uppercase
                          tracking-[0.13em] text-slate-500">
             <th className="w-[30%] px-6 py-3.5 text-left font-semibold">Metric</th>
             <th className="w-[16%] px-3 py-3.5 text-right font-semibold">Current</th>
-            <th className="px-6 py-3.5 text-center font-semibold">Trend (last {days} days)</th>
+            <th className="px-8 py-3.5 text-center font-semibold">Trend (last {days} days)</th>
             <th className="w-[14%] px-6 py-3.5 text-right font-semibold">Change</th>
           </tr>
         </thead>
@@ -105,7 +105,7 @@ export default function MetricTable(
                 <td className="num px-3 py-4 text-right text-[15px] font-semibold text-slate-900">
                   {pts.length ? fmt(k.unit, now) : '--'}
                 </td>
-                <td className="px-6 py-4 align-middle">
+                <td className="px-8 py-4 align-middle">
                   <Path points={pts} colour={good ? 'var(--brand)' : 'var(--fall)'} />
                 </td>
                 <td className="px-6 py-4 text-right text-[13px] font-medium"

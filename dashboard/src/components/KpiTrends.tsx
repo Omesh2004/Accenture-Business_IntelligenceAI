@@ -134,10 +134,10 @@ export default function KpiTrends(
                       + `${fmt(k.unit, lower!)} to ${fmt(k.unit, upper!)}`}
               </p>
 
-              <div style={{ height: 190 }}>
+              <div style={{ height: 200 }}>
                 {pts.length ? (
                   <ResponsiveContainer width="100%" height="100%">
-                    <AreaChart data={pts} margin={{ top: 6, right: 8, left: 0, bottom: 0 }}>
+                    <AreaChart data={pts} margin={{ top: 8, right: 14, left: 0, bottom: 0 }}>
                       <defs>
                         <linearGradient id={`fill-${k.id}`} x1="0" y1="0" x2="0" y2="1">
                           <stop offset="0%" stopColor={INSIDE} stopOpacity={0.18} />
@@ -146,9 +146,10 @@ export default function KpiTrends(
                       </defs>
                       <CartesianGrid strokeDasharray="2 5" stroke="#f0f0f6" vertical={false} />
                       <XAxis dataKey="date" tick={{ fontSize: 10.5, fill: '#9b95ad' }}
-                             tickFormatter={(d: string) => d.slice(5)} minTickGap={30}
+                             tickFormatter={(d: string) => d.slice(5)} minTickGap={18}
+                             interval="preserveStartEnd" padding={{ left: 4, right: 4 }}
                              axisLine={false} tickLine={false} />
-                      <YAxis tick={{ fontSize: 10.5, fill: '#9b95ad' }} width={48}
+                      <YAxis tick={{ fontSize: 10.5, fill: '#9b95ad' }} width={42}
                              axisLine={false} tickLine={false} domain={['auto', 'auto']}
                              tickFormatter={(v: number) => (k.unit === 'rate'
                                ? `${Math.round(v * 100)}%`
