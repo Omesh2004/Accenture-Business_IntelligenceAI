@@ -92,7 +92,8 @@ export default function AdminSimulatePage() {
    const [behavior, setBehavior] = useState<BehaviorPayload | null>(null)
    // Run settings the SELECTED template needs. Derived rather than stored, so it cannot drift out
    // of step with the template the operator is actually looking at.
-   const activeRun = TEMPLATES.find((t) => t.id === templateId)?.run
+   const activeTemplate = TEMPLATES.find((t) => t.id === templateId)
+   const activeRun = activeTemplate?.run
    const [catalog, setCatalog] = useState<SimCatalog | null>(null)
   // Slow mode proves the real pipeline works: every row goes to Postgres, then the ingestion API,
   // Kafka and the worker. Fast mode writes the analytics tables directly -- mock data only, for
@@ -202,6 +203,20 @@ export default function AdminSimulatePage() {
     setResult(null)
     try {
       await measureAndTrack('admin_simulate.run_simulation', async () => {
+            // A template that names a fact template plants a movement in the banking facts --
+            // the source every KPI value is built from. The clickstream run below cannot move a
+            // KPI at all, so a template that is meant to shift the dashboard has to take this
+            // route instead.
+            const factTemplate = activeTemplate?.factTemplate
+            if (factTemplate) {
+              const planted = await axios.post(
+                `${API_BASE_URL}/events/simulate/plant`,
+                { template: factTemplate, days: safeDays },
+                { withCredentials: true, timeout: 25 * 60 * 1000 },
+              )
+              setResult(planted.data)
+              return
+            }
             const res = await axios.post(
                `${API_BASE_URL}/events/simulate`,
                { count: safeCount, days: safeDays, tenantId, behavior,

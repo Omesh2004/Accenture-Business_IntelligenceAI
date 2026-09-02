@@ -80,9 +80,9 @@ export default function KpiTrends(
   { series, allowed, loading }:
   { series: Record<string, KpiSeries>; allowed: string[]; loading?: boolean },
 ) {
-  // Three charts, not five. Five is a contact sheet a reader scans; three is a story they read,
-  // and the three worth telling are the ones that actually left their range, then the largest
-  // movers. Every metric is still in the table below, so nothing is hidden.
+  // Every governed metric gets a chart, ordered so the ones that left their range come first.
+  // Capping the list hid two of the five the product claims to track, which is a strange thing
+  // for a page whose whole job is the portfolio.
   const cards = useMemo(() => {
     const built = KPI_SPECS.filter((k) => allowed.includes(k.id)).map((k) => {
       const s = series[k.id];
@@ -95,9 +95,7 @@ export default function KpiTrends(
       const last = c.pts[c.pts.length - 1].value;
       return first ? Math.abs((last - first) / first) : 0;
     };
-    return [...built]
-      .sort((a, b) => (b.outside - a.outside) || (swing(b) - swing(a)))
-      .slice(0, 3);
+    return [...built].sort((a, b) => (b.outside - a.outside) || (swing(b) - swing(a)));
   }, [series, allowed]);
 
   return (

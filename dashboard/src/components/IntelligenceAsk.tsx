@@ -111,14 +111,10 @@ function IntelligenceAsk({
 
   return (
     <>
-      <div
-        className="rounded-3xl border p-5"
-        style={{
-          borderColor: INK.hairline,
-          background: INK.surface,
-          boxShadow: '0 1px 2px rgba(18,19,26,.04), 0 6px 22px rgba(18,19,26,.045)',
-        }}
-      >
+      {/* The one card on this page asking to be used, so it gets the attention treatment: a
+          border that runs, and the hero's wave underneath. */}
+      <div className="attention">
+       <div className="attention-inner p-5">
         <div className="flex flex-wrap items-center gap-3">
           <Sparkles className="h-4 w-4" style={{ color: INK.accent }} />
           <span className="text-[length:var(--step--1)] font-semibold" style={{ color: INK.text }}>
@@ -187,6 +183,7 @@ function IntelligenceAsk({
             <ArrowUp className="h-4 w-4" />
           </button>
         </form>
+       </div>
       </div>
 
       <AnimatePresence>
