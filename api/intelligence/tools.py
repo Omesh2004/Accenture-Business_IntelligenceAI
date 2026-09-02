@@ -25,6 +25,7 @@ from typing import Any, Callable
 from datetime import datetime, timedelta
 
 from api.intelligence import config, personas, phrasing, reader
+from api.middleware import hidden_kpis
 
 _DISPLAY_NAMES: dict[str, str] | None = None
 
@@ -183,7 +184,8 @@ def _current_reading(tenant_id: str, kpi_id: str) -> float | None:
 
 def _get_insight(tenant_id: str, persona: str, kpi_id: str = "", window_days: int = 0,
         **_) -> ToolResult:
-    row = reader.latest_insight(tenant_id, persona, kpi_id or None, window_days)
+    row = reader.latest_insight(tenant_id, persona, kpi_id or None, window_days,
+                                exclude_kpis=tuple(hidden_kpis(persona)))
     if not row:
         return ToolResult(False, reason="no recorded insight matches that metric")
     # `magnitude` is the movement in the metric's own units. A percentage without it leaves a
@@ -361,7 +363,8 @@ def _unsliceable_reason(kpi_id: str) -> str:
 
 def _get_causes(tenant_id: str, persona: str, kpi_id: str = "", window_days: int = 0,
         **_) -> ToolResult:
-    row = reader.latest_insight(tenant_id, persona, kpi_id or None, window_days)
+    row = reader.latest_insight(tenant_id, persona, kpi_id or None, window_days,
+                                exclude_kpis=tuple(hidden_kpis(persona)))
     causes = (row or {}).get("causes") or []
     if not causes:
         resolved = kpi_id or (row or {}).get("kpi_id", "")
@@ -436,7 +439,8 @@ def _render_causes(res: ToolResult, persona: str) -> str:
 
 def _get_factors(tenant_id: str, persona: str, kpi_id: str = "", window_days: int = 0,
         **_) -> ToolResult:
-    row = reader.latest_insight(tenant_id, persona, kpi_id or None, window_days)
+    row = reader.latest_insight(tenant_id, persona, kpi_id or None, window_days,
+                                exclude_kpis=tuple(hidden_kpis(persona)))
     factors = (row or {}).get("factors") or []
     if not factors:
         return ToolResult(False, reason="this metric declares no factor identity to decompose")
@@ -455,7 +459,8 @@ def _render_factors(res: ToolResult, persona: str) -> str:
 
 def _get_forecast(tenant_id: str, persona: str, kpi_id: str = "", window_days: int = 0,
         **_) -> ToolResult:
-    row = reader.latest_insight(tenant_id, persona, kpi_id or None, window_days)
+    row = reader.latest_insight(tenant_id, persona, kpi_id or None, window_days,
+                                exclude_kpis=tuple(hidden_kpis(persona)))
     claims = [c for c in ((row or {}).get("evidence") or [])
               if c["claim_id"] in ("forecast_point", "forecast_lower", "forecast_upper")]
     if not any(c["claim_id"] == "forecast_point" for c in claims):
@@ -492,7 +497,8 @@ def _is_governed(kpi_id: str) -> bool:
 
 def _get_recommendations(tenant_id: str, persona: str, kpi_id: str = "", window_days: int = 0,
         **_) -> ToolResult:
-    row = reader.latest_insight(tenant_id, persona, kpi_id or None, window_days)
+    row = reader.latest_insight(tenant_id, persona, kpi_id or None, window_days,
+                                exclude_kpis=tuple(hidden_kpis(persona)))
     resolved = (row or {}).get("kpi_id", "")
     if resolved and not _is_governed(resolved):
         # Silence and "nothing to do" are different answers. An auto-discovered series has no
@@ -581,7 +587,8 @@ def _render_recommendations(res: ToolResult, persona: str) -> str:
 
 def _get_trust(tenant_id: str, persona: str, kpi_id: str = "", window_days: int = 0,
         **_) -> ToolResult:
-    row = reader.latest_insight(tenant_id, persona, kpi_id or None, window_days)
+    row = reader.latest_insight(tenant_id, persona, kpi_id or None, window_days,
+                                exclude_kpis=tuple(hidden_kpis(persona)))
     if not row:
         return ToolResult(False, reason="no recorded insight matches that metric")
     trust = row.get("trust") or {}
@@ -666,9 +673,14 @@ def _rank_movements(tenant_id: str, persona: str, scope: str = "", **_) -> ToolR
     unscoped "no governed metric is outside its band" reads as a failure to understand it.
     """
     wanted = [k.strip() for k in (scope or "").split(",") if k.strip()]
+    # A ranking names metrics, so it is a disclosure like any other. Left unfiltered it told
+    # Operations that Revenue was the most material movement on the board -- by name, with a
+    # materiality score -- while every other path was carefully refusing to discuss it.
+    withheld = hidden_kpis(persona)
     try:
         rows = reader.top_movements(tenant_id, persona, limit=config.MAX_CAUSES,
                                     governed_only=True)
+        rows = [r for r in rows if r.get("kpi_id") not in withheld]
     except reader.RegistryUnavailable as exc:
         return ToolResult(False, reason="I cannot tell which metrics are governed right now (%s), "
                                         "so I will not present a priority order" % exc)
@@ -872,7 +884,8 @@ def _get_trend(tenant_id: str, persona: str, kpi_id: str = "", window_days: int 
     from api.intelligence.metrics import Window
     from api.metric_api.client import MetricAPIClient
 
-    row = reader.latest_insight(tenant_id, persona, kpi_id or None, window_days)
+    row = reader.latest_insight(tenant_id, persona, kpi_id or None, window_days,
+                                exclude_kpis=tuple(hidden_kpis(persona)))
     kpi = kpi_id or (row or {}).get("kpi_id", "")
     if not kpi:
         return ToolResult(False, reason="no metric to draw a trend for")
