@@ -1,4 +1,4 @@
-"""Read side: what the dashboard AI panel and /ai_report consume.
+"""Read side: what the dashboard AI panel consumes.
 
 The narrator may state only what the Signal Store contains, so the reader returns stored rows --
 it never recomputes a number.
@@ -8,11 +8,11 @@ from __future__ import annotations
 import json
 from typing import Any
 
-DB = "feature_intelligence"
+DB = "gold"
 
 
 def _ch():
-    from storage.client import ch_client
+    from warehouse.client import ch_client
     return ch_client
 
 
@@ -55,7 +55,8 @@ def _loads(value: Any, default):
 
 
 def latest_insight(tenant_id: str, persona: str = "analyst",
-                   kpi_id: str | None = None) -> dict | None:
+                   kpi_id: str | None = None, window_days: int | None = None,
+                   exclude_kpis: tuple[str, ...] | list[str] = ()) -> dict | None:
     """The insight most worth reading for a tenant/persona, with evidence and engine breakdown.
 
     `generated_at` is pinned to the window end for determinism, so every insight in a sweep shares
@@ -68,17 +69,52 @@ def latest_insight(tenant_id: str, persona: str = "analyst",
     sql = (
         "SELECT i.* FROM ("
         f"  SELECT * FROM {DB}.insights FINAL WHERE tenant_id = %(t)s AND persona = %(p)s "
+        + ("  AND window_days = %(w)s " if window_days else "")
         + ("  AND kpi_id = %(k)s " if kpi_id else "")
+        # Entitlement is applied HERE, not by blanking fields on the way out. Redacting
+        # afterwards returned a Revenue finding to Operations with its kpi_id nulled and its
+        # headline and narrative still naming Revenue: the restriction leaked the very thing it
+        # was meant to withhold, and the missing id crashed the page that rendered it.
+        + ("  AND kpi_id NOT IN %(x)s " if exclude_kpis else "")
+        # A superseded finding must never be served.
+        #
+        # `investigation_id` is deterministic, so re-running a sweep reuses it. When a re-run
+        # finds no anomaly it writes a row with an empty anomaly_id -- and because anomaly_id is
+        # part of the table's sort key, the previous anomaly-bearing row is NOT replaced. Both
+        # survive, and the liveness rule below then actively prefers the stale one. That is how
+        # the page came to show a finding whose own narrative admitted "the range it was judged
+        # against no longer holds", with an empty attribution card underneath it.
+        #
+        # The investigations table carries the current verdict for that exact investigation, so
+        # an anomaly-bearing insight is dropped when its own investigation now says there is no
+        # anomaly. Nothing is deleted; the superseded row simply stops being selected.
+        + ("  AND (anomaly_id = '' OR investigation_id NOT IN ("
+           f"    SELECT investigation_id FROM {DB}.investigations FINAL "
+           "     WHERE tenant_id = %(t)s AND termination_reason = 'no_anomaly')) ")
         + ") AS i LEFT JOIN ("
-          f"  SELECT anomaly_id, max(materiality) AS materiality FROM {DB}.anomalies FINAL "
+          f"  SELECT anomaly_id, max(materiality) AS materiality, max(detected_at) AS detected_at, "
+          f"         max(window_start) AS window_start "
+          f"  FROM {DB}.anomalies FINAL WHERE tenant_id = %(t)s "
           "  GROUP BY anomaly_id"
           ") AS a USING (anomaly_id) "
-          "ORDER BY i.anomaly_id != '' DESC, i.kpi_id IN %(declared)s DESC, "
-          "a.materiality DESC, i.generated_at DESC, i.confidence DESC, i.insight_id ASC LIMIT 1"
+          # Liveness first. A re-sweep writes a NEW anomaly id, so the row it supersedes stays in
+          # the table; ranked on materiality alone the superseded one could win, and the agent
+          # went on quoting the previous run's window after the data had already moved on.
+          # `detected_at` is the sweep time and is day-grain, so every anomaly found in the same
+          # sweep ties on it and materiality decided instead -- which let a June window outrank
+          # an August one. The window's own start is the real recency signal, so it ranks first.
+          "ORDER BY (i.anomaly_id != '' AND a.detected_at > toDateTime(0)) DESC, "
+          "i.kpi_id IN %(declared)s DESC, a.window_start DESC, a.detected_at DESC, "
+          "a.materiality DESC, "
+          "i.generated_at DESC, i.confidence DESC, i.insight_id ASC LIMIT 1"
     )
     params = {"t": tenant_id, "p": persona, "declared": declared}
     if kpi_id:
         params["k"] = kpi_id
+    if exclude_kpis:
+        params["x"] = tuple(exclude_kpis)
+    if window_days:
+        params["w"] = int(window_days)
     rows = _ch().query(sql, params)
     if not rows:
         return None
@@ -94,13 +130,54 @@ def latest_insight(tenant_id: str, persona: str = "analyst",
     return row
 
 
-def list_insights(tenant_id: str, persona: str = "analyst", limit: int = 20) -> list[dict]:
+def list_insights(tenant_id: str, persona: str = "analyst", limit: int = 20,
+                  window_days: int | None = None) -> list[dict]:
+    # One CURRENT insight per KPI. Every sweep writes a row keyed on its anomaly, and
+    # generated_at is the window end rather than the run time, so the table accumulates rows
+    # that cannot be ordered by time. A finding whose anomaly no longer exists is stale, so
+    # live findings rank first and LIMIT 1 BY keeps one per KPI.
+    # The window comes along with the finding. Without it a chart can say a KPI moved but not
+    # WHERE it moved, so it either shades nothing or has to guess from the shape of the line.
     rows = _ch().query(
         f"SELECT insight_id, investigation_id, kpi_id, anomaly_id, persona, generated_at, "
-        f"trust_verdict, headline, confidence, simulated, abstained, verifier_pass "
-        f"FROM {DB}.insights FINAL WHERE tenant_id = %(t)s AND persona = %(p)s "
-        "ORDER BY generated_at DESC, insight_id ASC LIMIT %(n)s",
-        {"t": tenant_id, "p": persona, "n": int(limit)},
+        f"trust_verdict, headline, confidence, simulated, abstained, verifier_pass, "
+        f"window_start, window_end, direction, severity, magnitude, baseline, observed, "
+        f"band_lower, band_upper FROM ("
+        f"  SELECT i.insight_id AS insight_id, i.investigation_id AS investigation_id, "
+        f"         i.kpi_id AS kpi_id, i.anomaly_id AS anomaly_id, i.persona AS persona, "
+        f"         i.generated_at AS generated_at, i.trust_verdict AS trust_verdict, "
+        f"         i.headline AS headline, i.confidence AS confidence, "
+        f"         i.simulated AS simulated, i.abstained AS abstained, "
+        f"         i.verifier_pass AS verifier_pass, a.window_start AS window_start, "
+        f"         a.window_end AS window_end, a.direction AS direction, a.severity AS severity, "
+        f"         a.magnitude AS magnitude, a.baseline AS baseline, a.observed AS observed, "
+        f"         f.lower AS band_lower, f.upper AS band_upper, "
+        f"         if(a.anomaly_id != '', 1, 0) AS live "
+        f"  FROM {DB}.insights AS i FINAL "
+        f"  LEFT JOIN (SELECT anomaly_id, window_start, window_end, direction, severity, "
+        f"                    magnitude, baseline, observed "
+        f"             FROM {DB}.anomalies FINAL WHERE tenant_id = %(t)s) AS a "
+        f"    ON i.anomaly_id = a.anomaly_id "
+        # The band the metric was scored against, keyed on the metric and the window LENGTH
+        # rather than on the anomaly's start date. Joining on the anomaly meant a quiet KPI got
+        # no band at all, and a chart with no band has no way to say which days sat outside it --
+        # so it marked the whole window instead, which is the opposite of the truth.
+        f"  LEFT JOIN (SELECT kpi_id, horizon_days, argMax(lower, as_of) AS lower, "
+        f"                    argMax(upper, as_of) AS upper "
+        f"             FROM {DB}.forecasts FINAL WHERE tenant_id = %(t)s "
+        f"             GROUP BY kpi_id, horizon_days) AS f "
+        f"    ON f.kpi_id = i.kpi_id AND f.horizon_days = i.window_days "
+        f"  WHERE i.tenant_id = %(t)s AND i.persona = %(p)s"
+        # Same supersession rule as latest_insight: a re-run reuses the investigation id and
+        # writes an empty-anomaly row beside the old one instead of replacing it, so an insight
+        # whose own investigation now reports no anomaly is stale and must not be listed.
+        + (" AND (i.anomaly_id = '' OR i.investigation_id NOT IN ("
+           f"   SELECT investigation_id FROM {DB}.investigations FINAL "
+           "    WHERE tenant_id = %(t)s AND termination_reason = 'no_anomaly')) ")
+        + ("  AND i.window_days = %(w)s " if window_days else "")
+        + f") ORDER BY kpi_id ASC, live DESC, generated_at DESC, insight_id ASC "
+        f"LIMIT 1 BY kpi_id LIMIT %(n)s",
+        {"t": tenant_id, "p": persona, "n": int(limit), "w": int(window_days or 0)},
     )
     return [dict(r) for r in rows]
 
@@ -196,7 +273,10 @@ def recommendations(tenant_id: str, limit: int = 20, anomaly_id: str | None = No
     rows = _ch().query(
         f"SELECT rec_id, anomaly_id, action, lever, owner_role, expected_impact, status "
         f"FROM {DB}.recommendations FINAL WHERE {where} "
-        "ORDER BY rec_id ASC LIMIT %(n)s",
+        # `investigate` is the declared fallback: what Decide proposes when it has no localized
+        # driver to act on. Ordering by rec_id let that outrank a real lever written for the same
+        # anomaly, so a reader was told to go and look into it while a repair sat one row below.
+        "ORDER BY lever = 'investigate' ASC, rec_id ASC LIMIT %(n)s",
         params,
     )
     out = []

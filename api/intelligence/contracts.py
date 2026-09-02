@@ -48,20 +48,29 @@ class Contract:
 
     @property
     def fundamentals(self) -> list[dict]:
-        return self.raw.get("fundamentals") or []
+        # The Metric API addresses a fundamental as (kpi_id, fundamental); the YAML only names
+        # `metric`. Stamp both on so every caller can pass a spec straight through.
+        out = []
+        for f in (self.raw.get("fundamentals") or []):
+            out.append({**f, "kpi_id": self.id,
+                        "fundamental": f.get("fundamental") or f.get("metric", "")})
+        return out
 
     def _ratio_parts(self) -> list[dict]:
-        """Fundamentals in declaration order: clickstream form, or fact form for a ratio.
+        """Numerator then denominator, for a ratio contract.
 
-        Recognising only the `event` form (bug audit A5) left every fact-based ratio --
-        digital_adoption_rate, loan_approval_rate -- reporting is_ratio False, so Detect scored
-        their numerator count and a rate that fell was published as an urgent rise. Fact-based
-        NON-ratio contracts keep returning nothing, so their volume guard is unchanged.
+        Order comes from an explicit `role:` where declared, otherwise declaration order.
+        Getting this wrong makes a rate score its own numerator, so a rate that halved while
+        volume grew reads as a rise.
         """
-        events = [x for x in self.fundamentals if x.get("event") or x.get("events")]
-        if events or self.raw.get("unit") != "ratio":
-            return events
-        return [x for x in self.fundamentals if x.get("table")]
+        if self.raw.get("unit") != "ratio":
+            return []
+        funds = self.fundamentals
+        num = [x for x in funds if x.get("role") == "numerator"]
+        den = [x for x in funds if x.get("role") == "denominator"]
+        if num and den:
+            return [num[0], den[0]]
+        return funds[:2]
 
     @property
     def is_ratio(self) -> bool:
@@ -126,6 +135,20 @@ class Contract:
     @property
     def provisional_window_minutes(self) -> int:
         return int((self.raw.get("quality") or {}).get("provisional_window_minutes", 0))
+
+    @property
+    def aliases(self) -> list[str]:
+        """Phrases a person may use for this metric, from the contract."""
+        raw = self.raw.get("aliases") or []
+        return [str(a).lower() for a in raw if str(a).strip()]
+
+    @property
+    def strategic_weight(self) -> float:
+        """Business impact, 0..1. Absent means middling rather than unimportant."""
+        try:
+            return max(0.0, min(1.0, float(self.raw.get("strategic_weight", 0.5))))
+        except (TypeError, ValueError):
+            return 0.5
 
     @property
     def allowed_levers(self) -> list[str]:

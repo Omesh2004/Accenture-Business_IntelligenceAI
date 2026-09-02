@@ -33,6 +33,12 @@ class Persona:
     lead_in: dict[str, str] = field(default_factory=dict)
     # When no metric is named, prefer these ids in order before falling back to the ranking.
     kpi_preference: tuple[str, ...] = ()
+    # Capabilities this reader always wants on an investigation, on top of what the question
+    # explicitly asked for. This is what makes one question produce four different answers: a CFO
+    # asking "why did it move" wants the money broken down and the outlook, an analyst wants the
+    # path and the method, an ops manager wants the segment and the lever. Same verified numbers,
+    # different account of them.
+    chain_bias: tuple[str, ...] = ()
     # Examples offered by the help intent and by the dashboard's suggestion chips.
     examples: tuple[str, ...] = ()
     # How far to pursue a question. A CFO wants the position and the outlook; an analyst wants the
@@ -59,7 +65,7 @@ REGISTRY: dict[str, Persona] = {
         # should we do" was told nothing at all; the useful answer is the commercial lever plus
         # the name of whoever owns the rest, and `owner_roles` below already draws that line.
         intents=frozenset({"cause", "action", "forecast", "trust", "cost", "freshness", "status",
-                           "catalog", "definition", "ranking", "greeting", "help"}),
+                           "catalog", "definition", "ranking", "trend", "greeting", "help"}),
         owner_roles=frozenset({"revenue_ops", "retail_banking", "marketing_ops",
                                "product_marketing", "growth_analytics"}),
         lead_in={
@@ -68,13 +74,15 @@ REGISTRY: dict[str, Persona] = {
             "ranking": "Ranked by financial materiality:",
             "action": "Commercial consequence:",
         },
-        kpi_preference=("fee_revenue", "pro_revenue", "net_deposit_growth",
-                        "cost_per_acquisition"),
-        examples=("Which metric moved most this week?",
-                  "What drove the change in net deposit growth?",
-                  "What does the forecast say for fee revenue?",
-                  "How reliable is the net deposit growth figure?",
-                  "What did this analysis cost to produce?"),
+        kpi_preference=("revenue", "loan_approval_volume"),
+        # Money broken into its lines, and where it is heading.
+        chain_bias=("factor", "forecast", "action"),
+        # Openers, not follow-ups. Every one names a metric and stands on its own, because on a
+        # fresh conversation there is nothing for "this figure" or "this analysis" to refer to --
+        # and examples[0] is also offered bare as "Try: ..." when a question cannot be answered.
+        examples=("What drove the change in revenue?",
+                  "What does the forecast say for revenue?",
+                  "Which metric moved most this week?"),
         max_tools_per_round=2, max_rounds=2, detail="summary",
     ),
     "ops_manager": Persona(
@@ -83,21 +91,24 @@ REGISTRY: dict[str, Persona] = {
         remit="Day-to-day operational levers, segment concentration and remediation.",
         greeting="Good to see you. I report on where operations moved and what can be done.",
         intents=frozenset({"cause", "action", "trust", "freshness", "status",
-                           "catalog", "definition", "ranking", "greeting", "help"}),
-        owner_roles=frozenset({"lending_ops", "digital_channels", "growth_analytics",
-                               "retail_banking", "analytics"}),
+                           "catalog", "definition", "ranking", "trend", "greeting", "help"}),
+        # `onboarding_ops` owns every KYC lever in contracts/levers.yaml, and this persona IS the
+        # onboarding manager. Leaving it out meant the one reader who can fix a KYC leak was told
+        # "no lever here is yours to pull" and handed their own action to someone else.
+        owner_roles=frozenset({"onboarding_ops", "lending_ops", "digital_channels",
+                               "growth_analytics", "retail_banking", "analytics"}),
         lead_in={
             "cause": "Operational position:",
             "action": "Recommended action:",
             "ranking": "Ranked by operational severity:",
         },
-        kpi_preference=("loan_approval_rate", "loan_approval_volume", "kyc_completion_rate",
-                        "digital_adoption_rate", "new_account_openings"),
+        kpi_preference=("kyc_completion_rate", "signups",
+                        "loan_approval_volume", "transaction_failure_rate"),
+        # Where it leaked, and the lever that closes it.
+        chain_bias=("cause", "action"),
         examples=("Why did KYC completion rate fall?",
-                  "Where is the drop concentrated?",
-                  "What action is recommended, and who owns it?",
-                  "Is the loan approval rate reliable enough to act on?",
-                  "How current is the data behind this?"),
+                  "Where is the KYC drop concentrated by segment?",
+                  "What action is recommended for KYC completion, and who owns it?"),
         max_tools_per_round=3, max_rounds=3, detail="standard",
     ),
     "analyst": Persona(
@@ -107,7 +118,7 @@ REGISTRY: dict[str, Persona] = {
         greeting="Good to see you. I have the full investigation record, method detail included.",
         intents=frozenset({"cause", "factor", "forecast", "action", "trust", "cost",
                            "freshness", "status", "catalog", "definition", "ranking",
-                           "greeting", "help"}),
+                           "trend", "greeting", "help"}),
         owner_roles=frozenset(),          # empty == every owner
         lead_in={
             "cause": "Attribution:",
@@ -115,36 +126,12 @@ REGISTRY: dict[str, Persona] = {
             "ranking": "Ranked by materiality:",
         },
         kpi_preference=(),
+        # The path, the attribution and how it was arrived at.
+        chain_bias=("trend", "cause", "factor", "trust"),
         examples=("Why did KYC completion rate fall, and where is it concentrated?",
-                  "Was the change price, volume or mix?",
-                  "Show the forecast band for digital adoption rate.",
-                  "How reliable is this figure, and which checks passed?",
-                  "What did this analysis cost in tokens and latency?",
+                  "Show the forecast band for transaction failure rate.",
                   "Which KPIs do you track?"),
         max_tools_per_round=4, max_rounds=3, detail="full",
-    ),
-    "marketing_lead": Persona(
-        id="marketing_lead",
-        label="Marketing Lead",
-        remit="Acquisition efficiency: campaign spend, funnel entry and product uptake.",
-        greeting="Good to see you. I report on what acquisition is costing and what it is winning.",
-        intents=frozenset({"cause", "action", "forecast", "trust", "freshness", "status",
-                           "catalog", "definition", "ranking", "greeting", "help"}),
-        owner_roles=frozenset({"marketing_ops", "product_marketing", "growth_analytics"}),
-        lead_in={
-            "cause": "Acquisition position:",
-            "action": "Recommended campaign action:",
-            "ranking": "Ranked by acquisition impact:",
-            "forecast": "Pipeline outlook:",
-        },
-        kpi_preference=("cost_per_acquisition", "new_account_openings",
-                        "new_product_activations", "digital_adoption_rate"),
-        examples=("What drove the change in cost per acquisition?",
-                  "Which segment is the movement concentrated in?",
-                  "Show me the forecast for new account openings.",
-                  "What action is recommended to bring acquisition cost down?",
-                  "How reliable is the cost per acquisition figure?"),
-        max_tools_per_round=3, max_rounds=3, detail="standard",
     ),
     "risk_officer": Persona(
         id="risk_officer",
@@ -152,45 +139,25 @@ REGISTRY: dict[str, Persona] = {
         remit="Onboarding and credit exposure: KYC integrity, approval discipline, auditability.",
         greeting="Good to see you. I report on onboarding and credit exposure, and what is provable.",
         intents=frozenset({"cause", "action", "trust", "forecast", "freshness", "status",
-                           "catalog", "definition", "ranking", "greeting", "help"}),
-        owner_roles=frozenset({"lending_ops", "retail_banking", "growth_analytics"}),
+                           "catalog", "definition", "ranking", "trend", "greeting", "help"}),
+        # Risk owns the controls on onboarding integrity and on payments failures, which is what
+        # its remit names. Without these it could describe an exposure and never act on one.
+        owner_roles=frozenset({"onboarding_ops", "payments_ops", "lending_ops",
+                               "retail_banking", "growth_analytics"}),
         lead_in={
             "cause": "Risk position:",
             "action": "Required control action:",
             "ranking": "Ranked by exposure:",
             "trust": "Evidence standing:",
         },
-        kpi_preference=("kyc_completion_rate", "loan_approval_rate", "loan_approval_volume",
-                        "new_account_openings"),
+        kpi_preference=("transaction_failure_rate", "kyc_completion_rate",
+                        "loan_approval_volume"),
+        # Exposure, and whether the finding is provable.
+        chain_bias=("cause", "trust", "action"),
         examples=("Why did KYC completion rate fall?",
-                  "Is the loan approval rate verified and safe to act on?",
-                  "Where is the KYC drop concentrated by segment?",
-                  "What control action is recommended for loan approvals?",
-                  "How current is the data behind these figures?"),
+                  "Is the loan approval volume verified and safe to act on?",
+                  "What control action is recommended for loan approvals?"),
         max_tools_per_round=3, max_rounds=3, detail="full",
-    ),
-    "data_steward": Persona(
-        id="data_steward",
-        label="Data Steward",
-        remit="Pipeline health: source freshness, trust verdicts, lineage and runtime cost.",
-        greeting="Good to see you. I report on whether the numbers are fit to be used at all.",
-        # No `cause`, `action` or `factor`: a steward certifies the figure, and does not own the
-        # business lever that would move it. The refusal is the entitlement demonstration.
-        intents=frozenset({"cause", "action", "trust", "freshness", "cost", "status", "catalog", "definition",
-                           "ranking", "greeting", "help"}),
-        owner_roles=frozenset({"analytics"}),
-        lead_in={
-            "trust": "Data quality position:",
-            "freshness": "Pipeline currency:",
-            "ranking": "Ranked by data risk:",
-        },
-        kpi_preference=(),
-        examples=("How current is each source, and is any behind SLA?",
-                  "How reliable is the KYC completion rate figure?",
-                  "Which KPIs do you track, and which are governed contracts?",
-                  "What did this analysis cost in tokens and latency?",
-                  "How is digital adoption rate calculated?"),
-        max_tools_per_round=2, max_rounds=2, detail="full",
     ),
 }
 

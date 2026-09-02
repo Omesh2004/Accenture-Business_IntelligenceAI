@@ -15,6 +15,7 @@ from api.intelligence import signal_store as store
 from api.intelligence.contracts import Contract, load_all, sliceable_dimensions
 from api.intelligence.ids import investigation_id, run_id, inputs_hash
 from api.intelligence.metrics import ClickHouseMetricLayer, MetricSource, Window, ratio_series
+from api.metric_api.client import MetricAPIClient
 from api.intelligence.stages import (causal_decide, decompose, detect, forecast,
                                      llm_narrator, localize, narrate, trust_gate)
 
@@ -40,7 +41,7 @@ class Ctx:
 
 class Orchestrator:
     def __init__(self, metric_layer: MetricSource | None = None, personas=None):
-        self.metrics = metric_layer or ClickHouseMetricLayer()
+        self.metrics = metric_layer or MetricAPIClient()
         self.personas = tuple(personas or config.PERSONAS)
 
     # -- telemetry -----------------------------------------------------------
@@ -66,7 +67,15 @@ class Orchestrator:
 
     # -- stage 04, scheduled batch ------------------------------------------
     def run_forecast_batch(self, tenant_id: str, contracts: dict[str, Contract],
-                           window: Window, as_of: datetime) -> int:
+                           window: Window, as_of: datetime,
+                           horizon_days: int | None = None) -> int:
+        """`horizon_days` is the length of the window this band will be SCORED against.
+
+        It used to come from the contract, a fixed 7 whatever was being swept. Every sweep then
+        wrote to the same row, so the 30 and 90 day windows had no band of their own: the charts
+        for those ranges reported "no expected range on record" and nothing could be marked as
+        outside anything. A band belongs to the window it was fitted for.
+        """
         written = 0
         for kpi_id, contract in sorted(contracts.items()):
             if not contract.forecast_cfg.get("enabled", True):
@@ -82,7 +91,7 @@ class Orchestrator:
             result = forecast.run(kpi_id, series.values(), contract, as_of, tenant_id)
             store.write_forecast(forecast.to_row(
                 result, tenant_id, kpi_id, as_of,
-                int(contract.forecast_cfg.get("horizon_days", 7))))
+                int(horizon_days or contract.forecast_cfg.get("horizon_days", 7))))
             written += 1
         return written
 
@@ -151,7 +160,18 @@ class Orchestrator:
         # is guarded by an absolute volume floor instead.
         kpi_volume = (self.metrics.fundamental_total(tenant_id, den_spec, window)
                       if den_spec else self.metrics.fundamental_total(tenant_id, spec, window))
-        det = detect.run(ctx, series.values(), band, kpi_volume, 0.0)
+        # The robust baseline needs history from BEFORE the window. series_values[:-n] is all
+        # inside it, so on a sustained shift the movement was compared against itself.
+        hist_window = Window(window.start - timedelta(days=config.BASELINE_DAYS), window.start)
+        try:
+            hist_series = (ratio_series(self.metrics, tenant_id, contract, hist_window)
+                           if contract.is_ratio
+                           else self.metrics.fundamental_series(tenant_id, spec, hist_window))
+            baseline_values = list(hist_series.values()) if hist_series else []
+        except Exception:
+            baseline_values = []
+        det = detect.run(ctx, series.values(), band, kpi_volume, 0.0,
+                         baseline_values=baseline_values)
         self._record_run(ctx, "detect", "stats", t0, inputs=series.values())
 
         if not det.fired:
@@ -191,9 +211,10 @@ class Orchestrator:
 
         # ---- 05 Causal -----------------------------------------------------
         t0 = time.perf_counter()
-        cau = causal_decide.run_causal(ctx, anomaly, loc.causes, upstream_anomaly)
+        cau = causal_decide.run_causal(ctx, anomaly, loc.causes, upstream_anomaly, self.metrics)
         store.write_causal_effect(causal_decide.to_effect_row(ctx, anomaly, cau))
-        self._record_run(ctx, "causal", "rule", t0, inputs=cau.rung)
+        self._record_run(ctx, "causal", "stats" if cau.method != "rule" else "rule", t0,
+                         inputs=cau.rung)
 
         # ---- 06 Decide -----------------------------------------------------
         t0 = time.perf_counter()
@@ -248,6 +269,7 @@ class Orchestrator:
 
             row = narrate.to_insight_row(ctx, persona, headline, body, claims, trust,
                                          anomaly, breakdown, abstained, ok)
+            row["window_days"] = max(1, (ctx.window.end - ctx.window.start).days)
             store.write_insight(row)
             result["insights"].append({"persona": persona, "headline": headline,
                                        "narrative": body, "verifier_pass": ok})
@@ -263,7 +285,8 @@ class Orchestrator:
             # History must END where the scored window BEGINS, or the band centres on the
             # movement it is meant to detect.
             hist = Window(window.start - timedelta(days=config.BASELINE_DAYS), window.start)
-            self.run_forecast_batch(tenant_id, contracts, hist, window.start)
+            span = max(1, (window.end - window.start).days)
+            self.run_forecast_batch(tenant_id, contracts, hist, window.start, span)
 
         # Upstream KPIs first, so propagation can explain their dependents for free.
         ordered = sorted(contracts.values(), key=lambda c: (c.driven_by is not None, c.id))
@@ -301,4 +324,26 @@ class Orchestrator:
             if res.get("anomaly"):
                 opened[contract.id] = res["anomaly"]
             results.append(res)
+
+        self._apply_fdr(results)
         return results
+
+    @staticmethod
+    def _apply_fdr(results: list[dict]) -> None:
+        """Benjamini-Hochberg across the KPIs tested together.
+
+        Testing five series at once manufactures alarms; a KPI that only looks unlikely because
+        several were tried is marked suppressed_fdr rather than surfaced.
+        """
+        found = [r for r in results if r.get("anomaly")]
+        if len(found) < 2:
+            return
+        keep = detect.benjamini_hochberg([float(r["anomaly"].get("p_value", 1.0)) for r in found])
+        for r, survives in zip(found, keep):
+            if survives:
+                continue
+            r["anomaly"]["status"] = "suppressed_fdr"
+            try:
+                store.write_anomaly(r["anomaly"])
+            except Exception:
+                logger.exception("could not record FDR suppression for %s", r.get("kpi_id"))

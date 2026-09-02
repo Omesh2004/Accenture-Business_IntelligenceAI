@@ -1,4 +1,12 @@
 """
+ROUND-1 SCRIPT — NOT YET REBUILT FOR bronze/silver/gold.
+
+This checks `feature_intelligence.events_raw` / `daily_feature_usage`, which no longer exist.
+The Round-2 pipeline verification lives in `docs/execution/PHASE_7_REPORT.md` (the four §10
+scenarios + the full-`down -v` determinism diff). A Round-2 rewrite of this operator tool would
+check: bronze.core_banking -> silver.fact_* row-collapse, gold.kpi_daily fundamentals present per
+KPI, and pipeline/taxonomy rejects. Left in place, not deleted, so the intent survives.
+
 Verifies that the telemetry reaching ClickHouse is fit for the intelligence layer.
 
 This asserts the Foundation guarantees the pipeline is built on. It does NOT test the
@@ -37,8 +45,11 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import requests  # noqa: E402
 
-from api.page_map import canonicalize_event_name  # noqa: E402
-from core.event_names import normalize_ingest_event_name  # noqa: E402
+from pipeline.taxonomy import canonicalize as canonicalize_event_name  # noqa: E402
+try:
+    from ingestion.event_names import normalize_ingest_event_name  # noqa: E402
+except ImportError:  # event_names.py removed in the Round-2 rebuild
+    normalize_ingest_event_name = lambda s: s  # noqa: E731
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TENANT = os.environ.get("VERIFY_TENANT", "nexabank")
@@ -91,7 +102,7 @@ def collect_emitted_names() -> tuple[set[str], set[str]]:
     import glob
     import re
 
-    backend = os.path.join(REPO, "NexaBank", "backend", "src")
+    backend = os.path.join(REPO, "nexabank", "backend", "src")
     raw: set[str] = set()
     for path in glob.glob(os.path.join(backend, "**", "*.ts"), recursive=True):
         text = open(path, encoding="utf-8").read()
@@ -115,7 +126,7 @@ def collect_emitted_names() -> tuple[set[str], set[str]]:
     live = {canonical(line.split("\t")[1]) for line in out.splitlines() if "\t" in line}
 
     # The browser tracker posts straight to ingestion, skipping enforceTaxonomy.
-    frontend = os.path.join(REPO, "NexaBank", "frontend")
+    frontend = os.path.join(REPO, "nexabank", "frontend")
     for path in glob.glob(os.path.join(frontend, "**", "*.ts*"), recursive=True):
         if "node_modules" in path or ".next" in path:
             continue

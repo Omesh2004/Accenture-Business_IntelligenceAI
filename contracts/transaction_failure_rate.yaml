@@ -1,0 +1,153 @@
+id: transaction_failure_rate
+name: Transaction Failure Rate
+definition: >
+  The share of customer transactions that fail. The health signal of the chain: a failure rise
+  suppresses fee revenue directly and can depress onboarding completion at the same time.
+formula: txn_failed / txn_total
+unit: ratio
+additivity: non-additive     # the RATE is not additive; its two counts are
+
+# How a person refers to this metric. Without these the agent cannot tell that
+# "new account opening" means signups, and answers about something else entirely.
+aliases:
+  - transaction failures
+  - failed transactions
+  - payment failures
+  - failure rate
+  - declines
+  - decline rate
+  - payment errors
+
+grain:
+  time: daily
+  entity: transaction
+
+sources:
+  - id: nexabank_core
+    system: ClickHouse.fact_transactions
+    grain: transaction
+    cadence: hourly_batch
+    freshness_sla_minutes: 120
+
+readiness:
+  status: ready
+  gate: >
+    status is written by the ledger on every transaction. Channel here is the BANKING channel
+    (WEB, MOBILE, ATM, POS) recorded against the transaction -- not the events_raw delivery
+    channel, which is a different vocabulary with the same name.
+
+identity:
+  txn_id: required
+  customer_id: hashed
+
+# Addressed as (kpi_id, fundamental) against gold.kpi_daily -- see
+# docs/INTERFACES/kpi_rollups.md. The table/event forms are no longer supported.
+fundamentals:
+  - kpi_id: transaction_failure_rate
+    fundamental: txn_failed
+    additivity: additive
+    engine_type: sql
+    role: numerator
+  - kpi_id: transaction_failure_rate
+    fundamental: txn_total
+    additivity: additive
+    engine_type: sql
+    role: denominator
+
+dimensions:
+  # All measured columns on the transaction itself.
+  allowed: [channel, txn_type, mcc, region, branch_code]
+  max_depth: 2
+  min_segment_volume: 50
+  availability:
+    channel: {seeded: true, live: true}
+    txn_type: {seeded: true, live: true}
+    mcc: {seeded: true, live: true}
+    category: {seeded: true, live: true}
+    region: {seeded: true, live: true}
+    country: {seeded: true, live: true}
+    branch_code: {seeded: true, live: true}
+  excluded:
+    - key: status
+      reason: "It is the measure itself."
+    - key: device_type
+      reason: "Synthesised per session by the producer; not a property of a transaction."
+
+quality:
+  freshness_sla_minutes: 120
+  provisional_window_minutes: 60
+  hard_invariants:
+    - id: failed_subset
+      expr: txn_failed <= txn_total
+      on_fail: quarantine
+    - id: source_present
+      expr: txn_total > 0
+      on_fail: quarantine
+  soft_invariants:
+    - id: plausible_ceiling
+      expr: txn_failed <= txn_total * 0.5
+      on_fail: ambiguous
+      note: >
+        Above half of all transactions failing is far more likely to be a partial batch load
+        than a real outage. Abstain and name the check.
+  defect_fingerprints:
+    - id: batch_not_loaded
+      signature: "txn_total == 0 for a window that previously had volume"
+      verdict: fail
+    - id: status_frozen
+      signature: "txn_failed == 0 across a full window on every channel"
+      verdict: ambiguous
+
+# What a movement here is worth to the bank; Materiality ranks by it.
+strategic_weight: 0.7
+
+detection:
+  direction: up
+  band_source: robust_baseline
+  warn_pct_change: 25
+  critical_pct_change: 60
+  min_persistence_windows: 2
+  min_denominator: 200
+  robust_scorer: mad
+  multiple_testing: benjamini_hochberg
+  sparse_history_policy: abstain_with_interval
+
+forecast:
+  enabled: true
+  horizon_days: 7
+  baseline: seasonal_naive
+  interval_required: true
+  fallback: rolling_median
+  min_history_days: 14
+
+causal:
+  enabled: true
+  # estimated_effect is reachable because this KPI counts an additive event over segments that
+  # give a control group. Localize names the treated cells, the unaffected cells give the trend
+  # they would have followed, and a placebo window tests that assumption before any claim.
+  evidence_rungs: [association, attribution, corroborated_cause, estimated_effect]
+  interventions: [payment_provider_change, release, capacity_change]
+  control_dimensions: [channel, txn_type]
+  degrade_to: attribution
+
+decision:
+  owner: payments_ops
+  allowed_levers: [failover_provider, roll_back_release, raise_capacity, throttle_retries,
+                   investigate]
+  requires_human_approval: true
+  expected_impact: interval
+
+lineage:
+  tables: [fact_transactions]
+  sources: [nexabank_core]
+
+access_restriction:
+  visible_to: [cfo, ops_manager, analyst, risk_officer, data_steward]
+
+observability:
+  golden_scenarios: [real_movement, data_defect, sparse_history]
+  verifier_required: true
+  engine_type: sql
+
+interconnection:
+  drives: revenue

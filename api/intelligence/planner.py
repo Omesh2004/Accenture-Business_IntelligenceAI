@@ -75,10 +75,53 @@ class Context:
     moved_ids: list[str] = field(default_factory=list)
     # How the question was read. Cached so comprehension happens once per run.
     reading: "understanding.Reading | None" = None
+    #: The window this answer is scored over, in days. The caller's default until the question
+    #: names one of its own.
+    window_days: int = 7
+    #: How the turn was read: analysis, greeting, thanks, help or other. Set once, before
+    #: planning, so tool selection cannot contradict it.
+    turn_kind: str = "analysis"
+    #: Metrics the conversation resolved a follow-up to, when the words alone name none.
+    matched_from_history: list[str] = field(default_factory=list)
 
     @property
     def profile(self):
         return personas.get(self.persona)
+
+
+_WINDOW_WORDS = {
+    "today": 1, "yesterday": 1, "this week": 7, "last week": 7, "past week": 7,
+    "this month": 30, "last month": 30, "past month": 30, "this quarter": 90,
+    "last quarter": 90, "past quarter": 90, "this year": 90,
+}
+
+_WINDOW_RE = re.compile(r"(?:last|past|previous|over the last|in the last)?\s*"
+                        r"(\d{1,3})\s*(day|days|week|weeks|month|months)", re.I)
+
+
+def resolve_window(question: str, default_days: int, choices) -> int:
+    """The window the question asks for, else the caller's default.
+
+    The dropdown is the standing instruction and the question overrides it for that turn only,
+    which is how a person reads it: "and over the last 90 days?" changes this answer, not the page.
+    A window nobody swept cannot be answered honestly, so the request is snapped to the nearest
+    one that was.
+    """
+    q = (question or "").lower()
+    wanted = None
+    for phrase, days in _WINDOW_WORDS.items():
+        if phrase in q:
+            wanted = days
+            break
+    m = _WINDOW_RE.search(q)
+    if m:
+        n = int(m.group(1))
+        unit = m.group(2).lower()
+        wanted = n * (7 if unit.startswith("week") else 30 if unit.startswith("month") else 1)
+    if wanted is None:
+        wanted = default_days
+    opts = list(choices) or [default_days]
+    return min(opts, key=lambda c: (abs(c - wanted), c))
 
 
 def resolve_metric(question: str, candidates: list[str], profile,
@@ -93,6 +136,13 @@ def resolve_metric(question: str, candidates: list[str], profile,
     Returns '' when nothing matches, which lets a tool fall back to the most material finding --
     the same one the dashboard is showing.
     """
+    # A declared alias settles it outright. Without this the singular resolver matched only on
+    # the id, so "new account opening" set no focus and the answer fell back to whatever moved
+    # most -- a different KPI from the one the question named.
+    aliased = resolve_metrics(question, list(candidates), limit=1)
+    if aliased:
+        return aliased[0]
+
     words = matching.tokens(question)
     best, best_score = "", 0
     for kpi_id in sorted(candidates):
@@ -128,6 +178,21 @@ def resolve_metric(question: str, candidates: list[str], profile,
     return ""
 
 
+def _alias_phrases(kpi_id: str) -> list[str]:
+    """Phrases that name this KPI: its id, its display name and its declared aliases."""
+    try:
+        from api.intelligence.contracts import load_declared
+        c = load_declared().get(kpi_id)
+    except Exception:
+        c = None
+    out = [kpi_id.replace("_", " ")]
+    if c is not None:
+        if c.name:
+            out.append(str(c.name).lower())
+        out.extend(c.aliases)
+    return [p for p in {x.strip().lower() for x in out} if p]
+
+
 def resolve_metrics(question: str, candidates: list[str], limit: int = 4) -> list[str]:
     """Every metric the question names, best match first -- what a comparison needs.
 
@@ -135,13 +200,22 @@ def resolve_metrics(question: str, candidates: list[str], limit: int = 4) -> lis
     the tenant is not a comparison, it is a coincidence.
     """
     words = matching.tokens(question)
+    q = " " + " ".join(words) + " "
     scored = []
     for kpi_id in sorted(candidates):
+        best = 0
+        # A declared alias wins outright, and a longer phrase beats a shorter one, so
+        # "new account opening" resolves to signups rather than to whatever shares one word.
+        for phrase in _alias_phrases(kpi_id):
+            ptoks = [t for t in matching.tokens(phrase) if len(t) > 2]
+            if ptoks and all(f" {t} " in q for t in ptoks):
+                best = max(best, 10 + len(ptoks))
         parts = [p for p in re.split(r"[_.\-]", kpi_id.lower()) if len(p) > 2]
         overlap = sum(1 for part in parts
                       if any(matching.token_matches(w, part) for w in words))
-        if overlap:
-            scored.append((overlap, -len(kpi_id), kpi_id))
+        best = max(best, overlap)
+        if best:
+            scored.append((best, -len(kpi_id), kpi_id))
     if not scored:
         return []
     # Only the metrics the question names as strongly as its best match. A partial hit on one
@@ -192,6 +266,10 @@ def _mentions_metric(ctx: Context) -> bool:
     A word shared by several ids -- "loan", "rate" -- still resolves nothing, so an ambiguous
     question is never silently answered about whichever metric sorted first.
     """
+    # Aliases count as naming it. Without this "new account opening" named nothing, the
+    # question was read as general, and the answer came back about a different KPI entirely.
+    if resolve_metrics(ctx.question, list(ctx.metric_ids)):
+        return True
     return (matching.names_any(ctx.question, ctx.metric_ids)
             or bool(matching.names_distinctly(ctx.question, ctx.metric_ids)))
 
@@ -215,11 +293,25 @@ def comprehend(ctx: Context) -> understanding.Reading:
         scored = sorted(((score_tool(ctx.question, s), s) for s in catalogue),
                         key=lambda t: -t[0])
         top = scored[0] if scored else (0.0, None)
-        conversational = bool(top[1]) and top[1].intent in ("greeting", "help") \
-            and top[0] >= MIN_SELECT_SCORE
+        # The turn has already been read once, in context, before planning began. Letting word
+        # scoring reach a second, contradictory verdict is what produced "read as a salutation
+        # rather than a question about the business. no capability answers it" in reply to
+        # "what are you measuring?" -- a real question, refused because two parts of the
+        # planner disagreed about what kind of question it was.
+        conversational = (ctx.turn_kind != "analysis"
+                          and bool(top[1]) and top[1].intent in ("greeting", "help")
+                          and top[0] >= MIN_SELECT_SCORE)
+        # The capability the words reach for, when they reach for one clearly. Passed in so a
+        # question that matches a capability but no metric is answered rather than refused.
+        # The best REAL capability, not the best of everything: `describe_identity` ties with the
+        # catalogue on "what are you measuring", and taking the absolute top then discarded the
+        # match because that tool is conversational, leaving the question unreadable.
+        wanted = next((spec.name for value, spec in scored
+                       if value >= MIN_SELECT_SCORE
+                       and spec.intent not in ("greeting", "help")), "")
         ctx.reading = understanding.read(
             ctx.question, _mentions_metric(ctx), conversational,
-            matched=matched_metrics(ctx))
+            matched=matched_metrics(ctx), capability=wanted)
     return ctx.reading
 
 
@@ -234,6 +326,13 @@ def governed(ids: list[str] | tuple[str, ...]) -> list[str]:
 
 
 def matched_metrics(ctx: Context) -> tuple[str, ...]:
+    """Metrics this turn is about. The conversation wins when it resolved a reference."""
+    if ctx.matched_from_history:
+        return tuple(ctx.matched_from_history)
+    return _matched_by_words(ctx)
+
+
+def _matched_by_words(ctx: Context) -> tuple[str, ...]:
     """Metrics the question's vocabulary reaches, GOVERNED ones preferred.
 
     "loan" reaches both loan contracts and eight auto-discovered event series (`loan.page.view`,
@@ -243,8 +342,11 @@ def matched_metrics(ctx: Context) -> tuple[str, ...]:
 
     Tier 0 stays reachable -- when nothing governed matches, the discovered series are the answer.
     """
+    # A declared alias is the strongest signal there is, so it leads.
+    aliased = resolve_metrics(ctx.question, list(ctx.metric_ids))
     hits = matching.metrics_named(ctx.question, ctx.metric_ids)
-    return tuple(governed(hits) or hits)
+    merged = list(dict.fromkeys([*aliased, *hits]))
+    return tuple(governed(merged) or merged)
 
 
 def candidates(ctx: Context,
@@ -268,10 +370,17 @@ def candidates(ctx: Context,
     scored.sort(key=lambda t: (-t[0], t[1].priority, t[1].name))
     # A salutation is a whole intent. Pairing it with a variance report answers a question
     # nobody asked and buries the greeting.
+    #
+    # But the turn has already been read, and a turn read as ANALYSIS is never a salutation
+    # however politely it opens. Scoring on words alone sent "thanks, now why did revenue fall
+    # over the last 30 days" to the greeting tool, because "thanks" outscored everything else in
+    # a sentence that was plainly a question.
     conversational = [t for t in scored if t[1].intent in ("greeting", "help")]
+    keyword = [t for t in scored if t[1].intent not in ("greeting", "help")]
+    if ctx.turn_kind == "analysis":
+        conversational = []
     if conversational and scored and conversational[0][0] >= scored[0][0]:
         return conversational[:1]
-    keyword = [t for t in scored if t[1].intent not in ("greeting", "help")]
 
     reading = comprehend(ctx)
     if not reading.is_investigation:
@@ -291,10 +400,15 @@ def candidates(ctx: Context,
     for spec in chain:
         ordered.append((1.0, spec))
         seen.add(spec.name)
+    # Capabilities that describe the PLATFORM rather than the movement. They are real answers to
+    # their own questions and pure noise inside an investigation: "why are signups increasing"
+    # was coming back with the finding, then the full metric catalogue, then "I am the analytics
+    # agent for this platform" -- three answers to two questions nobody asked.
     for value, spec in keyword:
-        if spec.name not in seen:
-            ordered.append((value, spec))
-            seen.add(spec.name)
+        if spec.name in seen or spec.intent in _META_INTENTS:
+            continue
+        ordered.append((value, spec))
+        seen.add(spec.name)
     return ordered
 
 
@@ -452,7 +566,9 @@ class LLMPlanner:
             return self._fallback.plan(ctx, observations, round_n)
 
         prompt = self._prompt(ctx, observations, round_n)
-        obj, t_in, t_out = llm_client.complete_json(prompt)
+        # A plan is a decision, not prose. Sampled at temperature the same question
+        # picked different capabilities on different runs.
+        obj, t_in, t_out = llm_client.complete_json(prompt, temperature=0.0)
         self.tokens_in += t_in
         self.tokens_out += t_out
         if not isinstance(obj, dict):
@@ -543,6 +659,82 @@ class LLMPlanner:
             "tool would help. Use only tool names from the list. Reply with JSON only:\n"
             + PLAN_SCHEMA_HINT
         )
+
+
+def ensure_chain(plan, ctx, observations):
+    """Add any capability the READING asked for that the plan left out.
+
+    Comprehension decides what a question wants; the planner decides how to get it. When the two
+    disagree the reading wins, because it is the part that read the question. "What should we do
+    about transaction failures" was coming back with the finding and its causes and no
+    recommendation at all -- the planner simply did not pick the capability, and the one thing
+    the reader actually asked for was the one thing missing.
+
+    Only capabilities the persona may use, and only ones not already run.
+    """
+    reading = comprehend(ctx)
+    if not reading.is_investigation or plan.done:
+        return plan
+    ran = {o.tool for o in observations} | {c.tool for c in plan.calls}
+    by_intent: dict[str, tools.ToolSpec] = {}
+    for spec in tools.catalogue(ctx.persona):
+        by_intent.setdefault(spec.intent, spec)
+    # What the question asked for, plus what this reader always wants. The bias is what makes
+    # one question produce a different answer per persona: same verified numbers, a different
+    # account of them.
+    wanted_intents = list(reading.chain)
+    for intent in ctx.profile.chain_bias:
+        if intent not in wanted_intents:
+            wanted_intents.append(intent)
+
+    for intent in wanted_intents:
+        slot = understanding.slot_for(intent)
+        # A biased capability is wanted whether or not the question named its slot; that is the
+        # whole point of a persona having standing interests.
+        if slot and slot not in reading.wants and intent in reading.chain:
+            continue
+        spec = by_intent.get(intent)
+        if spec is None or spec.name in ran:
+            continue
+        args = {"tenant_id": ctx.tenant_id}
+        if "kpi_id" in spec.params and ctx.focus_metric:
+            args["kpi_id"] = ctx.focus_metric
+        plan.calls.append(Call(tool=spec.name, args=args,
+                               why="%s stage the question asked for" % intent))
+        ran.add(spec.name)
+    return plan
+
+
+def drop_meta_calls(plan, ctx):
+    """Strip platform-describing calls from an investigation, whichever planner proposed them.
+
+    `catalog`, `identity` and `capabilities` answer questions about the assistant. Inside an
+    answer about a metric they are noise, and they read as findings because they arrive in the
+    same paragraph. A turn that IS about the platform keeps them: the reading decides, not the
+    tool.
+    """
+    reading = comprehend(ctx)
+    if not reading.is_investigation:
+        return plan
+    # Anything the reading itself asked for stays. A portfolio ranking is a real answer to "what
+    # moved"; appended to "why did it move" it is a list of other metrics between the reader and
+    # the cause they asked about.
+    asked_for = set(reading.chain) | set(ctx.profile.chain_bias)
+    kept = []
+    for call in plan.calls:
+        intent = getattr(tools.REGISTRY.get(call.tool), "intent", "")
+        if intent in _META_INTENTS and intent not in asked_for:
+            continue
+        kept.append(call)
+    if len(kept) == len(plan.calls):
+        return plan
+    plan.calls = kept
+    return plan
+
+
+#: Capabilities about the platform itself. Answers to their own questions, noise inside an
+#: investigation about a metric.
+_META_INTENTS = frozenset({"catalog", "greeting", "help", "cost", "ranking"})
 
 
 def choose(engine: str = "auto"):

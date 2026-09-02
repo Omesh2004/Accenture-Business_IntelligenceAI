@@ -1,0 +1,173 @@
+id: revenue
+name: Revenue
+definition: >
+  Money earned per day: transaction fees, card interchange, and interest accrued on approved
+  lending. The bottom of the chain -- every other KPI reaches revenue through it.
+formula: fee_revenue + interchange_revenue + interest_accrued
+unit: currency
+additivity: additive
+
+# How a person refers to this metric. Without these the agent cannot tell that
+# "new account opening" means signups, and answers about something else entirely.
+aliases:
+  - revenue
+  - income
+  - earnings
+  - fees
+  - fee income
+  - top line
+  - money
+
+grain:
+  time: daily
+  entity: transaction
+
+sources:
+  - id: nexabank_core
+    system: ClickHouse.fact_transactions
+    grain: transaction
+    cadence: hourly_batch
+    freshness_sla_minutes: 120
+  - id: reference_data
+    system: ClickHouse.dim_fee_schedule
+    grain: fee_rule
+    cadence: daily
+    freshness_sla_minutes: 1440
+
+readiness:
+  status: ready
+  gate: >
+    There is no money column on an event. Revenue is computed from measured transaction amounts
+    priced by a real fee schedule -- modelled, but grounded. A channel with no fee-schedule row
+    earns no fee, so a missing row silently deletes it from revenue.
+
+# Every modelled line is declared. The qualifier travels with the figure into every sentence.
+simulated:
+  interchange_revenue:
+    reason: "Card interchange is not settled in this system; it is priced from the POS fee rule."
+    method: "amount * fee_pct for PAYMENT/POS"
+  interest_accrued:
+    reason: "No amortisation schedule exists; interest is accrued straight-line."
+    method: "approved principal * interest_rate / 365 per day"
+
+identity:
+  txn_id: required
+  customer_id: hashed
+
+# Computed by pipeline/transforms/gold_kpi.py into gold.kpi_daily. These are not single-table
+# aggregations -- fee_revenue is a priced join -- so the spec describes the derivation rather
+# than pretending it is one SELECT.
+# Addressed as (kpi_id, fundamental) against gold.kpi_daily -- see
+# docs/INTERFACES/kpi_rollups.md. The table/event forms are no longer supported.
+fundamentals:
+  - kpi_id: revenue
+    fundamental: fee_revenue
+    additivity: additive
+    engine_type: sql
+  - kpi_id: revenue
+    fundamental: interest_accrued
+    additivity: additive
+    engine_type: sql
+  - kpi_id: revenue
+    fundamental: pro_revenue
+    additivity: additive
+    engine_type: sql
+
+dimensions:
+  allowed: [channel, txn_type, mcc, region, branch_code]
+  max_depth: 2
+  min_segment_volume: 50
+  availability:
+    channel: {seeded: true, live: true}
+    txn_type: {seeded: true, live: true}
+    mcc: {seeded: true, live: true}
+    category: {seeded: true, live: true}
+    region: {seeded: true, live: true}
+    country: {seeded: true, live: true}
+    branch_code: {seeded: true, live: true}
+  excluded:
+    - key: status
+      reason: "Revenue is defined on successful transactions only."
+
+quality:
+  freshness_sla_minutes: 120
+  provisional_window_minutes: 60
+  hard_invariants:
+    - id: non_negative
+      expr: fee_revenue >= 0
+      on_fail: quarantine
+    - id: schedule_present
+      expr: fee_schedule_rows > 0
+      on_fail: quarantine
+      note: "Without a fee schedule every fee is zero, which reads as a collapse rather than a gap."
+  soft_invariants:
+    - id: failure_drag
+      expr: fee_revenue >= 0
+      on_fail: ambiguous
+      note: "A large failure spike legitimately shrinks the fee-bearing base."
+  defect_fingerprints:
+    - id: batch_not_loaded
+      signature: "fee_revenue == 0 for a window that previously had volume"
+      verdict: fail
+    - id: schedule_gap
+      signature: "a channel with transactions but no fee-schedule row"
+      verdict: ambiguous
+
+# What a movement here is worth to the bank; Materiality ranks by it.
+strategic_weight: 1.0
+
+detection:
+  direction: both
+  band_source: robust_baseline
+  warn_pct_change: 10
+  critical_pct_change: 20
+  min_persistence_windows: 2
+  min_denominator: 100
+  robust_scorer: mad
+  multiple_testing: benjamini_hochberg
+  sparse_history_policy: abstain_with_interval
+
+forecast:
+  enabled: true
+  horizon_days: 7
+  baseline: seasonal_naive
+  interval_required: true
+  fallback: rolling_median
+  min_history_days: 14
+
+causal:
+  enabled: true
+  # Revenue stays capped at corroborated_cause. Its pro_revenue line is a headcount times a
+  # fixed price, so a dollar effect there would be an artefact of the constant, not a measurement.
+  evidence_rungs: [association, attribution, corroborated_cause]
+  interventions: [pricing_change, campaign, payment_provider_change]
+  control_dimensions: [channel, txn_type]
+  degrade_to: attribution
+
+decision:
+  owner: finance
+  allowed_levers: [review_pricing, reallocate_campaign_spend, failover_provider,
+                   review_approval_rules, investigate]
+  requires_human_approval: true
+  expected_impact: interval
+
+lineage:
+  tables: [fact_transactions, fact_loan_applications, dim_fee_schedule]
+  sources: [nexabank_core, reference_data]
+
+# The entitlement scenario: an operations manager must not see revenue, and must not be able to
+# reconstruct it from a ratio that has it on one side.
+access_restriction:
+  visible_to: [cfo, analyst, data_steward]
+  hidden_from: [ops_manager]
+  suppress_derivable:
+    - revenue_per_transaction
+    - revenue_at_risk
+
+observability:
+  golden_scenarios: [multi_factor, entitlement, real_movement]
+  verifier_required: true
+  engine_type: sql
+
+interconnection:
+  driven_by: loan_approval_volume

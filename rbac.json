@@ -1,56 +1,47 @@
 {
+  "_comment": "Round 2: one bank, one tenant (nexabank). No super_admin / app_admin / license scoping. A persona is a RENDER LENS over the same verified numbers (CLAUDE.md \u00a77) \u2014 it never widens what is readable. The only KPI-level entitlement is: the ops_manager persona does not see revenue, and cannot back-compute it (`ops_hides`). selectable is the server-side allowlist; a ?persona= / X-User-Persona request is honoured only if it is in it.",
   "super_admins": [
     "omeshmehta70@gmail.com",
     "baranwalswapnil84@gmail.com"
   ],
   "app_admins": {
     "nexabank": [
-      "omeshmehta03@gmail.com",
       "abhishekkumawat1008@gmail.com",
-      "vinodrathore2107@gmail.com"
-    ],
-    "safexbank": [
       "omeshmehta03@gmail.com",
-      "abhishekkumawat1008@gmail.com",
       "vinodrathore2107@gmail.com"
     ]
   },
   "personas": {
-    "_comment": "Persona shapes the narrative only. Tenant scope still comes from role + app_admins. selectable_by_role is the ONLY way a caller may switch persona: the allowlist is server-side config, so a persona query parameter can never widen what a role may read (CLAUDE.md rule 11).",
     "default": "analyst",
-    "by_role": {
-      "super_admin": "cfo",
-      "app_admin": "ops_manager",
-      "user": "analyst"
-    },
-    "by_email": {},
     "allowed": [
       "cfo",
       "ops_manager",
-      "analyst",
-      "marketing_lead",
       "risk_officer",
-      "data_steward"
+      "analyst"
     ],
-    "selectable_by_role": {
-      "super_admin": [
-        "cfo",
-        "ops_manager",
-        "analyst",
-        "marketing_lead",
-        "risk_officer",
-        "data_steward"
-      ],
-      "app_admin": [
-        "ops_manager",
-        "analyst",
-        "marketing_lead",
-        "risk_officer",
-        "data_steward"
-      ],
-      "user": [
-        "analyst"
-      ]
-    }
+    "selectable": [
+      "cfo",
+      "ops_manager",
+      "risk_officer",
+      "analyst"
+    ],
+    "by_role": {
+      "cfo": "cfo",
+      "executive": "cfo",
+      "ops": "ops_manager",
+      "ops_manager": "ops_manager",
+      "onboarding_manager": "ops_manager",
+      "risk": "risk_officer",
+      "risk_officer": "risk_officer",
+      "fraud_analyst": "risk_officer",
+      "analyst": "analyst",
+      "user": "analyst"
+    },
+    "by_email": {
+      "abhishekkumawat1008@gmail.com": "analyst"
+    },
+    "ops_hides": [
+      "revenue"
+    ]
   }
 }

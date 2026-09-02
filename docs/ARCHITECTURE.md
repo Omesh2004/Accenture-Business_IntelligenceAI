@@ -1,368 +1,217 @@
-# ARCHITECTURE.md
+# Architecture
 
-The system as it exists now, and exactly where the Phase 1 agentic layer plugs in. This
-describes real files. When in doubt, trust the code over this doc and update this doc.
+How the pieces fit, how data flows, and the traps that have cost real time.
 
-## The deployable systems
+> **Track B rebuild status (2026-09-01).** This document is the target design. Track B's rebuild
+> (`ingestion/` `pipeline/` `warehouse/` `api/`) has now landed Phases 0–7 of
+> [`docs/audit/TRACK_B_PHASED_PLAN.md`](audit/TRACK_B_PHASED_PLAN.md); what actually shipped and
+> where it deviated is recorded per-phase in [`docs/execution/`](execution/). Notable deltas from
+> the prose below: ingestion validates *shape only* and Silver **rejects** an unresolvable name
+> (it no longer coerces); the Metric API (`api/metric_api/`) + dashboard API (`api/dashboard_api/`)
+> replace the old `api/main.py`; one tenant (`nexabank`); `fact_cards` / `fact_campaign_interactions`
+> / `dim_macro_environment` are not built. Track C (`api/intelligence/`) and Track D (`dashboard/`)
+> are mid-rebuild against this.
 
-| System | Tech | Port | Entry |
-|---|---|---|---|
-| Ingestion API | FastAPI + aiokafka | 8000 | `ingestion/main.py` |
-| Processor worker | confluent-kafka | - | `processing/worker.py` |
-| Analytics API | FastAPI (~4,040 lines) | 8001 | `api/main.py` |
-| Intelligence service | same image, own scheduler | - | `api/intelligence/service.py` |
-| vLLM server | vllm-openai + GPU | 8002 | `vllm_entrypoint.sh` |
-| Analytics dashboard | Next.js 16 | 3001 | `analytics-dashboard/` |
-| NexaBank | Express + Prisma | 5000/3002 | `NexaBank/backend/src/server.ts` |
-| ClickHouse | OLAP | 8123/9000 | `storage/schema.sql` |
-| Kafka + Zookeeper | Confluent 7.4 | 9092 | init-kafka |
-| Postgres | Supabase (external) | 5432 | Prisma |
-
-They share nothing but the event envelope and the tenant vocabulary. Tenant maps and taxonomy
-rules are re-implemented in several places; that duplication is a known cost, not a bug to fix
-now. It is also the reason Phase 1 adds **no** new vocabulary layer — KPI contracts name physical
-metadata keys directly rather than defining aliases.
-
-## Data flow (telemetry, the primary type)
+## The shape of it
 
 ```
-NexaBank UI / backend            (event producers)
-  eventTracker.trackEvent  ->  Postgres Event (hashed userId, uuid PK)
-                           ->  forwardToIngestionAPI  (UNAWAITED, fire-and-forget)
-                                 synthesises geo/device/latency, maps bank_a -> nexabank
-  POST /events  (:8000)  ->  validate FeatureEvent (name coerced to 3 lowercase segments)
-                         ->  sanitize metadata (email/IPv4 redaction)
-                         ->  tracking_toggles check, cached 20s, raw OR canonical name
-                         ->  Kafka feature-events   (or direct-CH fallback if unreachable)
-  processing/worker.py   ->  buffer 500 events / 2s  ->  ClickHouse events_raw
-                         ->  on failure: backoff, isolate, events_dead_letter
-  mv_daily_feature_usage ->  rolls up into daily_feature_usage automatically
-  api/main.py reads      ->  canonicalize_event_name merges aliases at query time
-  dashboard              ->  REST JSON (UI-shaped) + WS METRICS_UPDATE / REALTIME_EVENT
+                      ┌──────────────────────────────────────────┐
+                      │              NexaBank                    │
+                      │  Express + Prisma + Postgres  :5000      │
+                      │                                          │
+                      │  domain/    customers, accounts,         │
+                      │             transactions, loans, cards   │
+                      │  events/    tracking + the taxonomy      │
+                      │  simulate/  anomaly templates + truth    │
+                      └───────┬──────────────────────┬───────────┘
+                              │                      │
+             per-event, real time                daily, batch
+                              │                      │
+                    ┌─────────▼────────┐             │
+                    │  Ingestion API   │             │
+                    │  FastAPI  :8000  │             │
+                    │  mask, id, valid │             │
+                    └─────────┬────────┘             │
+                              │                      │
+                    ┌─────────▼────────┐             │
+                    │  Kafka  :9092    │             │
+                    │  transport only  │             │
+                    └─────────┬────────┘             │
+                              │                      │
+                    ┌─────────▼──────────────────────▼───────────┐
+                    │              pipeline/                     │
+                    │   consumer + bronze → silver → gold        │
+                    └─────────────────────┬──────────────────────┘
+                                          │
+                    ┌─────────────────────▼──────────────────────┐
+                    │           ClickHouse  :8123                │
+                    │      bronze  /  silver  /  gold            │
+                    └─────────────────────┬──────────────────────┘
+                                          │
+                              ┌───────────▼───────────┐
+                              │      Metric API       │
+                              │  the ONLY doorway     │
+                              └───────────┬───────────┘
+                                          │
+              ┌───────────────────────────┼───────────────────────┐
+              │                           │                       │
+   ┌──────────▼──────────┐     ┌──────────▼──────────┐  ┌─────────▼────────┐
+   │  Intelligence layer │     │      Dashboard      │  │   vLLM  :8002    │
+   │  agent, 6 tools,    │────▶│    Next.js  :3001   │  │  narrator only   │
+   │  signal store,      │     └─────────────────────┘  │  opt-in, no       │
+   │  narrator, verifier │◀───────────────────────────── │  authority       │
+   └─────────────────────┘                              └──────────────────┘
 ```
 
-Key facts that constrain how you write code:
-- **Kafka is the primary path, and for a long time it silently was not.** `ingestion/main.py`
-  connected once in its lifespan handler; compose declared `depends_on: broker` with no
-  `condition: service_healthy`, so it lost that race, set `producer = None`, and never retried.
-  Every event took the direct-ClickHouse fallback, `feature-events` sat at LOG-END-OFFSET 0,
-  and `processing/worker.py` had never executed at all. The producer now reconnects lazily and
-  the broker has a healthcheck. `GET /health` reports `ingest_path`: if it says
-  `clickhouse_fallback`, the worker is idle and nothing is buffering in Kafka.
-- Delivery is at-least-once. `events_raw` is now `ReplacingMergeTree(_inserted_at)` ordered by
-  `(tenant_id, event_name, timestamp, event_id)`, so a worker replay is collapsed **on merge** —
-  but not before one runs, and merge timing is not something a reader controls. Reads are safe
-  either way because every reader counts `uniqExact(event_id)`. Verified end to end on the
-  previous plain-`MergeTree` shape: replaying 5 events took raw rows 5 -> 10 while `/metrics/kpi`
-  stayed put.
-  **The engine change has a consequence nothing else records:** `count() == uniqExact(event_id)`,
-  the `dedup_integrity` hard invariant `contracts/kyc_completion_rate.yaml` builds scenario 1 on,
-  becomes true again once a merge collapses a real replay. Whether the Trust Gate sees a duplicate
-  storm therefore depends on whether a merge has run. See `docs/PROPOSAL.md` §2 Block D-ii for the
-  three options and the recommendation.
-- The worker applies backpressure rather than buffering without bound, retries with backoff,
-  and parks rows that fail individually in `events_dead_letter` so one poison message cannot
-  stall the partition. It probes ClickHouse with `SELECT 1` to tell "the sink is down, hold
-  and replay" from "this batch is malformed, dead-letter it".
-- FastAPI handlers are `def`, run in Starlette's thread pool, so `ClickHouseClient` builds a
-  fresh client per call (clickhouse_connect is not thread-safe). Keep that pattern.
-  `ingestion/main.py` is the exception: its handlers are `async def`, so blocking
-  clickhouse_connect calls there go through `asyncio.to_thread` or they stall the event loop
-  for every concurrent request.
-- Tracking toggles are cached with a short TTL and matched against BOTH the raw and the
-  canonical event name. The dashboard writes canonical keys and producers send raw ones; when
-  ingest checked only the raw name, disabling a feature in the admin UI did nothing at all.
-- Every read comes only from ClickHouse. Postgres (bank state) and ClickHouse (telemetry) are
-  never joined.
-- Bank state (customers, accounts, loans, licenses) lives in Postgres and never reaches
-  ClickHouse. `LoanApplication.kycStep` and `.status` are in Postgres.
-- `validate_event_name` in `core/models.py` **coerces** rather than rejecting: an unrecognised
-  name is wrapped as `core.<name>.action` rather than raising 422. Silent renaming, not silent
-  dropping, is the common failure here.
-- The worker commits Kafka offsets **after** the ClickHouse insert, asynchronously. Delivery is
-  at-least-once.
+## Folder structure
 
-## The producer paths — four modules, two of them inert
-
-| | `scripts/seed_data.py` (demo) | `eventTracker.ts` (live NexaBank) | `NexaBank/frontend/lib/tracker.ts` | `analytics-dashboard/src/lib/tracker.ts` |
-|---|---|---|---|---|
-| live? | **yes** | **yes** | **no — `track()` is never called** | **no — nothing imports it** |
-| `session_id` | stable, one per session | from `x-session-id` header | `sessionStorage` | `sessionStorage` |
-| geo / device | one profile per session, fabricated | one profile cached per session, fabricated | would be real, from `useGeoLocation` | would be `window.innerWidth` |
-| event names | canonical, emitted directly | `LEGACY_MAP` + `enforceTaxonomy` | straight to ingest dialect | straight to ingest dialect |
-| `event_id` | minted per event | Postgres `Event.id` | `crypto.randomUUID()` | **absent — would 422** |
-
-**This table used to claim three live paths, one of which supplied real geo. Verified by grep, it
-does not.** `nexaTracker.track()` has no call site — the only three are `setUser()` (the file's own
-docstring admits this). `analytics-dashboard`'s `tracker` and `useAutoTrack` are imported by
-nothing. So **two paths are live, and live geo, device and channel come from
-`eventTracker.ts`'s `selectGeoProfile`/`selectDevice` dice roll** unless a real signal supplied
-them — `sessionProfile.realCountry`/`realCity`/`realContinent`, populated from `POST /events/location`,
-win when present. Every event carries `metadata._simulated` listing exactly the keys it invented,
-so a fabricated dimension is declared rather than indistinguishable from a measured one.
-
-Both live paths are session-grain. The live path was not until the `x-session-id` interceptor
-actually reached the network: it was registered only on an `apiClient` axios instance that
-**nothing imported**, so `getSessionId()` fell through to a fresh `server-<uuid>` per event, which
-in turn meant the per-session geo/device cache (keyed on `session_id`) never hit. Measured before
-the fix: 41 events across 41 sessions, 10 locations, 4 devices. After: 5 events, 1 session,
-1 location, 1 device.
-
-**Session-invariant is not the same as localizable.** FOUNDATION-2 made the dimension additive; it
-did not make it informative. `metadata._simulated` now names the invented keys and
-`contracts.sliceable_dimensions` refuses them on any dataset but `seeded`, so localizing on
-`location` or `device_type` from the live path is blocked rather than merely discouraged.
-
-Run `scripts/verify_data_quality.py` to re-assert this rather than trusting the table.
-
-**The simulate console drives `eventTracker.ts`; it is not a fifth producer.** NexaBank
-`/admin/simulate` → `POST /api/events/simulate` generates users who behave a described way and
-emits their events through the same forwarder as live traffic, so everything true of that path is
-true of console traffic. A journey model
-(`NexaBank/backend/src/helper/journeyModel.ts`) enforces event ordering and back-fills missing
-prerequisites, and `GET /api/events/simulate/catalog` serves the vocabulary its picker offers.
-
-It has two modes. **Slow** (default) is the path described above and the only one that exercises
-the pipeline. **Fast** (`mode: "fast"`) proxies to `POST /events/seed/fast` on the ingestion
-service, which writes `events_raw` and the retail fact tables directly — mock data only, ~24,600
-rows/sec against a remote-Postgres path that manages roughly one row per 350 ms. The bank still
-holds no ClickHouse client; the direct write stays in the service that already had that
-responsibility. See `docs/FOUNDATION_STATUS.md` § "Two modes, and why the slow one is slow".
-
-Note that a browser path posting straight to `POST /events` would skip `enforceTaxonomy`, so only
-two of the three dialects apply to it — currently moot, since neither browser path emits.
-`pro.new_feature.view` is the one name where the two dialects disagree (Node strips the reserved
-`pro.` prefix, Python preserves it); an alias in `api/page_map.py` converges them.
-
-Note also that `location` holds a **country** value. There is no `country` key anywhere.
-
-## Ingest routing and the worker
-
-`POST /events` (`ingestion/main.py`) does, in order: validate `FeatureEvent` → sanitize metadata →
-read cached tracking toggles → match against **both** the raw and canonical name → 403 if disabled
-→ Kafka first in cloud mode → direct `events_raw` insert if Kafka is unreachable or times out.
-On-prem skips Kafka entirely: validate the configured tenant, anonymize `user_id`, insert direct.
-The fallback is deliberate — analytics availability must never block banking telemetry.
-`GET /health` reports which path is live.
-
-`processing/worker.py`: consumer group `feature-processor-group`, `auto.offset.reset=earliest`,
-manual commits, batch 500, flush every 2s. Offsets commit only after a durable insert, so delivery
-is at-least-once. Failure handling is three-way — a temporary ClickHouse outage backs off and
-holds the batch while pausing consumption; individual poison rows go to `events_dead_letter`; a
-whole failed batch is probed with `SELECT 1` to tell "sink down, replay" from "batch malformed,
-dead-letter".
-
-## The three batch sources (retail banking model)
-
-The clickstream is one source among four, and deliberately the least trustworthy: its geo and
-device dimensions are synthesised per session. The three batch sources below carry **measured**
-dimensions, which is why the retail KPIs may localize on `region` and the telemetry KPIs may not.
-
-| Source | id | Grain | Cadence | SLA | NexaBank tables |
-|---|---|---|---|---|---|
-| Clickstream | `nexabank_clickstream` | event | real time | 15 min | `Event` |
-| A — Core banking | `nexabank_core` | transaction, account, card, application | hourly batch | 2 h | `Transaction`, `Account`, `Card`, `LoanApplication`, `Loan` |
-| B — CRM & marketing | `nexabank_crm` | customer, campaign, interaction | weekly | 7 d | `Customer`, `Campaign`, `CampaignInteraction` |
-| C — Branch ops & macro | `market_ops` | branch, region-month | monthly | 31 d | `Branch`, `MacroEnvironment` |
-
-Every source reaches ClickHouse through a **watermarked extract API** on the NexaBank side
-(`/api/extract/*`, guarded by `x-extract-token`), never a direct database connection: the
-credentials stay in one service and the contract between systems is explicit.
-
-**One geography across all four sources.** `region` is a **continent** and `country` is the
-country, both drawn from the same worldwide set the clickstream producers emit, so the dashboard's
-Geographic Distribution — which renders a country view and a continent view — and a retail KPI's
-localization name the same places in both. Until 2026-08-30 the reference
-data seeded four US regions with US cities while the clickstream emitted global countries, and the
-bank had two disjoint geographies: a chart said "India" and an insight said "Northeast".
-`tests/test_geo_vocabulary_alignment.py` holds them together.
-
-**Deletes do not propagate, and neither do edits to a denormalised attribute.** An extract has no
-tombstone — a row deleted at source simply stops appearing, and a `ReplacingMergeTree` keeps the
-last version it saw. `load_market_ops` reconciles against the full batch for that reason; the
-watermarked feeds cannot, because there absence is indistinguishable from "unchanged". It also
-fingerprints the branch set and resets the watermarks of every feed that copies a branch attribute,
-because a branch edit touches no transaction row and an incremental load would read nothing.
-
-The cadences differ by three orders of magnitude on purpose. A single global freshness rule
-cannot gate them — 15 minutes is healthy for the clickstream and impossible for a monthly macro
-feed — which is why Trust Gate scales the freshness floor by grain and checks each source
-separately.
-
-### Why source C exists
-
-`dim_macro_environment` holds `competitor_deposit_rate`, `central_bank_base_rate` and
-`regional_unemployment_rate` per region per month, where a region is a continent. It is the only
-place an **external** driver can come from. When deposits fall in one region and no internal segment explains it, the engine
-has somewhere to reach; without it, every "cause" would necessarily be internal, and the
-multi-factor requirement would be satisfied only in appearance.
-
-Nothing in the data records that a competitor rate rise *caused* an outflow. That inference is
-the engine's job, and it may only reach `corroborated_cause` when both the internal segment and
-the external factor are present — otherwise it degrades to `attribution`.
-
-## Databases
-
-ClickHouse `feature_intelligence`. Seven operational tables, the ten Signal Store tables, and
-sixteen retail-source and bookkeeping tables:
-
-- `events_raw` — **`ReplacingMergeTree(_inserted_at)`**, PARTITION BY month,
-  ORDER BY `(tenant_id, event_name, timestamp, event_id)`; `metadata` is a JSON String read with
-  `JSONExtract*`. Carries `kafka_partition`/`kafka_offset`/`kafka_topic`/`ingested_at`/
-  `ingest_path` as well. `event_name_canonical` is written once at ingest (P0-6) and is what the
-  MV groups on; read-time canonicalisation in Python is gone.
-- `daily_feature_usage` — AggregatingMergeTree rollup. `event_count` and `unique_users` are both
-  `AggregateFunction(uniqExact, String)` read with `uniqExactMerge` (FOUNDATION-4 landed; the old
-  plain `total_events UInt64` is gone, and P0-6 replaced `unique_users`' `uniq` HyperLogLog state).
-  `raw_rows` is `AggregateFunction(sum, UInt64)` — rows as INSERTED, which survives the
-  `ReplacingMergeTree` merges that erase a replay from `events_raw` and is what `dedup_integrity`
-  compares against. Keyed on the **canonical** `event_name`, so aliases of one feature are one row
-  and their states merge. Carries no session state, so no session-grain ratio can be served from it.
-- `events_dead_letter` — worker poison rows and pre-Kafka validation failures, distinguished by
-  `stage`.
-- `tenant_licenses`, `tracking_toggles`, `config_audit_log`, `ai_reports` (ReplacingMergeTree, one
-  row per tenant, range smuggled into `generated_by`).
-- Signal Store (Phase 1): `investigations`, `trust_findings`, `anomalies`, `root_causes`,
-  `forecasts`, `causal_effects`, `recommendations`, `insights`, `model_runs`, `outcomes`.
-- Retail banking facts and dimensions (sources A, B, C): `fact_transactions`,
-  `fact_loan_applications`, `fact_loans`, `fact_account_daily`, `fact_account_openings`,
-  `fact_cards`, `fact_campaign_interactions`, `dim_customer`, `dim_campaign`, `dim_branch`,
-  `dim_macro_environment`, `dim_calendar`, `dim_fee_schedule`.
-- Loader and runner bookkeeping: `source_freshness`, `ingest_watermarks`, `schema_migrations`.
-
-**Migrations run through `storage/migrate.py`** (P1-2). It records every applied file in
-`schema_migrations` by name and content hash, so re-running is a no-op and an *edited* migration is
-reported rather than silently skipped. `storage/migrations/` holds eighteen SQL files. `schema.sql`
-still runs only on an empty volume, so an already-migrated database must be baselined before the
-first apply or historic migrations replay against it. Full detail, the four Foundation fixes and
-the Phase 1 additions are in `docs/DATABASE.md`.
-
-## Read paths
-
-The dashboard never queries ClickHouse directly. Everything goes through `api/main.py` on :8001,
-which builds a fresh `ClickHouseClient` per query (handlers are `def` and run in Starlette's
-thread pool; the client is not thread-safe).
-
-| API group | Returns |
-|---|---|
-| `/metrics/kpi`, `/metrics/secondary_kpi` | KPI cards, period change, latency |
-| `/metrics/traffic`, `/metrics/feature_usage_series` | time series |
-| `/metrics/devices`, `/metrics/channels`, `/locations`, `/metrics/top_pages` | metadata breakdowns |
-| `/metrics/dimension_provenance` | per-dimension `simulated` share, read from `metadata._simulated`; what the charts' Simulated badge reads |
-| `/metrics/realtime_users`, `/metrics/pages_per_minute`, `/metrics/retention`, `/metrics/pro_users` | activity and retention |
-| `/features/usage`, `/features/activity`, `/features/heatmap` | feature aggregates |
-| `/funnels` | ordered counts via `windowFunnel` — **user-grain, display only** |
-| `/journey/user`, `/journey/users` | per-user and per-session journeys |
-| `/license/usage`, `/segmentation/compare` | entitlement (two disagreeing sources — see `docs/TASK.md` P2-5) |
-| `/predictive/adoption`, `/tenants/compare` | heuristics presented as metrics (`docs/TASK.md` P3-15) |
-| `/admin/summary`, `/admin/app/{tenant_id}/summary`, `/transparency/cloud-data` | admin rollups |
-| `/tenants/available`, `/features/compare-adoption`, `/metrics/pro_users`, `/deployment/info` | scope and catalog |
-| `/insights`, `/ai_report` | legacy AI path, not yet replaced — see below |
-| `/audit_logs`, `/tracking/toggles`, `/license/sync`, `/config/audit-log` | configuration and audit |
-| `/intelligence/*` | Signal Store reads and the query agent — see `docs/PIPELINE_CONTRACT.md` §8 |
-
-Most accept comma-separated `tenants` and a `range` (`7d`/`30d`/`90d`).
-
-Dashboard side: `useDashboard.ts` resolves active app from the URL, tenant scope from the session,
-and range from Redux, then calls typed methods in `lib/api.ts`. The main batch fires ~17 parallel
-requests every 15s per open tab — keep new endpoints out of it.
+One responsibility per folder. Markdown lives only in `docs/`. Nothing lives at the root except
+configuration.
 
 ```
-page -> useDashboardData() -> dashboardAPI -> axios :8001 -> ClickHouse -> UI-shaped JSON -> Redux/React Query
+FinInsights/
+  README.md
+  CLAUDE.md
+  docker-compose.yml
+  docs/                      all documentation, nowhere else
+  contracts/                 the KPI / semantic contracts, one YAML per KPI
+    signups.yaml
+    kyc_completion_rate.yaml
+    loan_approval_volume.yaml
+    revenue.yaml
+    transaction_failure_rate.yaml
+    levers.yaml              the Decide tool lever library
+  nexabank/                  the data source
+    src/
+      domain/                customers, accounts, transactions, loans, cards
+      events/                event tracking and the taxonomy, in one place
+      simulate/              the simulate engine and anomaly templates
+  ingestion/                 FastAPI service on 8000
+  pipeline/                  kafka consumer and the bronze → silver → gold transforms
+  warehouse/
+    clickhouse/
+      bronze/                raw table DDL
+      silver/                cleaned table DDL and materialized views
+      gold/                  KPI rollups and the signal store DDL
+  api/                       FastAPI service on 8001
+    intelligence/            the agent, tools, narrator, signal store, personas
+      orchestrator.py
+      tools/                 trust_gate detect localize forecast materiality decide
+      narrator.py
+      verifier.py
+      signal_store.py
+      personas.py
+  dashboard/                 Next.js app
 ```
 
-## Identity and app scoping
+## The two contracts between systems
 
-Google OAuth → NextAuth JWT → role and `adminApps` looked up in `rbac.json` → sent to the API as
-`X-User-Email`, `X-User-Role`, `X-Admin-Apps`, `X-Active-App`. Roles: `super_admin` (aggregates
-only), `app_admin` (detailed analytics for assigned tenants), `user` (no access).
+Everything else is an implementation detail of one service. These two are not.
 
-**The API trusts those headers, and the browser sets them** — `AuthGuard` is a route guard, not
-authorization, and :8001 is published to the host. See `docs/TASK.md` P2-1.
+**1. The event envelope.** What NexaBank sends to ingestion. Changing its shape touches every
+producer. Note that name validation **coerces** rather than rejecting — an unknown name is wrapped
+rather than dropped, which means a typo lands in the warehouse and vanishes from every chart.
 
-The `(main)` route group shapes the shell without appearing in URLs; `[appName]` scopes the app
-(`/nexabank/dashboard`), with app-scoped pages re-exporting the unscoped implementations.
-`buildAppScopedPath()` writes those URLs and `resolveAppIdFromPathname()` reads them back into a
-tenant list. The app suite maps `nexabank` to both the `nexabank` and `safexbank` tenants — the URL
-selects a scope, never a different database.
+**2. The tenant vocabulary.** Several independent maps must agree on what a tenant is called —
+the dashboard feature map, the API tenant scopes, and the RBAC configuration. Miss one and the
+WebSocket closes with 1008 and requests 403.
 
-## The intelligence layer
+## Data flow, in order
 
-Built, and running as the `intelligence` service. The legacy path it was meant to replace is still
-live alongside it: `api/insights.py` is a vLLM client plus a rule-based fallback, and `/ai_report`
-still makes one LLM pass over `PRECOMPUTED_LAYER` summaries (defined in `api/data_layer.py`) with a
-three-layer fallback. Turning `/ai_report` into a reader over `insights` has not happened yet.
+1. **NexaBank writes a banking fact** — a loan application row, a transaction row — to Postgres,
+   and emits the matching behavioural event. Both, always. A fact with no clickstream, or a
+   clickstream with no fact, is a bug, and it is the reason data is never seeded into tables
+   directly.
 
-The pipeline (all specialists are deterministic, CPU-first, read via the Metric Layer or KPI
-contracts, and write to the Signal Store):
+2. **Forwarding is fire-and-forget.** Telemetry never blocks banking. A slow or dead analytics
+   path must not degrade a transaction. Forwarding outcomes are counted, because the Trust Gate
+   cannot otherwise tell "the KPI dropped" from "the forwarder broke".
 
-```
-Metric API (:8001)            the only doorway; existing /metrics, /funnels, /journey
-      |
-scheduled batch:  Forecast  ->  forecasts table (the band Detect scores against)
-      |
-Agent Orchestrator            deterministic sequence + optional LLM planning hook
-      |
-Foundation -> Trust Gate -=FAIL=->  incident note (business path terminates)
- event_id      verdict                        |
- sessions      + fingerprint                  |
-                   | PASS                     |
-                Detect -> Localize -> Causal -> Decide
-                residual   additive   evidence   proposal
-                vs band    causes     rung       owner/lever
-                   |          |          |          |
-                   +----------+----------+----------+
-                            write findings
-                                  v
-                          Signal Store (ClickHouse)
-        trust_findings, anomalies, root_causes, forecasts,
-        causal_effects, recommendations, insights, model_runs, outcomes
-                                  |  facts (compact signal cards only)
-                                  v
-   entitlement filter -> Narrator (vLLM, guided) -> numeric verifier -> insights row
-                     drops restricted cards        traces every number    (per persona)
-                                  |
-                                  v
-                 Dashboard AI panel: narrative + evidence card
-                 + LLM-vs-non-LLM badge + telemetry
-```
+3. **Ingestion** masks personal data, assigns a deterministic event id so retries cannot
+   double-count, validates the envelope, and publishes to Kafka.
 
-Build-order numbering (00-08 in `docs/PHASE_1.md`) is **not** execution order: Forecast runs first
-as a scheduled batch because its prediction interval is what Detect scores residuals against.
-Trust Gate is a gate, not a step — a `fail` terminates the business path entirely.
+4. **Kafka** carries events. It is transport, never the system of record. If the broker is
+   unreachable, ingestion falls back to writing ClickHouse directly — which is correct behaviour
+   and a silent one. See the traps below.
 
-Design rules for this layer (enforced by `skills/intelligence-pipeline/SKILL.md`):
-- The narrator receives compact signal cards, never raw query output.
-- Every number the narrator writes is traced to a Signal Store row within tolerance, else it is
-  regenerated, then redacted, then a deterministic template fills it. Keep the fallback.
-- Localize operates on additive fundamentals at the contract's `grain.entity`, never on a rate.
-  This is a correctness requirement, not a style preference — see `docs/KPI_CONTRACT.md`.
-- Forecast, causal, and recommendation stages must write intervals or caveats rather than
-  point-only claims when assumptions are weak.
-- Every specialist run and LLM call writes a `model_runs` row tagged with `engine_type`. The
-  LLM-vs-non-LLM breakdown is computed from that table, not asserted by the model.
-- Personas read the same signal cards; entitlement is applied before the narrator, so a
-  restricted number cannot be phrased or back-computed into the output.
+5. **The pipeline** consumes into Bronze, then derives Silver and Gold. See
+   [DATA_MODEL.md](DATA_MODEL.md).
 
-## Real-time
+6. **The daily extract** pulls loan, account and ledger state from NexaBank Postgres on a daily
+   cadence, into the same Bronze layer with its own source id and its own freshness watermark.
 
-`websocket_manager.py` fans out per tenant, consumes Kafka on `websocket-broadcaster-group`
-(`auto_offset_reset=latest`), and polls ClickHouse every 10s to broadcast `METRICS_UPDATE`.
-Phase 1 pushes only two things live: the KPI header counters (existing) and a new-insight ping.
-Do not add Redis or a second real-time system; single instance is fine for the demo.
+7. **The Metric API** is the only doorway into the warehouse. Named, tenant-scoped reads. No tool
+   and no agent writes raw SQL against raw tables.
 
-## Where the pipeline code lives
+8. **The intelligence layer** calls the Metric API, writes findings to the Signal Store, and
+   narrates from stored rows only. See [INTELLIGENCE.md](INTELLIGENCE.md).
 
-`api/intelligence/`, not `api/main.py`. Stages are a sub-package; everything else sits at the top
-level.
+## Determinism
 
-| Group | Files |
-|---|---|
-| Control flow | `orchestrator.py` (stages + Observe), `service.py` (the three scheduler loops) |
-| Substrate | `metrics.py` (Metric Layer), `facts.py` (fact tables), `loaders.py` (sources A/B/C), `contracts.py`, `signal_store.py`, `reader.py`, `ids.py`, `config.py` |
-| Stages | `stages/trust_gate.py`, `detect.py`, `localize.py`, `decompose.py`, `forecast.py`, `causal_decide.py`, `narrate.py`, `llm_narrator.py` |
-| Query agent | `agent.py`, `loop.py`, `planner.py`, `tools.py`, `matching.py`, `phrasing.py`, `personas.py`, `llm_client.py` |
+The intelligence layer is fully deterministic: the same rows in produce byte-identical Signal
+Store rows out. That is what makes an audit trail meaningful and a disputed figure re-checkable
+months later. Concretely:
 
-Causal and Decide share one module; there is no `foundation.py` (stage 00 is substrate, not code
-here) and no `observe.py` (Observe is `Orchestrator._record_run`). The KPI contract loader reads
-`contracts/*.yaml` and needs `PyYAML`. See CLAUDE.md rule 2 for the approved library set.
+- Derive ids, never generate them.
+- Pin the window once at the top of a run and never call `now()` inside a stage.
+- Use `uniqExact` and `quantileExact`. ClickHouse `uniq` is HyperLogLog and `quantile` is
+  reservoir sampling with an RNG — its own documentation says the result is non-deterministic.
+- Give every ranking a unique tiebreaker, or rank 1 flips between identical runs.
+- Round floats at the write boundary.
+- Model stages achieve determinism by persisting output and re-reading it, not by bit-exact math.
+
+## Traps
+
+These have each cost real time. They are not hypothetical.
+
+**The Kafka fallback is silent.** Ingestion falling back to writing ClickHouse directly never
+crashes and never logs an error at a level anyone watches. The whole pipeline can run on the
+fallback for its lifetime. `curl localhost:8000/health` reports `ingest_path`. A consumer group
+with `LOG-END-OFFSET 0` means nothing ever arrived.
+
+**Python edits are not live.** The three Python services bind-mount nothing; their source is baked
+in at build time, so `--reload` watches files that never change. Rebuild.
+
+**TypeScript edits are not live either.** The Node services do bind-mount `src`, but neither
+Turbopack nor nodemon reliably sees a write through a Windows bind mount. The running process
+keeps serving old code with no error anywhere. `tsc --noEmit` passing proves the mount is current
+and proves nothing about the running process — that combination, a clean type-check over code that
+is not running, is what makes this one hard to spot. Restart the service.
+
+**A mounted Python directory can serve stale bytecode.** The `intelligence` service bind-mounts
+`./api`, and the container writes `__pycache__` back into it. Python invalidates a `.pyc` by
+comparing source mtime, and mtimes through a Windows bind mount are not reliable -- so an edited
+module can keep executing the previous version through a restart and a full container recreate,
+with the source on both sides identical to `grep`. Delete `__pycache__` under `api/` when a change
+appears not to take effect.
+
+**`today()` is server-local.** One `today()` in ClickHouse splits the KPI card, the traffic chart
+and the daily rollup into different days. The container is pinned to `TZ=UTC`; use
+`toDate(now('UTC'))`. Never `today()`.
+
+**A one-sided time filter biases every comparison.** A current window with only a lower bound,
+compared against a full previous window, grows through the day and resets at midnight. Bound every
+window at both ends and give the current and previous windows the same length. There is also no
+upper validator on an incoming event timestamp, so a client-supplied far-future event is counted
+in every "last N days" window forever.
+
+**The schema only auto-applies to an empty volume.** A schema change against a running stack needs
+a migration applied by hand. Baseline an existing database before the first migration run, or
+historic migrations replay and drop the live materialized view.
+
+**Some dimensions are fabricated, not measured.** Geography, city, device type and channel are
+currently synthesised per session by the producer, at random. They are invariant within a session,
+which makes contributions add up — it does not make them mean anything. Ranked, confident,
+meaningless output is the worst failure mode this system has, because it looks correct. A
+dimension may not be localized until it is known to be measured. See DATA_MODEL.md.
+
+**The identity headers are asserted, not proven.** The role, email and app-scope headers are set
+by the browser and the analytics port is published to the host. Entitlement enforced above an
+identity anyone can assert is not entitlement. Treat this as a known gap, not a control.
+
+**A skipped test reads as green.** Pytest reports an unmeetable prerequisite as a skip. Seven
+guards once passed by not running at all, over the source they were meant to police. Treat a skip
+as a failure until you have read its reason.
+
+**Never assume a metric is the metric its name claims.** Verify by running the function, not by
+reading the code. Most failures here are silent renames, not exceptions.

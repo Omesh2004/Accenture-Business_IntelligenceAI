@@ -1,138 +1,108 @@
 id: loan_approval_volume
 name: Loan Approval Volume
 definition: >
-  The count of loan applications that reach approved status during the reporting window.
-formula: approved_loan_applications
+  The number of loan applications approved each day, counted on the day the decision was made.
+  The lending output of the chain: onboarding completion gates it, and it drives interest revenue.
+formula: count(applications where status = APPROVED)
 unit: count
 additivity: additive
 
-# A pure count localizes at EVENT grain: every event belongs to exactly one dimension cell,
-# so sum(cells) == total holds for any event-level attribute. Contrast kyc_completion_rate,
-# which is a ratio and must localize at session grain.
+# How a person refers to this metric. Without these the agent cannot tell that
+# "new account opening" means signups, and answers about something else entirely.
+aliases:
+  - loan approvals
+  - loans approved
+  - approval volume
+  - lending volume
+  - loans
+  - lending
+  - approvals
+  - credit approvals
+
 grain:
   time: daily
-  entity: event
+  entity: application
+
+sources:
+  - id: nexabank_core
+    system: ClickHouse.fact_loan_applications
+    grain: application
+    cadence: hourly_batch
+    freshness_sla_minutes: 120
 
 readiness:
   status: ready
-  blockers:
-    - id: approval-not-instrumented
-      status: resolved
-      detail: >
-        NexaBank calls trackEvent("loan_approved") in loanRoutes.ts:214. "loan_approved" was
-        absent from LEGACY_MAP in eventTracker.ts, so enforceTaxonomy fell through to its generic
-        wrapper and emitted core.loan_approved.action, which canonicalize_event_name left
-        unchanged. This KPI read exactly zero rows, silently.
-      fix: >
-        Added 'loan_approved': 'loans.approved.success' to LEGACY_MAP. Verified live:
-        canonicalize_event_name('loans.approved.success') == 'loan.approved.success'.
-    - id: applied-misrouted
-      status: resolved
-      detail: >
-        'loan_applied' mapped to loans.submit_application.success, which canonicalized to
-        loan.submit_application.success -- not loan.applied.success. The denominator was
-        stranded on the live path. scripts/seed_data.py emits loan.applied.success directly,
-        so seeded demo data was unaffected.
-      fix: "Remapped 'loan_applied' to 'loans.applied.success'. Verified live:
-        canonicalize_event_name('loans.applied.success') == 'loan.applied.success'."
-    - id: no-seeded-approvals
-      status: resolved
-      detail: "scripts/seed_data.py emitted no loan.approved.* event, so even seeded data was empty."
-      fix: "Added 'loan.approved.success' to FREE_EVENTS in scripts/seed_data.py."
-    - id: simulate-path-never-approves
-      status: resolved
-      affects: [live]
-      detail: >
-        POST /events/simulate created LoanApplication rows but never approved one, so this
-        KPI's numerator had no source on the simulate path at all -- loan.approved.success
-        arrived only when a human clicked Approve in the admin UI (loanRoutes.ts:214). The
-        denominator (loan.applied.success) was generated in volume, so the ratio read as a
-        permanent near-total collapse rather than as missing instrumentation.
-      fix: >
-        The simulate route now approves a share of KYC-complete applications and emits
-        trackEvent("loan_approved"), the LEGACY_MAP key verified to resolve to
-        loan.approved.success. The share is the `loans.approvalRate` behaviour knob, so an
-        operator can move this KPI deliberately from the simulation console.
-  unblocked_by: [FOUNDATION-1, FOUNDATION-3]
   gate: >
-    Both fundamentals are instrumented on seeded and live paths. Ordinary Trust Gate invariant
-    checks (dedup_integrity, source_present, approval_subset) still apply per run.
-
-source:
-  name: nexabank_clickstream
-  system: ClickHouse.events_raw
-  cadence: real-time
-  event_time: timestamp
+    Counted on decided_at, never created_at. An application created in one window and approved in
+    the next belongs to the window it was approved in; counting on creation reports the decision
+    before it happened and makes the series a copy of application volume.
 
 identity:
-  event_id: required
-  session_id: optional        # not needed: event-grain counts are additive without it
-  user_id: hashed
+  application_id: required
+  customer_id: hashed
 
+# Addressed as (kpi_id, fundamental) against gold.kpi_daily -- see
+# docs/INTERFACES/kpi_rollups.md. The table/event forms are no longer supported.
 fundamentals:
-  - metric: approved_loan_applications
-    event: loan.approved.success
-    aggregation: uniqExact(event_id)   # dedup-safe count; plain count() is not replay-safe
+  - kpi_id: loan_approval_volume
+    fundamental: loans_approved
     additivity: additive
     engine_type: sql
-  - metric: submitted_loan_applications
-    event: loan.applied.success
-    aggregation: uniqExact(event_id)
+  - kpi_id: loan_approval_volume
+    fundamental: principal_approved
     additivity: additive
     engine_type: sql
 
 dimensions:
-  # Physical metadata keys. `location` holds a country value (known naming debt).
-  # Event grain: every event sits in exactly one cell, so these are additive by construction.
-  # NOTE: `channel` is a top-level events_raw COLUMN, not a metadata key. Every other
-  # dimension here is read with JSONExtractString(metadata, ...); channel must be read
-  # directly. Reading it from the JSON returns empty on every row.
-  allowed: [device_type, location, channel, continent]
-  max_depth: 3
+  allowed: [loan_type, risk_segment, region]
+  max_depth: 2
   min_segment_volume: 10
-  # live_fabricated: present on the live path but generated by selectGeoProfile()/selectDevice().
-  # Disqualifying for cube search until metadata._simulated exists -- docs/TASK.md P0-8.
   availability:
-    device_type: {seeded: true, live: true, live_fabricated: true}
-    location: {seeded: true, live: true, live_fabricated: true}
-    channel: {seeded: true, live: true, live_fabricated: true}
-    continent: {seeded: true, live: true, live_fabricated: true}
+    loan_type: {seeded: true, live: true}
+    region: {seeded: true, live: true}
+    country: {seeded: true, live: true}
+    branch_code: {seeded: true, live: true}
+    risk_segment: {seeded: true, live: true}
   excluded:
-    - key: tier
-      reason: "Live path only; absent from scripts/seed_data.py metadata."
+    - key: status
+      reason: "It is the filter that defines the measure."
+    - key: term_months
+      reason: "Continuous; bucket it before it can be a cube dimension."
 
 quality:
-  freshness_sla_minutes: 30
-  provisional_window_minutes: 10
+  freshness_sla_minutes: 120
+  provisional_window_minutes: 60
   hard_invariants:
-    - id: dedup_integrity
-      expr: count() == uniqExact(event_id)
+    - id: non_negative
+      expr: loans_approved >= 0
       on_fail: quarantine
-      caveat: "Not merge-stable under ReplacingMergeTree -- decision D1, docs/PROPOSAL.md Block D-ii."
-    - id: source_present
-      expr: approved_loan_applications > 0
+    - id: principal_present
+      expr: principal_approved >= 0
       on_fail: quarantine
-      note: "Guards the silent-zero failure described in readiness.blockers."
   soft_invariants:
-    - id: approval_subset
-      expr: approved_loan_applications <= submitted_loan_applications
+    - id: gated_by_onboarding
+      expr: loans_approved <= kyc_completed
       on_fail: ambiguous
-      note: "An approval may land in a window after its application; small violations are legitimate."
-  corroboration:
-    - loan.kyc_completed.success
+      note: >
+        An approval normally follows a completed KYC, but the two are counted on different days
+        -- decided_at against created_at -- so the inequality breaks legitimately at a window
+        edge. Abstain, never quarantine.
   defect_fingerprints:
-    - id: duplicate_event_storm
-      signature: "count() >> uniqExact(event_id) within the anomaly window"
+    - id: batch_not_loaded
+      signature: "loans_approved == 0 while submissions continue"
       verdict: fail
-    - id: taxonomy_misroute
-      signature: "volume collapses to zero while upstream loan.applied.success is unchanged"
-      verdict: fail
+    - id: decision_lag_stall
+      signature: "loans_approved flat while kyc_started rises sharply"
+      verdict: ambiguous
+
+# What a movement here is worth to the bank; Materiality ranks by it.
+strategic_weight: 0.85
 
 detection:
-  direction: down
-  band_source: forecast
-  warn_pct_change: 10
-  critical_pct_change: 20
+  direction: both
+  band_source: robust_baseline
+  warn_pct_change: 15
+  critical_pct_change: 30
   min_persistence_windows: 2
   min_denominator: 10
   robust_scorer: mad
@@ -149,30 +119,33 @@ forecast:
 
 causal:
   enabled: true
+  # estimated_effect is reachable because this KPI counts an additive event over segments that
+  # give a control group. Localize names the treated cells, the unaffected cells give the trend
+  # they would have followed, and a placebo window tests that assumption before any claim.
   evidence_rungs: [association, attribution, corroborated_cause, estimated_effect]
-  interventions: [simulator_anomaly, campaign, release]
-  control_dimensions: [location, channel]
+  interventions: [credit_policy_change, campaign, rate_change]
+  control_dimensions: [loan_type, risk_segment]
   degrade_to: attribution
 
 decision:
   owner: lending_ops
-  allowed_levers: [review_approval_rules, fix_kyc_step, investigate]
+  allowed_levers: [review_approval_rules, adjust_risk_thresholds, add_underwriting_capacity,
+                   adjust_messaging, investigate]
   requires_human_approval: true
   expected_impact: interval
 
 lineage:
-  events: [loan.applied.success, loan.approved.success, loan.kyc_completed.success]
-  endpoint: /features/usage
-  tables: [events_raw, daily_feature_usage]
+  tables: [fact_loan_applications]
+  sources: [nexabank_core]
 
 access_restriction:
   visible_to: [cfo, ops_manager, analyst, risk_officer, data_steward]
 
 observability:
-  golden_scenarios: [real_movement, sparse_history]
+  golden_scenarios: [real_movement, multi_factor, sparse_history]
   verifier_required: true
   engine_type: sql
 
 interconnection:
   driven_by: kyc_completion_rate
-  drives: pro_revenue
+  drives: revenue

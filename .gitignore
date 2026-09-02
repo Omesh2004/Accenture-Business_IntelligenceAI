@@ -58,8 +58,13 @@ ENV/
 *.stackdump
 
 # Development Related Agent Files
-/docs/*
 !/docs/*.md
+
+# Local execution checklist / working notes — not committed
+/docs/execution/
 
 # Standalone JavaBank application
 /JavaBank/
+
+# Bytecode written back into a bind-mounted source tree; a stale .pyc can outlive an edit.
+api/**/__pycache__/

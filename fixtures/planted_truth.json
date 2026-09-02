@@ -1,44 +1,18 @@
-[
-  {
-    "anomaly_days": 7,
-    "expected_fingerprint": "duplicate_event_storm",
-    "expected_verdict": "fail",
-    "kpi_id": "kyc_completion_rate",
-    "scenario": "duplicate_event_storm",
-    "tenant_id": "gate_beta"
+{
+  "generated_at": "2026-09-02T12:07:37.922Z",
+  "plan": {
+    "tenantId": "bank_a",
+    "customers": 4000,
+    "days": 55,
+    "seed": 20260831,
+    "reset": true,
+    "templates": []
   },
-  {
-    "anomaly_days": 7,
-    "expected_direction": "down",
-    "expected_rank1_dimension": "location",
-    "expected_verdict": "pass",
-    "kpi_id": "kyc_completion_rate",
-    "planted_segment": {
-      "device_type": "mobile",
-      "location": "India"
-    },
-    "scenario": "real_kyc_drop_mobile_india",
-    "tenant_id": "gate_alpha"
+  "written": {
+    "customers": 4000,
+    "accounts": 4000,
+    "transactions": 151694,
+    "applications": 1344
   },
-  {
-    "event_name": "pro.new_feature.view",
-    "expected_caveat": "insufficient_history",
-    "scenario": "sparse_new_feature",
-    "tenant_id": "gate_alpha"
-  },
-  {
-    "campaign": "kyc_reactivation",
-    "expected_cheapest_check": "confirm whether the spike survives event_id de-duplication",
-    "kpi_id": "kyc_completion_rate",
-    "scenario": "ambiguous_duplicate_campaign",
-    "tenant_id": "gate_beta"
-  },
-  {
-    "expected_severity": "urgent",
-    "hidden_kpi": "pro_revenue",
-    "restricted_from": "ops_manager",
-    "scenario": "entitlement_and_role_violation",
-    "tenant_id": "gate_alpha",
-    "violation_event": "auth.role.violation"
-  }
-]
+  "planted": []
+}
