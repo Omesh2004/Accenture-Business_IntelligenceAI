@@ -241,7 +241,20 @@ export async function generateFacts(plan: FactPlan) {
     const risk = weighted(r, RISK, [55, 33, 12]);
     // Opened uniformly across the window, so signups are a real daily series rather than a
     // single spike on day zero.
-    const openDay = Math.floor(r() * plan.days);
+    let openDay = Math.floor(r() * plan.days);
+    // Onboarding slowdown: a share of the accounts that WOULD have opened inside the affected
+    // window open earlier instead. The signups KPI is a count of openings per day, so this is
+    // the only honest way to move it -- fewer accounts on those days, not a rewritten total.
+    {
+      const b = pick(r, branches);
+      void b;
+      const probe = applyTemplates(plan.templates,
+        { day: openDay, region: "", risk: "", branch: "" }, plan.days);
+      if (probe.openRate < 1 && r() > probe.openRate) {
+        const quiet = Math.max(1, plan.days - 14);
+        openDay = Math.floor(r() * quiet);
+      }
+    }
     const accNo = `${tag}-A${String(i).padStart(6, "0")}`;
     const opened = dayStart(openDay);
     const income = weighted(r, INCOME, [22, 30, 26, 16, 6]);
@@ -274,7 +287,7 @@ export async function generateFacts(plan: FactPlan) {
       const mod = applyTemplates(plan.templates, ctx, plan.days);
 
       const n = plan.only === "applications"
-        ? 0 : Math.floor(p.spendRate * mod.txnVolume * (0.5 + r()));
+        ? 0 : Math.floor(p.spendRate * mod.txnVolume * (0.5 + r() * mod.noise));
       for (let k = 0; k < n; k++) {
         const type = weighted(r, ["PAYMENT", "TRANSFER", "WITHDRAWAL", "DEPOSIT"], [58, 20, 14, 8]);
         const [opts, w] = CHANNEL_MIX[type];

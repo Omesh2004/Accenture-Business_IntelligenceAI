@@ -557,6 +557,63 @@ router.get(
   }
 );
 
+// ─── POST /events/simulate/plant ──────────────────────────────
+// Move a governed KPI for real.
+//
+// The per-user simulation writes a clickstream, and the clickstream is behavioural context: per
+// docs/DATA_MODEL.md every KPI VALUE comes from the daily banking snapshot. A twenty-user journey
+// run therefore could not shift a KPI computed over four thousand customers however hard it was
+// targeted, which is why a template appeared to do nothing on the dashboard.
+//
+// This regenerates the banking facts with one of the declared anomaly templates applied, so the
+// movement exists in the source the KPIs are actually built from. The engine still has to find it.
+router.post(
+  "/events/simulate/plant",
+  isLoggedIn,
+  isAdmin,
+  async (req: Request, res: Response): Promise<void> => {
+    const body = (req.body || {}) as { template?: unknown; days?: unknown; customers?: unknown };
+    const template = String(body.template || "").trim();
+    if (!template) {
+      res.status(400).json({ error: "template is required" });
+      return;
+    }
+    const { TEMPLATES: FACT_TEMPLATES } = await import("../simulate/templates");
+    if (!FACT_TEMPLATES[template]) {
+      res.status(400).json({
+        error: `unknown template "${template}"`,
+        known: Object.keys(FACT_TEMPLATES),
+      });
+      return;
+    }
+    const days = Math.max(14, Math.min(Number(body.days) || 55, 90));
+    const customers = Math.max(500, Math.min(Number(body.customers) || 4000, 8000));
+
+    try {
+      const { generateFacts } = await import("../simulate/generateFacts");
+      const written = await generateFacts({
+        tenantId: "bank_a", customers, days, seed: 20260831,
+        templates: [FACT_TEMPLATES[template]],
+      });
+      // The pipeline is what makes it visible; without this the operator waits for the next tick
+      // and concludes the plant did nothing.
+      let refreshed = false;
+      try {
+        await axios.post(`${PIPELINE_URL}/refresh?full=true`, {}, { timeout: 20 * 60 * 1000 });
+        refreshed = true;
+      } catch { /* the scheduled loop will pick it up */ }
+      res.status(200).json({
+        ok: true, template, days, customers, written, refreshed,
+        note: refreshed
+          ? "Facts rebuilt and pushed through the warehouse. Re-score the engine to see it."
+          : "Facts rebuilt. The pipeline refresh did not complete; the next scheduled run will land it.",
+      });
+    } catch (err) {
+      res.status(500).json({ error: String(err) });
+    }
+  }
+);
+
 // ─── POST /events/simulate ────────────────────────────────────
 // Admin only: stochastic user journey simulation.
 // Auth: mounted without router-level isLoggedIn (see app.ts), so the guard is

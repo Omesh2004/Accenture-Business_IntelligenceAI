@@ -30,8 +30,10 @@ const display = Instrument_Serif({
 
 export const metadata: Metadata = {
   title: "FinInsights | Feature Intelligence & Analytics",
+  // The tab icon is the product mark, not the Next.js default that shipped with the scaffold.
+  icons: { icon: "/logo1.png", shortcut: "/logo1.png", apple: "/logo1.png" },
   description:
-    "Production-grade SaaS analytics dashboard for tracking feature usage, user behavior, funnel analysis, and tenant comparison with AI-powered insights.",
+    "Production-grade SaaS analytics dashboard for tracking KPI analysis, and tenant comparison with AI-powered insights.",
   keywords: [
     "analytics",
     "dashboard",
@@ -52,7 +54,7 @@ export default function RootLayout({
       lang="en"
       className={`${ui.variable} ${display.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col font-sans bg-gray-100/50">
+      <body className="min-h-full flex flex-col font-sans bg-gray-100/50 selection:bg-purple-400 selection:text-white">
         <AuthProvider>
           {/*
             Pre-existing build defect, unrelated to the telemetry audit -- fixed only to

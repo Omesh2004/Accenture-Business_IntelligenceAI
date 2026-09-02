@@ -336,9 +336,16 @@ export default function IntelligencePage() {
                 className="rounded-2xl p-4"
                 style={{ background: INK.surface, border: `1px solid ${INK.hairline}` }}
               >
-                <Eyebrow>Issued</Eyebrow>
+                {/* `generated_at` is pinned to the END OF THE SCORED WINDOW, not to the moment
+                    the sweep ran -- that is deliberate, so every finding in one sweep shares a
+                    timestamp and ordering is reproducible. Rendered with a clock it therefore
+                    read "12:00:00 AM" every single time, which looks like a broken date and is
+                    really a window boundary. Shown as the date it is. */}
+                <Eyebrow>Covers up to</Eyebrow>
                 <p className="mt-2 text-[13px] font-semibold" style={{ color: INK.text }}>
-                  {new Date(insight.generated_at).toLocaleString()}
+                  {new Date(insight.generated_at).toLocaleDateString(undefined, {
+                    day: 'numeric', month: 'long', year: 'numeric',
+                  })}
                 </p>
                 <p
                   className="mt-1 break-all text-[10.5px]"
