@@ -71,7 +71,7 @@ function Sidebar() {
         <Image src="/logo1.png" alt="FinInsights" width={36} height={36} priority
                className="h-9 w-9 shrink-0 object-contain" />
         {!sidebarCollapsed && (
-          <span className="text-[19px] font-semibold tracking-[-0.02em]"
+          <span className="text-[length:var(--step-1)] font-semibold tracking-[-0.02em]"
                 style={{ color: 'var(--rail-text-strong)' }}>
             <span style={{ color: 'var(--brand-bright)' }}>Fin</span>Insights
           </span>
@@ -81,7 +81,7 @@ function Sidebar() {
       {!sidebarCollapsed && role !== 'user' && (
         <div className="px-5 pb-4">
           <span
-            className="inline-flex rounded-full px-3 py-1 text-[10px] font-semibold uppercase tracking-[0.14em]"
+            className="inline-flex rounded-full px-3 py-1 text-[length:var(--step--2)] font-semibold uppercase tracking-[0.14em]"
             style={{ background: 'rgb(91 33 224 / 0.16)', color: '#b9a0fa' }}
           >
             {role === 'app_admin' ? 'App Admin' : 'Super Admin'}
@@ -99,7 +99,7 @@ function Sidebar() {
               key={item.id}
               href={item.href}
               title={sidebarCollapsed ? item.label : undefined}
-              className={`relative flex items-center gap-3 rounded-xl py-2.5 text-[13.5px] font-medium
+              className={`relative flex items-center gap-3 rounded-xl py-2.5 text-[length:var(--step--1)] font-medium
                           transition-colors duration-200
                           ${sidebarCollapsed ? 'justify-center px-0' : 'px-3.5'}`}
               style={{ color: active ? 'var(--rail-text-strong)' : 'var(--rail-text)' }}
@@ -124,14 +124,14 @@ function Sidebar() {
       {!sidebarCollapsed && (
         <div className="mx-3 mb-3 flex items-center gap-2.5 rounded-xl px-3 py-2.5"
              style={{ background: 'var(--rail-raised)' }}>
-          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-[12px] font-semibold text-white"
+          <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full text-[length:var(--step--1)] font-semibold text-white"
                 style={{ background: 'var(--brand-grad)' }}>
             {initial}
           </span>
           <span className="min-w-0">
-            <span className="block truncate text-[12.5px] font-medium"
+            <span className="block truncate text-[length:var(--step--1)] font-medium"
                   style={{ color: 'var(--rail-text-strong)' }}>{name}</span>
-            <span className="block truncate text-[10.5px]" style={{ color: 'var(--rail-text)' }}>
+            <span className="block truncate text-[length:var(--step--2)]" style={{ color: 'var(--rail-text)' }}>
               {email}
             </span>
           </span>

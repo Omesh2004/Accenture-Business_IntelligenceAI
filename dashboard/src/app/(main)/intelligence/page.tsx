@@ -56,7 +56,7 @@ function titleCase(id: string) {
 function Eyebrow({ children }: { children: React.ReactNode }) {
   return (
     <p
-      className="text-[10.5px] tracking-[0.22em] uppercase"
+      className="text-[length:var(--step--2)] tracking-[0.22em] uppercase"
       style={{ color: INK.textFaint, fontFamily: FONT.sans }}
     >
       {children}
@@ -80,7 +80,7 @@ function SectionHeader({ title, description }: { title: string; description: str
 function Pill({ children, tone }: { children: React.ReactNode; tone?: { fg: string; bg: string } }) {
   return (
     <span
-      className="rounded-full px-2.5 py-1 text-[10px] font-semibold tracking-[0.14em] uppercase"
+      className="rounded-full px-2.5 py-1 text-[length:var(--step--2)] font-semibold tracking-[0.14em] uppercase"
       style={{
         color: tone?.fg || INK.textSoft,
         background: tone?.bg || INK.sunken,
@@ -125,18 +125,18 @@ function ContributionRow({
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="truncate text-[14px] font-medium" style={{ color: INK.text }}>
+          <p className="truncate text-[length:var(--step--0a)] font-medium" style={{ color: INK.text }}>
             {label}
           </p>
           <p
-            className="mt-0.5 text-[10.5px] tracking-[0.14em] uppercase"
+            className="mt-0.5 text-[length:var(--step--2)] tracking-[0.14em] uppercase"
             style={{ color: INK.textFaint }}
           >
             {sub}
           </p>
         </div>
         <span
-          className="shrink-0 text-[17px]"
+          className="shrink-0 text-[length:var(--step-1)]"
           style={{ color: INK.text, fontFamily: FONT.mono, fontVariantNumeric: 'tabular-nums' }}
         >
           {(value * 100).toFixed(1)}%
@@ -158,7 +158,7 @@ function ContributionRow({
 function Empty({ children }: { children: React.ReactNode }) {
   return (
     <p
-      className="rounded-xl border border-dashed px-4 py-8 text-center text-[13px]"
+      className="rounded-xl border border-dashed px-4 py-8 text-center text-[length:var(--step--1)]"
       style={{ borderColor: INK.hairline, color: INK.textFaint }}
     >
       {children}
@@ -244,12 +244,12 @@ export default function IntelligencePage() {
           <Card className="p-7">
             <Eyebrow>Decision intelligence</Eyebrow>
             <h1
-              className="mt-2 text-[34px] leading-tight"
+              className="mt-2 text-[length:var(--step-3)] leading-tight"
               style={{ color: INK.text, fontFamily: FONT.display }}
             >
               Investigation Report
             </h1>
-            <p className="mt-3 max-w-3xl text-[14px] leading-[1.7]" style={{ color: INK.textSoft }}>
+            <p className="mt-3 max-w-3xl text-[length:var(--step--0a)] leading-[1.7]" style={{ color: INK.textSoft }}>
               An investigation is opened only when a governed KPI moves beyond its forecast band. No
               such movement has been recorded for the selected portfolio, which is itself a finding:
               the monitored metrics are operating within expectation.
@@ -316,7 +316,7 @@ export default function IntelligencePage() {
               >
                 <Eyebrow>Confidence</Eyebrow>
                 <p
-                  className="mt-2 text-[30px] leading-none"
+                  className="mt-2 text-[length:var(--step-3)] leading-none"
                   style={{ color: INK.text, fontFamily: FONT.mono, fontVariantNumeric: 'tabular-nums' }}
                 >
                   {(insight.confidence * 100).toFixed(0)}%
@@ -344,13 +344,13 @@ export default function IntelligencePage() {
                     read "12:00:00 AM" every single time, which looks like a broken date and is
                     really a window boundary. Shown as the date it is. */}
                 <Eyebrow>Covers up to</Eyebrow>
-                <p className="mt-2 text-[13px] font-semibold" style={{ color: INK.text }}>
+                <p className="mt-2 text-[length:var(--step--1)] font-semibold" style={{ color: INK.text }}>
                   {new Date(insight.generated_at).toLocaleDateString(undefined, {
                     day: 'numeric', month: 'long', year: 'numeric',
                   })}
                 </p>
                 <p
-                  className="mt-1 break-all text-[10.5px]"
+                  className="mt-1 break-all text-[length:var(--step--2)]"
                   style={{ color: INK.textFaint, fontFamily: FONT.mono }}
                 >
                   Ref {insight.investigation_id}
@@ -461,16 +461,16 @@ export default function IntelligencePage() {
         >
           <FileSearch className="h-4 w-4 shrink-0" style={{ color: INK.accent }} />
           <div className="min-w-0">
-            <h2 className="text-[17px] leading-tight" style={{ color: INK.text, fontFamily: FONT.display }}>
+            <h2 className="text-[length:var(--step-1)] leading-tight" style={{ color: INK.text, fontFamily: FONT.display }}>
               Audit trail
             </h2>
-            <p className="mt-0.5 text-[12.5px]" style={{ color: INK.textSoft }}>
+            <p className="mt-0.5 text-[length:var(--step--1)]" style={{ color: INK.textSoft }}>
               Every figure traced to a stored claim, the levers proposed against it, and the sources
               and runtime cost behind the whole investigation.
             </p>
           </div>
           <span
-            className="ml-auto flex shrink-0 items-center gap-2 text-[11px]"
+            className="ml-auto flex shrink-0 items-center gap-2 text-[length:var(--step--1a)]"
             style={{ color: INK.textFaint, fontFamily: FONT.mono }}
           >
             {insight.evidence.length} claims · {relevantRecs.length} actions · {sources.length} sources
@@ -519,11 +519,11 @@ export default function IntelligencePage() {
                         style={{ borderTop: i === 0 ? 'none' : `1px solid ${INK.hairline}` }}
                       >
                         <div className="min-w-0">
-                          <p className="text-[14px] font-medium" style={{ color: INK.text }}>
+                          <p className="text-[length:var(--step--0a)] font-medium" style={{ color: INK.text }}>
                             {rec.action}
                           </p>
                           <p
-                            className="mt-1 text-[10.5px] tracking-[0.14em] uppercase"
+                            className="mt-1 text-[length:var(--step--2)] tracking-[0.14em] uppercase"
                             style={{ color: INK.textFaint }}
                           >
                             Lever {rec.lever} · Owner {rec.owner_role}
@@ -532,7 +532,7 @@ export default function IntelligencePage() {
                         <div className="flex shrink-0 items-center gap-2">
                           <Pill>{rec.status}</Pill>
                           <span
-                            className="rounded-full px-2.5 py-1 text-[11px]"
+                            className="rounded-full px-2.5 py-1 text-[length:var(--step--1a)]"
                             style={{
                               background: INK.signalSoft,
                               color: INK.signal,
@@ -565,7 +565,7 @@ export default function IntelligencePage() {
                     <Card className="p-5">
                       <div className="flex items-center justify-between gap-3">
                         <h3
-                          className="text-[15px]"
+                          className="text-[length:var(--step--0a)]"
                           style={{ color: INK.text, fontFamily: FONT.display }}
                         >
                           Runtime by stage
@@ -590,7 +590,7 @@ export default function IntelligencePage() {
                               {['Stage', 'Engine', 'Runs', 'Latency', 'Tokens'].map((h, i) => (
                                 <th
                                   key={h}
-                                  className={`px-3 py-2 text-[10px] tracking-[0.14em] uppercase ${
+                                  className={`px-3 py-2 text-[length:var(--step--2)] tracking-[0.14em] uppercase ${
                                     i > 1 ? 'text-right' : 'text-left'
                                   }`}
                                   style={{ color: INK.textFaint }}
@@ -611,7 +611,7 @@ export default function IntelligencePage() {
                                 key={`${row.stage}-${row.engine_type}`}
                                 style={{ borderTop: `1px solid ${INK.hairline}` }}
                               >
-                                <td className="px-3 py-2 text-[13px]" style={{ color: INK.text }}>
+                                <td className="px-3 py-2 text-[length:var(--step--1)]" style={{ color: INK.text }}>
                                   {titleCase(row.stage)}
                                 </td>
                                 <td className="px-3 py-2">
@@ -620,7 +620,7 @@ export default function IntelligencePage() {
                                 {[row.runs, `${row.latency_ms} ms`].map((v, i) => (
                                   <td
                                     key={i}
-                                    className="px-3 py-2 text-right text-[13px]"
+                                    className="px-3 py-2 text-right text-[length:var(--step--1)]"
                                     style={{
                                       color: INK.textSoft,
                                       fontFamily: FONT.mono,
@@ -637,7 +637,7 @@ export default function IntelligencePage() {
                                 <td className="px-3 py-2 text-right">
                                   {row.tokens_in + row.tokens_out > 0 ? (
                                     <span
-                                      className="text-[13px]"
+                                      className="text-[length:var(--step--1)]"
                                       style={{
                                         color: INK.textSoft,
                                         fontFamily: FONT.mono,
@@ -649,7 +649,7 @@ export default function IntelligencePage() {
                                   ) : (
                                     <span
                                       title="This stage is deterministic. It produced its result from stored rows and arithmetic, with no language model in the path."
-                                      className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10.5px] font-medium whitespace-nowrap"
+                                      className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[length:var(--step--2)] font-medium whitespace-nowrap"
                                       style={{ background: INK.positiveSoft, color: INK.positive }}
                                     >
                                       no LLM needed
@@ -660,7 +660,7 @@ export default function IntelligencePage() {
                             ))}
                             {!(telemetry?.by_stage ?? []).length && (
                               <tr>
-                                <td colSpan={5} className="px-3 py-8 text-center text-[13px]" style={{ color: INK.textFaint }}>
+                                <td colSpan={5} className="px-3 py-8 text-center text-[length:var(--step--1)]" style={{ color: INK.textFaint }}>
                                   No stage has been executed for this portfolio yet.
                                 </td>
                               </tr>

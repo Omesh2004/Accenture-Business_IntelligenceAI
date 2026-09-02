@@ -63,7 +63,7 @@ function Card({
       className="surface flex flex-col p-5"
     >
       <span className="mb-2.5 flex items-center gap-2">
-        <span className="text-[12.5px] font-semibold"
+        <span className="text-[length:var(--step--1)] font-semibold"
               style={{ color: tone === 'brand' ? 'var(--brand)' : 'var(--color-slate-700)' }}>
           {title}
         </span>
@@ -120,18 +120,18 @@ export default function AnswerCards(
                             color: fell ? FALL : RISE, letterSpacing: '-0.02em' }}>
                   {fell ? '-' : '+'}{Math.abs(pct).toFixed(1)}%
                 </p>
-                <p className="mt-2 text-[13px] text-slate-600">
+                <p className="mt-2 text-[length:var(--step--1)] text-slate-600">
                   from {fmt(unit, baseline)} to {fmt(unit, observed)}
                 </p>
               </>
             ) : null}
             {pct == null && (
-              <p className="text-[13px] leading-relaxed text-slate-600">
+              <p className="text-[length:var(--step--1)] leading-relaxed text-slate-600">
                 <Typed text={what.text} active={live} />
               </p>
             )}
             {window && pct != null && (
-              <p className="mt-3 border-t border-slate-100 pt-3 text-[12px] text-slate-400">
+              <p className="mt-3 border-t border-slate-100 pt-3 text-[length:var(--step--1)] text-slate-400">
                 <Typed text={window} active={live} delay={0.2} />
               </p>
             )}
@@ -142,7 +142,7 @@ export default function AnswerCards(
           <Card icon={Search} title="Why did it happen?" delay={0.06}>
             <ul className="space-y-1.5">
               {bullets(why).map((b, i) => (
-                <li key={i} className="flex gap-2 text-[12.5px] leading-relaxed text-slate-600">
+                <li key={i} className="flex gap-2 text-[length:var(--step--1)] leading-relaxed text-slate-600">
                   <span className="mt-[7px] h-1 w-1 shrink-0 rounded-full bg-slate-300" />
                   <Typed text={b} active={live} delay={0.15 + i * 0.12} />
                 </li>
@@ -156,7 +156,7 @@ export default function AnswerCards(
             <ul className="space-y-2">
               {where.series.slice(0, 5).map((s, i) => (
                 <li key={`${s.label}-${i}`}
-                    className="flex items-baseline justify-between gap-3 text-[12.5px]">
+                    className="flex items-baseline justify-between gap-3 text-[length:var(--step--1)]">
                   <span className="truncate text-slate-600" title={s.label}>{s.label}</span>
                   <span className="num shrink-0 font-medium" style={{ color: 'var(--brand)' }}>
                     {s.value.toFixed(1)}%
@@ -164,7 +164,7 @@ export default function AnswerCards(
                 </li>
               ))}
             </ul>
-            <p className="mt-2.5 text-[11px] text-slate-400">share of the movement, ranked</p>
+            <p className="mt-2.5 text-[length:var(--step--1a)] text-slate-400">share of the movement, ranked</p>
           </Card>
         )}
       </div>
@@ -177,7 +177,7 @@ export default function AnswerCards(
           className="surface p-5"
         >
           <span className="mb-4 flex items-center gap-2">
-            <span className="text-[12.5px] font-semibold" style={{ color: 'var(--brand)' }}>
+            <span className="text-[length:var(--step--1)] font-semibold" style={{ color: 'var(--brand)' }}>
               What action should you take?
             </span>
             <ClipboardCheck className="h-3.5 w-3.5 text-slate-300" />
@@ -187,13 +187,13 @@ export default function AnswerCards(
               <div key={i}
                    className="flex gap-3 rounded-xl border border-slate-100 bg-slate-50/60 p-4">
                 <span className="icon-tile shrink-0"><TrendingUp className="h-[14px] w-[14px]" /></span>
-                <p className="text-[12px] leading-relaxed text-slate-600">
+                <p className="text-[length:var(--step--1)] leading-relaxed text-slate-600">
                   <Typed text={b} active={live} delay={0.25 + i * 0.15} />
                 </p>
               </div>
             ))}
           </div>
-          <p className="mt-3 text-[11px] text-slate-400">
+          <p className="mt-3 text-[length:var(--step--1a)] text-slate-400">
             Proposed only. Nothing here is executed automatically.
           </p>
         </motion.section>

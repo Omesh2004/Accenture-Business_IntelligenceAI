@@ -53,12 +53,12 @@ export default function RangePosition(
   return (
     <div className="surface p-5">
       <div className="mb-1 flex items-baseline justify-between gap-3">
-        <h3 className="text-[15px]">Where each metric sits against its range</h3>
-        <span className="text-[11.5px] text-slate-400">
+        <h3 className="text-[length:var(--step--0a)]">Where each metric sits against its range</h3>
+        <span className="text-[length:var(--step--1a)] text-slate-400">
           {usable.filter((r) => r.pos < 0 || r.pos > 1).length} of {usable.length} outside
         </span>
       </div>
-      <p className="mb-5 text-[11.5px] text-slate-400">
+      <p className="mb-5 text-[length:var(--step--1a)] text-slate-400">
         Each metric on its own scale, lined up so the expected range is the same place for all of
         them. Distance from the band is comparable; the raw numbers are not.
       </p>
@@ -68,7 +68,7 @@ export default function RangePosition(
           const outside = r.pos < 0 || r.pos > 1;
           return (
             <div key={r.spec.id} className="flex items-center gap-4">
-              <span className="w-[38%] shrink-0 truncate text-[12.5px] text-slate-600">
+              <span className="w-[38%] shrink-0 truncate text-[length:var(--step--1)] text-slate-600">
                 {r.spec.label}
               </span>
 
@@ -92,7 +92,7 @@ export default function RangePosition(
                 />
               </span>
 
-              <span className="num w-24 shrink-0 text-right text-[12.5px] font-medium"
+              <span className="num w-24 shrink-0 text-right text-[length:var(--step--1)] font-medium"
                     style={{ color: outside ? OUTSIDE : 'var(--color-slate-700)' }}>
                 {fmt(r.spec.unit, r.now!)}
               </span>
@@ -102,7 +102,7 @@ export default function RangePosition(
       </div>
 
       <div className="mt-5 flex items-center gap-4 border-t border-slate-100 pt-3
-                      text-[11px] text-slate-400">
+                      text-[length:var(--step--1a)] text-slate-400">
         <span className="inline-flex items-center gap-1.5">
           <span className="inline-block h-2.5 w-2.5 rounded-full" style={{ background: INSIDE }} />
           inside the range

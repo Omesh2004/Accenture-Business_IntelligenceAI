@@ -479,7 +479,7 @@ export function PredictivePageSkeleton() {
         </div>
         <div className="overflow-x-auto">
           <table className="min-w-[1200px] w-full">
-            <thead className="text-[13px] text-gray-500 font-medium border-y border-gray-200 bg-gray-100/50">
+            <thead className="text-[length:var(--step--1)] text-gray-500 font-medium border-y border-gray-200 bg-gray-100/50">
               <tr>
                 {Array.from({ length: 7 }).map((_, i) => (
                   <th key={i} className="px-4 py-3">

@@ -160,13 +160,13 @@ export default function LoginPage() {
               <div className="flex items-center gap-3 p-3 rounded-lg bg-blue-100 border border-blue-100">
                 <div>
                   <p className="text-xs font-semibold text-gray-900">Super Admin</p>
-                  <p className="text-[10px] text-gray-500">Aggregated cloud-level overview</p>
+                  <p className="text-[length:var(--step--2)] text-gray-500">Aggregated cloud-level overview</p>
                 </div>
               </div>
               <div className="flex items-center gap-3 p-3 rounded-lg bg-gray-100 border border-gray-100">
                 <div>
                   <p className="text-xs font-semibold text-gray-900">App Admin</p>
-                  <p className="text-[10px] text-gray-500">Full detailed analytics for assigned app</p>
+                  <p className="text-[length:var(--step--2)] text-gray-500">Full detailed analytics for assigned app</p>
                 </div>
               </div>
             </div>

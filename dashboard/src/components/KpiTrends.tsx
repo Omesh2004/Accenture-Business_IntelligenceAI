@@ -58,7 +58,7 @@ export function breachCount(points: Marked[]): number {
 
 function Legend() {
   return (
-    <div className="mb-3.5 flex flex-wrap items-center gap-x-6 gap-y-2 text-[11.5px] text-slate-500">
+    <div className="mb-3.5 flex flex-wrap items-center gap-x-6 gap-y-2 text-[length:var(--step--1a)] text-slate-500">
       <span className="inline-flex items-center gap-2">
         <span className="inline-block h-3 w-6 rounded border"
               style={{ background: 'rgb(91 33 224 / 0.08)', borderColor: 'rgb(91 33 224 / 0.28)' }} />
@@ -114,7 +114,7 @@ export default function KpiTrends(
           return (
             <div key={k.id} className="surface lift-card p-5">
               <div className="mb-1 flex items-baseline justify-between gap-3">
-                <span className="truncate text-[10.5px] font-semibold uppercase
+                <span className="truncate text-[length:var(--step--2)] font-semibold uppercase
                                  tracking-[0.13em] text-slate-500">
                   {k.label}
                 </span>
@@ -124,7 +124,7 @@ export default function KpiTrends(
                 </span>
               </div>
 
-              <p className="mb-3 text-[11.5px]"
+              <p className="mb-3 text-[length:var(--step--1a)]"
                  style={{ color: outside ? OUTSIDE : 'var(--color-slate-400)' }}>
                 {!hasBand
                   ? 'No expected range on record for this window'
@@ -176,7 +176,7 @@ export default function KpiTrends(
                     </AreaChart>
                   </ResponsiveContainer>
                 ) : (
-                  <div className="grid h-full place-items-center text-[12.5px] text-slate-400">
+                  <div className="grid h-full place-items-center text-[length:var(--step--1)] text-slate-400">
                     {loading ? 'Loading series' : 'No series for this window'}
                   </div>
                 )}

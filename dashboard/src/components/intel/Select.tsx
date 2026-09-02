@@ -137,7 +137,7 @@ export default function Select({
         aria-activedescendant={open ? `${listId}-${cursor}` : undefined}
         onClick={() => setOpen((v) => !v)}
         onKeyDown={onKeyDown}
-        className="flex cursor-pointer items-center gap-2 rounded-full border py-1.5 pr-2.5 pl-3.5 text-[12px] font-medium transition-colors focus:outline-none"
+        className="flex cursor-pointer items-center gap-2 rounded-full border py-1.5 pr-2.5 pl-3.5 text-[length:var(--step--1)] font-medium transition-colors focus:outline-none"
         style={{
           borderColor: open ? INK.accent : INK.hairline,
           background: open ? INK.surface : INK.sunken,
@@ -191,14 +191,14 @@ export default function Select({
                   />
                   <span className="min-w-0">
                     <span
-                      className="block text-[13px] whitespace-nowrap"
+                      className="block text-[length:var(--step--1)] whitespace-nowrap"
                       style={{ color: INK.text, fontWeight: isSelected ? 600 : 400 }}
                     >
                       {option.label}
                     </span>
                     {option.hint && (
                       <span
-                        className="mt-0.5 block max-w-[19rem] text-[11.5px] leading-[1.45]"
+                        className="mt-0.5 block max-w-[19rem] text-[length:var(--step--1a)] leading-[1.45]"
                         style={{ color: INK.textFaint }}
                       >
                         {option.hint}

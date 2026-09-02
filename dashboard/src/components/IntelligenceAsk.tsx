@@ -121,7 +121,7 @@ function IntelligenceAsk({
       >
         <div className="flex flex-wrap items-center gap-3">
           <Sparkles className="h-4 w-4" style={{ color: INK.accent }} />
-          <span className="text-[13px] font-semibold" style={{ color: INK.text }}>
+          <span className="text-[length:var(--step--1)] font-semibold" style={{ color: INK.text }}>
             Ask the analyst
           </span>
           {/* Hidden while the overlay is up. The conversation carries its own switcher, and two
@@ -144,7 +144,7 @@ function IntelligenceAsk({
           {restored > 0 && (
             <button
               onClick={() => launch('')}
-              className="ml-auto flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1.5 text-[12px]"
+              className="ml-auto flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1.5 text-[length:var(--step--1)]"
               style={{ borderColor: INK.hairline, color: INK.textSoft }}
             >
               <MessageSquare className="h-3.5 w-3.5" />
@@ -154,7 +154,7 @@ function IntelligenceAsk({
         </div>
 
         {activeProfile && (
-          <p data-testid="answering-as" className="mt-2.5 text-[12px]" style={{ color: INK.textFaint }}>
+          <p data-testid="answering-as" className="mt-2.5 text-[length:var(--step--1)]" style={{ color: INK.textFaint }}>
             Answering as{' '}
             <span style={{ color: INK.textSoft, fontWeight: 600 }}>{activeProfile.label}</span> ·{' '}
             {activeProfile.remit}
@@ -175,7 +175,7 @@ function IntelligenceAsk({
             placeholder="Start a conversation with the analyst"
             maxLength={500}
             data-focus-frame=""
-            className="flex-1 border-0 bg-transparent text-[14.5px] outline-none"
+            className="flex-1 border-0 bg-transparent text-[length:var(--step--0a)] outline-none"
             style={{ color: INK.text, fontFamily: FONT.sans }}
           />
           <button

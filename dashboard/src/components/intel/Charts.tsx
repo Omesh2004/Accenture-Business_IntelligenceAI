@@ -50,13 +50,13 @@ function Frame({ visual, children }: { visual: AgentVisual; children: React.Reac
       className="surface p-4"
     >
       <figcaption className="mb-3">
-        <span className="block text-[12.5px] font-medium text-slate-800">{visual.title}</span>
+        <span className="block text-[length:var(--step--1)] font-medium text-slate-800">{visual.title}</span>
         {visual.subtitle && (
-          <span className="block text-[11px] text-slate-400">{visual.subtitle}</span>
+          <span className="block text-[length:var(--step--1a)] text-slate-400">{visual.subtitle}</span>
         )}
       </figcaption>
       {children}
-      <span className="mt-3 flex items-center gap-1.5 text-[10px] text-slate-400">
+      <span className="mt-3 flex items-center gap-1.5 text-[length:var(--step--2)] text-slate-400">
         <span className="chip">{visual.source}</span>
         {visual.gate && <span>via {visual.gate}</span>}
       </span>
@@ -72,7 +72,7 @@ function Delta({ visual }: { visual: AgentVisual }) {
     <div className="space-y-2.5">
       {visual.series.map((s, i) => (
         <div key={s.label} className="flex items-center gap-3">
-          <span className="w-20 shrink-0 text-[11px] text-slate-500">{s.label}</span>
+          <span className="w-20 shrink-0 text-[length:var(--step--1a)] text-slate-500">{s.label}</span>
           <span className="h-2.5 flex-1 overflow-hidden rounded-full bg-slate-100">
             <motion.span
               className="block h-full rounded-full"
@@ -82,13 +82,13 @@ function Delta({ visual }: { visual: AgentVisual }) {
               transition={{ duration: 0.7, delay: 0.08 + i * 0.1, ease: EASE }}
             />
           </span>
-          <span className="num w-24 shrink-0 text-right text-[12.5px] text-slate-800">
+          <span className="num w-24 shrink-0 text-right text-[length:var(--step--1)] text-slate-800">
             {fmt(visual.unit, s.value)}
           </span>
         </div>
       ))}
       {visual.pct_change != null && (
-        <p className="pt-1 text-[11.5px] text-slate-500">
+        <p className="pt-1 text-[length:var(--step--1a)] text-slate-500">
           A change of {Number(visual.pct_change).toFixed(1)}%.
         </p>
       )}
@@ -104,7 +104,7 @@ function Bars({ visual }: { visual: AgentVisual }) {
     <div className="space-y-2">
       {visual.series.map((s, i) => (
         <div key={`${s.label}-${i}`} className="flex items-center gap-3">
-          <span className="w-[42%] shrink-0 truncate text-[11.5px] text-slate-600"
+          <span className="w-[42%] shrink-0 truncate text-[length:var(--step--1a)] text-slate-600"
                 title={s.label}>
             {shorten(s.label, 32)}
           </span>
@@ -117,7 +117,7 @@ function Bars({ visual }: { visual: AgentVisual }) {
               transition={{ duration: 0.65, delay: 0.06 + i * 0.07, ease: EASE }}
             />
           </span>
-          <span className="num w-14 shrink-0 text-right text-[12px] text-slate-800">
+          <span className="num w-14 shrink-0 text-right text-[length:var(--step--1)] text-slate-800">
             {fmt(visual.unit, s.value)}
           </span>
         </div>
@@ -220,7 +220,7 @@ function Band({ visual }: { visual: AgentVisual }) {
           />
         )}
       </div>
-      <div className="mt-2.5 flex justify-between text-[11px] text-slate-500">
+      <div className="mt-2.5 flex justify-between text-[length:var(--step--1a)] text-slate-500">
         <span className="num">{fmt(visual.unit, lower)}</span>
         <span className="num">
           {observed != null ? (
@@ -276,7 +276,7 @@ function Waterfall({ visual }: { visual: AgentVisual }) {
       <div className="flex gap-1.5">
         {steps.map((s, i) => (
           <span key={`${s.label}-l-${i}`}
-                className="flex-1 truncate text-center text-[9.5px] leading-tight text-slate-400"
+                className="flex-1 truncate text-center text-[length:var(--step--2)] leading-tight text-slate-400"
                 title={s.label}>
             {shorten(s.label, 14)}
           </span>
@@ -308,7 +308,7 @@ function Donut({ visual }: { visual: AgentVisual }) {
         <p className="num text-slate-900" style={{ fontSize: 'var(--step-2)', fontWeight: 600 }}>
           {share.toFixed(1)}%
         </p>
-        <p className="mt-1 max-w-[190px] text-[11.5px] leading-snug text-slate-500">
+        <p className="mt-1 max-w-[190px] text-[length:var(--step--1a)] leading-snug text-slate-500">
           of the movement sits in the segments named above. The rest is spread too thin across the
           cube to attribute.
         </p>

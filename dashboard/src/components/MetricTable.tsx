@@ -96,7 +96,7 @@ export default function MetricTable(
     <div className="surface overflow-x-auto">
       <table className="w-full min-w-[620px] table-fixed border-collapse">
         <thead>
-          <tr className="border-b border-slate-100 text-[10.5px] font-semibold uppercase
+          <tr className="border-b border-slate-100 text-[length:var(--step--2)] font-semibold uppercase
                          tracking-[0.13em] text-slate-500">
             <th className="w-[32%] px-6 py-3.5 text-left font-semibold">Metric</th>
             <th className="w-[15%] px-3 py-3.5 text-right font-semibold">Current</th>
@@ -118,14 +118,14 @@ export default function MetricTable(
                 className="border-b border-slate-100 transition-colors last:border-b-0
                            hover:bg-slate-50/70"
               >
-                <td className="truncate px-6 py-4 text-[13.5px] text-slate-700">{k.label}</td>
-                <td className="num px-3 py-4 text-right text-[15px] font-semibold text-slate-900">
+                <td className="truncate px-6 py-4 text-[length:var(--step--1)] text-slate-700">{k.label}</td>
+                <td className="num px-3 py-4 text-right text-[length:var(--step--0a)] font-semibold text-slate-900">
                   {pts.length ? fmt(k.unit, now) : '--'}
                 </td>
                 <td className="px-6 py-4 align-middle">
                   <Path points={pts} colour={good ? 'var(--brand)' : 'var(--fall)'} />
                 </td>
-                <td className="px-6 py-4 text-right text-[13px] font-medium"
+                <td className="px-6 py-4 text-right text-[length:var(--step--1)] font-medium"
                     style={{ color: colour }}>
                   <span className="inline-flex items-center justify-end gap-1">
                     <Arrow className="h-3.5 w-3.5" />

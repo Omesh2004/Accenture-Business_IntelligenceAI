@@ -42,7 +42,7 @@ export default function UnauthorizedPage() {
         </div>
 
         <div className="mt-6 p-3 bg-gray-100 rounded-lg border border-gray-100">
-          <p className="text-[11px] text-gray-400">
+          <p className="text-[length:var(--step--1a)] text-gray-400">
             <strong>Need access?</strong> Contact your organization administrator to request App Admin or Company Admin privileges.
           </p>
         </div>

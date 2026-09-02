@@ -77,13 +77,13 @@ export default function InsightRail({ answer }: { answer: AgentAnswer }) {
                  bg-slate-50/50 p-5 2xl:w-[400px]"
       aria-label="Insight summary"
     >
-      <span className="block text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500">
+      <span className="block text-[length:var(--step--1a)] font-semibold uppercase tracking-[0.16em] text-slate-500">
         Insight summary
       </span>
 
       {answer.kpi_id && (
         <section className="surface p-5">
-          <span className="block text-[13px] font-medium text-slate-600">
+          <span className="block text-[length:var(--step--1)] font-medium text-slate-600">
             {pretty(answer.kpi_id)}
           </span>
           <div className="mt-1.5 flex items-baseline gap-2.5">
@@ -92,7 +92,7 @@ export default function InsightRail({ answer }: { answer: AgentAnswer }) {
               {observed ? fmt(observed.unit, observed.value) : '--'}
             </span>
             {pct != null && (
-              <span className="delta text-[12.5px] font-medium"
+              <span className="delta text-[length:var(--step--1)] font-medium"
                     style={{ color: fell ? FALL : RISE }}>
                 <Arrow className="h-3.5 w-3.5" />
                 {Math.abs(pct).toFixed(1)}%
@@ -100,7 +100,7 @@ export default function InsightRail({ answer }: { answer: AgentAnswer }) {
             )}
           </div>
           {baseline && (
-            <p className="mt-1 text-[11.5px] text-slate-400">
+            <p className="mt-1 text-[length:var(--step--1a)] text-slate-400">
               against an expected {fmt(baseline.unit, baseline.value)}
             </p>
           )}
@@ -136,7 +136,7 @@ export default function InsightRail({ answer }: { answer: AgentAnswer }) {
 
       {drivers && drivers.series.length > 0 && (
         <section className="surface p-5">
-          <span className="mb-3 block text-[10.5px] font-semibold uppercase tracking-[0.16em]
+          <span className="mb-3 block text-[length:var(--step--2)] font-semibold uppercase tracking-[0.16em]
                            text-slate-500">
             Key drivers
           </span>
@@ -149,7 +149,7 @@ export default function InsightRail({ answer }: { answer: AgentAnswer }) {
                   initial={{ opacity: 0, y: 6 }}
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.35, delay: 0.05 * i, ease: EASE }}
-                  className="flex items-center gap-2 text-[12.5px]"
+                  className="flex items-center gap-2 text-[length:var(--step--1)]"
                 >
                   <span className="min-w-0 flex-1 truncate text-slate-600" title={s.label}>
                     {s.label}
@@ -167,17 +167,17 @@ export default function InsightRail({ answer }: { answer: AgentAnswer }) {
 
       {sources.length > 0 && (
         <section className="surface p-5">
-          <span className="mb-3 block text-[10.5px] font-semibold uppercase tracking-[0.16em]
+          <span className="mb-3 block text-[length:var(--step--2)] font-semibold uppercase tracking-[0.16em]
                            text-slate-500">
             Evidence sources
           </span>
           <ul className="space-y-3">
             {sources.map((c) => (
               <li key={`${c.tool}-${c.source}`}
-                  className="flex items-center gap-2 text-[12px] text-slate-600">
+                  className="flex items-center gap-2 text-[length:var(--step--1)] text-slate-600">
                 <Database className="h-3.5 w-3.5 shrink-0 text-slate-300" />
-                <span className="min-w-0 flex-1 truncate font-mono text-[11px]">{c.source}</span>
-                <span className="shrink-0 text-[10.5px] text-slate-400">{c.tool}</span>
+                <span className="min-w-0 flex-1 truncate font-mono text-[length:var(--step--1a)]">{c.source}</span>
+                <span className="shrink-0 text-[length:var(--step--2)] text-slate-400">{c.tool}</span>
               </li>
             ))}
           </ul>

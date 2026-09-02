@@ -110,7 +110,7 @@ function HeroFinding({
       style={{ borderColor: INK.hairline }}
     >
       <p
-        className="text-[10.5px] tracking-[0.2em] uppercase"
+        className="text-[length:var(--step--2)] tracking-[0.2em] uppercase"
         style={{ color: INK.textFaint, fontFamily: FONT.sans }}
       >
         {kpiName || 'Finding'}
@@ -128,7 +128,7 @@ function HeroFinding({
             initial={{ opacity: 0, scale: 0.9 }}
             animate={{ opacity: 1, scale: 1 }}
             transition={{ delay: 0.5, duration: 0.34, ease: EASE }}
-            className="rounded-full px-2.5 py-1 text-[12.5px] font-semibold"
+            className="rounded-full px-2.5 py-1 text-[length:var(--step--1)] font-semibold"
             style={{
               color: rose ? 'var(--rise)' : 'var(--fall)',
               background: rose ? 'rgb(15 157 118 / 0.10)' : 'rgb(248 39 104 / 0.10)',
@@ -139,14 +139,14 @@ function HeroFinding({
         )}
       </div>
 
-      <p className="mt-2 text-[13px]" style={{ color: INK.textSoft }}>
+      <p className="mt-2 text-[length:var(--step--1)]" style={{ color: INK.textSoft }}>
         against an expected{' '}
         <span style={{ fontFamily: FONT.mono, color: INK.text }}>{compact(expected.value)}</span>
         {delta.unit ? ` · ${delta.unit}` : ''}
         {delta.subtitle ? ` · ${delta.subtitle}` : ''}
       </p>
 
-      <p className="mt-1 text-[11px]" style={{ color: INK.textFaint, fontFamily: FONT.mono }}>
+      <p className="mt-1 text-[length:var(--step--1a)]" style={{ color: INK.textFaint, fontFamily: FONT.mono }}>
         {engaged} gates engaged · {delta.source}
       </p>
     </motion.header>
@@ -184,12 +184,12 @@ export function GateRail({ gates, active, pad = 'px-6' }:
     <div className={`${pad} pt-5`}>
       <div className="mb-2.5 flex items-center gap-2">
         <span
-          className="text-[10px] tracking-[0.2em] uppercase"
+          className="text-[length:var(--step--2)] tracking-[0.2em] uppercase"
           style={{ color: INK.textFaint, fontFamily: FONT.sans }}
         >
           Pipeline
         </span>
-        <span className="ml-auto text-[10px]" style={{ color: INK.textFaint, fontFamily: FONT.mono }}>
+        <span className="ml-auto text-[length:var(--step--2)]" style={{ color: INK.textFaint, fontFamily: FONT.mono }}>
           {engaged}/{gates.length}
         </span>
       </div>
@@ -227,7 +227,7 @@ export function GateRail({ gates, active, pad = 'px-6' }:
                 transition={running ? { duration: 1.3, repeat: Infinity } : undefined}
               />
               <span
-                className="text-[10.5px] whitespace-nowrap"
+                className="text-[length:var(--step--2)] whitespace-nowrap"
                 style={{
                   color:
                     gate.status === 'engaged'
@@ -261,11 +261,11 @@ export function GateRail({ gates, active, pad = 'px-6' }:
                   className="mt-2.5 rounded-xl border px-3 py-2.5"
                   style={{ borderColor: INK.hairline, background: INK.sunken }}
                 >
-                  <p className="text-[12px]" style={{ color: INK.text }}>
+                  <p className="text-[length:var(--step--1)]" style={{ color: INK.text }}>
                     {g.question}
                   </p>
                   <p
-                    className="mt-1 text-[11.5px] leading-[1.55]"
+                    className="mt-1 text-[length:var(--step--1a)] leading-[1.55]"
                     style={{ color: g.status === 'restricted' ? INK.danger : INK.textSoft }}
                   >
                     {g.status === 'engaged' || g.status === 'failed'
@@ -301,7 +301,7 @@ function Elapsed({ running }: { running: boolean }) {
 
   if (!running) return null;
   return (
-    <span className="text-[10.5px]" style={{ color: INK.textFaint, fontFamily: FONT.mono }}>
+    <span className="text-[length:var(--step--2)]" style={{ color: INK.textFaint, fontFamily: FONT.mono }}>
       {(ms / 1000).toFixed(1)}s
     </span>
   );
@@ -358,7 +358,7 @@ function Reasoning({
           <Sparkles className="h-3.5 w-3.5" style={{ color: INK.textFaint }} />
         )}
         <span
-          className="text-[10px] tracking-[0.2em] uppercase"
+          className="text-[length:var(--step--2)] tracking-[0.2em] uppercase"
           style={{ color: INK.textFaint, fontFamily: FONT.sans }}
         >
           {running ? 'Thinking' : 'Reasoning'}
@@ -387,12 +387,12 @@ function Reasoning({
                   style={{ background: s.status === 'ok' ? INK.accent : INK.hairlineStrong }}
                 />
                 <div className="min-w-0">
-                  <p className="text-[13px] font-semibold" style={{ color: INK.text }}>
+                  <p className="text-[length:var(--step--1)] font-semibold" style={{ color: INK.text }}>
                     {s.label}
                   </p>
                   {s.detail && (
                     <p
-                      className="mt-0.5 text-[12.5px] leading-[1.6]"
+                      className="mt-0.5 text-[length:var(--step--1)] leading-[1.6]"
                       style={{ color: INK.textSoft }}
                     >
                       {s.detail}
@@ -430,11 +430,11 @@ function Reasoning({
                 style={{ color: INK.accent }}
               />
               <div className="min-w-0">
-                <p className="text-[13px] font-semibold" style={{ color: INK.textSoft }}>
+                <p className="text-[length:var(--step--1)] font-semibold" style={{ color: INK.textSoft }}>
                   {t.label}
                 </p>
                 <p
-                  className="mt-0.5 text-[12.5px]"
+                  className="mt-0.5 text-[length:var(--step--1)]"
                   style={{ color: INK.textFaint, fontFamily: FONT.mono }}
                 >
                   running {t.tool}…
@@ -468,14 +468,14 @@ function ToolLine({ step: s }: { step: AgentStep }) {
         onMouseEnter={(e) => (e.currentTarget.style.background = INK.sunken)}
         onMouseLeave={(e) => (e.currentTarget.style.background = 'transparent')}
       >
-        <span className="text-[12px]" style={{ color: ok ? INK.accent : INK.caution }}>
+        <span className="text-[length:var(--step--1)]" style={{ color: ok ? INK.accent : INK.caution }}>
           {'>'}
         </span>
-        <span className="truncate text-[12.5px]" style={{ color: INK.textSoft }}>
+        <span className="truncate text-[length:var(--step--1)]" style={{ color: INK.textSoft }}>
           <span style={{ color: INK.text }}>{s.tool.replace(/^tools\./, '')}</span>
           {s.detail ? `, ${s.detail}` : ''}
         </span>
-        <span className="ml-auto flex shrink-0 items-center gap-1.5 text-[11px]" style={{ color: INK.textFaint }}>
+        <span className="ml-auto flex shrink-0 items-center gap-1.5 text-[length:var(--step--1a)]" style={{ color: INK.textFaint }}>
           {s.evidence?.length > 0 && <span>{s.evidence.length} fig</span>}
           <span>{secs}</span>
           {ok ? (
@@ -500,11 +500,11 @@ function ToolLine({ step: s }: { step: AgentStep }) {
               style={{ borderColor: INK.hairline, background: INK.sunken }}
             >
               <div>
-                <p className="mb-1 text-[10px] tracking-[0.14em] uppercase" style={{ color: INK.textFaint }}>
+                <p className="mb-1 text-[length:var(--step--2)] tracking-[0.14em] uppercase" style={{ color: INK.textFaint }}>
                   Request
                 </p>
                 <pre
-                  className="overflow-x-auto rounded-lg px-2.5 py-2 text-[11.5px]"
+                  className="overflow-x-auto rounded-lg px-2.5 py-2 text-[length:var(--step--1a)]"
                   style={{ background: INK.surface, color: INK.textSoft, fontFamily: FONT.mono }}
                 >
                   {JSON.stringify({ gate: s.gate || null, why: s.why || null }, null, 1)}
@@ -526,21 +526,21 @@ function EvidenceRows({ claims }: { claims: EvidenceClaim[] }) {
         <tbody>
           {claims.map((c) => (
             <tr key={c.claim_id} style={{ borderTop: `1px solid ${INK.hairline}` }}>
-              <td className="px-2.5 py-1.5 text-[12px]" style={{ color: INK.textSoft }}>
+              <td className="px-2.5 py-1.5 text-[length:var(--step--1)]" style={{ color: INK.textSoft }}>
                 {c.label}
               </td>
               <td
-                className="px-2.5 py-1.5 text-right text-[12px] font-semibold"
+                className="px-2.5 py-1.5 text-right text-[length:var(--step--1)] font-semibold"
                 style={{ color: INK.text, fontFamily: FONT.mono, fontVariantNumeric: 'tabular-nums' }}
               >
                 {c.value}
               </td>
-              <td className="px-2.5 py-1.5 text-[11px]" style={{ color: INK.textFaint }}>
+              <td className="px-2.5 py-1.5 text-[length:var(--step--1a)]" style={{ color: INK.textFaint }}>
                 {c.unit}
               </td>
               <td className="px-2.5 py-1.5 text-right">
                 <span
-                  className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px]"
+                  className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[length:var(--step--2)]"
                   style={{ background: INK.sunken, color: INK.textFaint, fontFamily: FONT.mono }}
                 >
                   <Database className="h-2.5 w-2.5" />
@@ -562,12 +562,12 @@ function ResultTable({ dataset, n, capped = true }:
   return (
     <motion.div layout initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.42, ease: EASE }}>
       <div className="mb-1.5 flex items-center gap-2">
-        <span className="text-[10px] tracking-[0.16em]" style={{ color: INK.textFaint, fontFamily: FONT.mono }}>
+        <span className="text-[length:var(--step--2)] tracking-[0.16em]" style={{ color: INK.textFaint, fontFamily: FONT.mono }}>
           RESULT #{n}
         </span>
         <button
           onClick={() => setOpen((v) => !v)}
-          className="flex flex-1 cursor-pointer items-center gap-1.5 text-left text-[12.5px]"
+          className="flex flex-1 cursor-pointer items-center gap-1.5 text-left text-[length:var(--step--1)]"
           style={{ color: INK.text }}
         >
           <span className="truncate">{dataset.title}</span>
@@ -594,7 +594,7 @@ function ResultTable({ dataset, n, capped = true }:
                     {dataset.columns.map((c) => (
                       <th
                         key={c}
-                        className="px-3 py-2 text-left text-[10px] font-semibold tracking-widest whitespace-nowrap"
+                        className="px-3 py-2 text-left text-[length:var(--step--2)] font-semibold tracking-widest whitespace-nowrap"
                         style={{ color: INK.textFaint, fontFamily: FONT.mono }}
                       >
                         {c}
@@ -608,7 +608,7 @@ function ResultTable({ dataset, n, capped = true }:
                       {row.map((cell, ci) => (
                         <td
                           key={ci}
-                          className="px-3 py-1.5 text-[12px] whitespace-nowrap"
+                          className="px-3 py-1.5 text-[length:var(--step--1)] whitespace-nowrap"
                           style={
                             typeof cell === 'number'
                               ? {
@@ -633,7 +633,7 @@ function ResultTable({ dataset, n, capped = true }:
               style={{ borderTop: `1px solid ${INK.hairline}`, background: INK.sunken }}
             >
               <Database className="h-2.5 w-2.5" style={{ color: INK.textFaint }} />
-              <span className="text-[10px]" style={{ color: INK.textFaint, fontFamily: FONT.mono }}>
+              <span className="text-[length:var(--step--2)]" style={{ color: INK.textFaint, fontFamily: FONT.mono }}>
                 {dataset.source} · {dataset.rows.length} rows
               </span>
             </div>
@@ -666,13 +666,13 @@ function VisualCard({ visual }: { visual: AgentVisual }) {
         className="rounded-xl border p-4"
         style={{ borderColor: INK.hairline, background: INK.surface }}
       >
-        <p className="text-[11.5px]" style={{ color: INK.textSoft }}>
+        <p className="text-[length:var(--step--1a)]" style={{ color: INK.textSoft }}>
           {visual.title}
         </p>
         <div className="mt-3 space-y-2">
           {visual.series.map((s, i) => (
             <div key={s.label} className="flex items-center gap-2">
-              <span className="w-16 shrink-0 text-[11px]" style={{ color: INK.textFaint }}>
+              <span className="w-16 shrink-0 text-[length:var(--step--1a)]" style={{ color: INK.textFaint }}>
                 {s.label}
               </span>
               <div className="h-2 flex-1 overflow-hidden rounded-full" style={{ background: INK.sunken }}>
@@ -685,7 +685,7 @@ function VisualCard({ visual }: { visual: AgentVisual }) {
                 />
               </div>
               <span
-                className="w-16 shrink-0 text-right text-[11.5px]"
+                className="w-16 shrink-0 text-right text-[length:var(--step--1a)]"
                 style={{ color: INK.text, fontFamily: FONT.mono, fontVariantNumeric: 'tabular-nums' }}
               >
                 {compact(s.value)}
@@ -707,11 +707,11 @@ function VisualCard({ visual }: { visual: AgentVisual }) {
       className="rounded-xl border p-4"
       style={{ borderColor: INK.hairline, background: INK.surface }}
     >
-      <p className="text-[11.5px]" style={{ color: INK.textSoft }}>
+      <p className="text-[length:var(--step--1a)]" style={{ color: INK.textSoft }}>
         {visual.title}
       </p>
       {visual.subtitle && (
-        <p className="mt-0.5 text-[11px]" style={{ color: INK.textFaint }}>
+        <p className="mt-0.5 text-[length:var(--step--1a)]" style={{ color: INK.textFaint }}>
           {visual.subtitle}
         </p>
       )}
@@ -755,14 +755,14 @@ function SourceTag({ source, gate }: { source: string; gate: string }) {
   return (
     <div className="mt-3 flex items-center gap-1.5">
       <span
-        className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10.5px]"
+        className="inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[length:var(--step--2)]"
         style={{ background: INK.sunken, color: INK.textFaint, fontFamily: FONT.mono }}
       >
         <Database className="h-2.5 w-2.5" />
         {source}
       </span>
       {gate && (
-        <span className="text-[10.5px]" style={{ color: INK.textFaint }}>
+        <span className="text-[length:var(--step--2)]" style={{ color: INK.textFaint }}>
           via {gate}
         </span>
       )}
@@ -804,7 +804,7 @@ function statements(text: string): string[] {
 function Finding({ sections, answer }: { sections: AgentSection[]; answer: string }) {
   if (!sections?.length) {
     return (
-      <p className="text-[14px] leading-[1.7]" style={{ color: INK.text }}>
+      <p className="text-[length:var(--step--0a)] leading-[1.7]" style={{ color: INK.text }}>
         <Rich text={answer} />
       </p>
     );
@@ -816,7 +816,7 @@ function Finding({ sections, answer }: { sections: AgentSection[]; answer: strin
   const single = sections.length === 1 && sections[0].kind !== 'findings';
   if (single) {
     return (
-      <p className="text-[14.5px] leading-[1.75]" style={{ color: INK.text }}>
+      <p className="text-[length:var(--step--0a)] leading-[1.75]" style={{ color: INK.text }}>
         <Rich text={sections[0].text} />
       </p>
     );
@@ -836,12 +836,12 @@ function Finding({ sections, answer }: { sections: AgentSection[]; answer: strin
           >
             <div className="mb-1.5 flex items-center gap-2">
               <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: accent }} />
-              <h4 className="text-[14px]" style={{ color: accent, fontFamily: FONT.display }}>
+              <h4 className="text-[length:var(--step--0a)]" style={{ color: accent, fontFamily: FONT.display }}>
                 {section.label}
               </h4>
               {section.source && (
                 <span
-                  className="ml-auto inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px]"
+                  className="ml-auto inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[length:var(--step--2)]"
                   style={{ background: INK.sunken, color: INK.textFaint, fontFamily: FONT.mono }}
                 >
                   <Database className="h-2.5 w-2.5" />
@@ -850,7 +850,7 @@ function Finding({ sections, answer }: { sections: AgentSection[]; answer: strin
               )}
             </div>
             {!asBullets && (
-              <p className="text-[14px] leading-[1.75]" style={{ color: INK.textSoft }}>
+              <p className="text-[length:var(--step--0a)] leading-[1.75]" style={{ color: INK.textSoft }}>
                 <Rich text={section.text} />
               </p>
             )}
@@ -858,7 +858,7 @@ function Finding({ sections, answer }: { sections: AgentSection[]; answer: strin
               {statements(section.text).map((point, pi) => (
                 <li
                   key={pi}
-                  className="relative text-[14px] leading-[1.75]"
+                  className="relative text-[length:var(--step--0a)] leading-[1.75]"
                   style={{ color: INK.textSoft }}
                 >
                   <span
@@ -965,7 +965,7 @@ function AgentConsole({
             <section className={`${pad} pt-5`}>
               <button
                 onClick={() => setShowCalls((v) => !v)}
-                className="mb-2 flex cursor-pointer items-center gap-1.5 text-[10px] tracking-[0.2em] uppercase"
+                className="mb-2 flex cursor-pointer items-center gap-1.5 text-[length:var(--step--2)] tracking-[0.2em] uppercase"
                 style={{ color: INK.textFaint, fontFamily: FONT.sans }}
               >
                 {toolSteps.length} {toolSteps.length === 1 ? 'call' : 'calls'}
@@ -1010,7 +1010,7 @@ function AgentConsole({
               <div className="flex items-center gap-2">
                 {verified && <ShieldCheck className="h-3.5 w-3.5" style={{ color: INK.positive }} />}
                 <span
-                  className="text-[10px] tracking-[0.16em] uppercase"
+                  className="text-[length:var(--step--2)] tracking-[0.16em] uppercase"
                   style={{ color: INK.textFaint, fontFamily: FONT.sans }}
                 >
                   Confidence
@@ -1028,7 +1028,7 @@ function AgentConsole({
                   />
                 </div>
                 <span
-                  className="text-[11.5px]"
+                  className="text-[length:var(--step--1a)]"
                   style={{ color: INK.text, fontFamily: FONT.mono, fontVariantNumeric: 'tabular-nums' }}
                 >
                   {Math.round(confidence * 100)}%
@@ -1037,7 +1037,7 @@ function AgentConsole({
               {uncertainty.length > 0 && (
                 <ul className="mt-1.5 space-y-0.5">
                   {uncertainty.map((u) => (
-                    <li key={u} className="text-[10.5px]" style={{ color: INK.textFaint }}>
+                    <li key={u} className="text-[length:var(--step--2)]" style={{ color: INK.textFaint }}>
                      , {u}
                     </li>
                   ))}
@@ -1057,12 +1057,12 @@ function AgentConsole({
                 transition={running ? { duration: 1.3, repeat: Infinity } : undefined}
               />
               <span
-                className="text-[10px] tracking-[0.2em] uppercase"
+                className="text-[length:var(--step--2)] tracking-[0.2em] uppercase"
                 style={{ color: INK.textSoft, fontFamily: FONT.sans }}
               >
                 Insight workspace
               </span>
-              <span className="ml-auto text-[10px]" style={{ color: INK.textFaint, fontFamily: FONT.mono }}>
+              <span className="ml-auto text-[length:var(--step--2)]" style={{ color: INK.textFaint, fontFamily: FONT.mono }}>
                 {datasets.length} results · {visuals.length} charts
               </span>
             </div>

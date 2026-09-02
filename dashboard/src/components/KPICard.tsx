@@ -73,7 +73,7 @@ function KPICard({ metric, spark = [] }: { metric: KPIMetric; spark?: SeriesPoin
     <div id={`kpi-card-${metric.id}`} className="surface lift-card p-5">
       <div className="mb-3.5 flex items-center gap-2.5">
         <span className="icon-tile"><Icon className="h-[15px] w-[15px]" /></span>
-        <span className="min-w-0 flex-1 truncate text-[10.5px] font-semibold uppercase tracking-[0.13em] text-slate-500">
+        <span className="min-w-0 flex-1 truncate text-[length:var(--step--2)] font-semibold uppercase tracking-[0.13em] text-slate-500">
           {metric.label}
         </span>
         {metric.simulated && (
@@ -91,7 +91,7 @@ function KPICard({ metric, spark = [] }: { metric: KPIMetric; spark?: SeriesPoin
 
       <div className="flex items-center gap-4">
         <Spark points={spark} colour={good ? 'var(--brand)' : 'var(--fall)'} />
-        <span className={`delta shrink-0 text-[12.5px] font-medium ${good ? 'delta-up' : 'delta-down'}`}
+        <span className={`delta shrink-0 text-[length:var(--step--1)] font-medium ${good ? 'delta-up' : 'delta-down'}`}
               style={{ color: colour }}>
           <Arrow className="h-3.5 w-3.5" />
           {metric.change}%

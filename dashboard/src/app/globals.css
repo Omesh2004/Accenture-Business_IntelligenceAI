@@ -255,9 +255,17 @@ h4 { font-weight: 600; letter-spacing: -0.006em; }
    the other way -- tighter as type grows -- because a display line needs less leading to hold
    together, and body needs 1.618 to stay readable. */
 :root {
-  --step--2: 0.618rem;   /* 9.9px  — micro labels           */
-  --step--1: 0.786rem;   /* 12.6px — captions, eyebrow       */
-  --step-0:  1rem;       /* 16px   — body                    */
+  /* The UI range needs finer rungs than phi alone provides. Between 12.6px and 16px there was
+     nothing, so every dense component invented its own value and the page ended up carrying
+     seventeen different sizes. These are still one geometric progression -- the fourth root of
+     phi, 1.1279, between each -- so the small end stays a golden-ratio scale rather than a set
+     of numbers chosen to look about right. */
+  --step--3: 0.548rem;   /* 8.8px  — the smallest legible label */
+  --step--2: 0.618rem;   /* 9.9px  — micro labels, chips        */
+  --step--1a: 0.697rem;  /* 11.2px — dense table and axis text  */
+  --step--1: 0.786rem;   /* 12.6px — captions, eyebrow          */
+  --step--0a: 0.887rem;  /* 14.2px — secondary body, controls   */
+  --step-0:  1rem;       /* 16px   — body, prose                */
   --step-1:  1.272rem;   /* 20.4px — lead, card titles       */
   --step-2:  1.618rem;   /* 25.9px — h3                      */
   --step-3:  2.058rem;   /* 32.9px — h2                      */
