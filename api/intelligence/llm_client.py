@@ -42,10 +42,13 @@ def _budget(prompt: str, want: int) -> int:
     Four characters per token is deliberately pessimistic for English prose, so the estimate
     errs towards asking for less rather than being refused.
     """
-    if not _context_len:
-        return want
+    # A server that does not publish its window still HAS one, and Ollama's default is 2048.
+    # vLLM refuses an over-long request outright, which is loud; Ollama truncates the prompt
+    # silently, which is worse -- the narrator would phrase a claim set with the middle cut out
+    # and never know. Assume the conservative default rather than asking for whatever we like.
+    context = _context_len or config.LLM_ASSUMED_CONTEXT
     used = len(prompt) // 4
-    room = _context_len - used - 64          # a margin for the chat template's own tokens
+    room = context - used - 64               # a margin for the chat template's own tokens
     return max(64, min(want, room))
 
 
