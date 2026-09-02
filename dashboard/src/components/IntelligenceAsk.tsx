@@ -114,10 +114,10 @@ function IntelligenceAsk({
       {/* The one card on this page asking to be used, so it gets the attention treatment: a
           border that runs, and the hero's wave underneath. */}
       <div className="attention">
-       <div className="attention-inner p-5">
+       <div className="attention-inner on-brand p-5">
         <div className="flex flex-wrap items-center gap-3">
-          <Sparkles className="h-4 w-4" style={{ color: INK.accent }} />
-          <span className="text-[length:var(--step--1)] font-semibold" style={{ color: INK.text }}>
+          <Sparkles className="h-4 w-4 text-white" />
+          <span className="text-[length:var(--step--1)] font-semibold text-white">
             Ask the analyst
           </span>
           {/* Hidden while the overlay is up. The conversation carries its own switcher, and two
@@ -140,8 +140,9 @@ function IntelligenceAsk({
           {restored > 0 && (
             <button
               onClick={() => launch('')}
-              className="ml-auto flex cursor-pointer items-center gap-1.5 rounded-full border px-3 py-1.5 text-[length:var(--step--1)]"
-              style={{ borderColor: INK.hairline, color: INK.textSoft }}
+              className="ml-auto flex cursor-pointer items-center gap-1.5 rounded-full border
+                         border-white/35 bg-white/10 px-3 py-1.5 text-[length:var(--step--1)]
+                         text-white backdrop-blur-sm transition-colors hover:bg-white/20"
             >
               <MessageSquare className="h-3.5 w-3.5" />
               Resume conversation ({restored})
@@ -150,9 +151,10 @@ function IntelligenceAsk({
         </div>
 
         {activeProfile && (
-          <p data-testid="answering-as" className="mt-2.5 text-[length:var(--step--1)]" style={{ color: INK.textFaint }}>
+          <p data-testid="answering-as"
+             className="mt-2.5 text-[length:var(--step--1)] text-white/70">
             Answering as{' '}
-            <span style={{ color: INK.textSoft, fontWeight: 600 }}>{activeProfile.label}</span> ·{' '}
+            <span className="font-semibold text-white">{activeProfile.label}</span> ·{' '}
             {activeProfile.remit}
           </p>
         )}
@@ -163,8 +165,8 @@ function IntelligenceAsk({
             const value = (new FormData(e.currentTarget).get('q') as string) || '';
             if (value.trim()) launch(value);
           }}
-          className="mt-4 flex items-center gap-2 rounded-2xl border px-4 py-2.5"
-          style={{ borderColor: INK.hairlineStrong, background: INK.canvas }}
+          className="mt-4 flex items-center gap-2 rounded-2xl border border-white/25 px-4 py-2.5"
+          style={{ background: '#fff' }}
         >
           <input
             name="q"

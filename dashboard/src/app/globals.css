@@ -746,6 +746,32 @@ button:disabled,
 /* Content sits above the wave. */
 .attention-inner > * { position: relative; z-index: 1; }
 
+/* The saturated variant: the same card carrying the hero's own gradient rather than a wash of it.
+
+   A modifier rather than a change to `.attention-inner`, because the chat composer borrows that
+   class while the agent is working and has to stay white -- a text field you are typing into
+   cannot be dark. */
+.attention-inner.on-brand {
+  background-image: var(--hero-grad);
+  background-color: var(--brand-strong);   /* the floor, so it is never colourless */
+  color: #fff;
+}
+/* The wave reads as texture on a deep ground, so it carries harder here than on the pale card. */
+.attention-inner.on-brand::before {
+  opacity: 0.5;
+  mix-blend-mode: soft-light;
+}
+
+/* The persona pill sits on the deep ground here. Its own colours are set inline by the shared
+   Select, which nothing but `!important` can reach -- and the shared component must keep its
+   pale-ground styling for every other place it appears. */
+.attention-inner.on-brand button[data-testid='persona-select'] {
+  background: #fff !important;
+  border-color: transparent !important;
+  color: var(--brand-strong) !important;
+}
+.attention-inner.on-brand button[data-testid='persona-select'] svg { color: var(--brand) !important; }
+
 /* Without @property the angle cannot animate, so the gradient would sit still at 0deg and read
    as a lopsided border. Fall back to a fixed brand edge, which is honest and quiet. */
 /* Without @property the angle cannot animate, so the gradient would sit still and read as a

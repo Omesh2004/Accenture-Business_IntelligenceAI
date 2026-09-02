@@ -110,8 +110,11 @@ export default function MetricTable(
         <thead>
           <tr className="border-b border-slate-100 text-[length:var(--step--2)] font-semibold uppercase
                          tracking-[0.13em] text-slate-500">
-            <th className="w-[32%] px-6 py-3.5 text-left font-semibold">Metric</th>
-            <th className="w-[15%] px-3 py-3.5 text-right font-semibold">Current</th>
+            <th className="w-[28%] px-6 py-3.5 text-left font-semibold">Metric</th>
+            {/* Centred, not right-aligned. Pushed to the right edge of its cell the reading sat
+                as far from the label it belongs to as the column allowed, opening a gap wide
+                enough to read as an empty column. */}
+            <th className="w-[13%] px-3 py-3.5 text-center font-semibold">Current</th>
             {/* The trend column takes whatever is left, so the line always spans the cell. */}
             <th className="px-6 py-3.5 text-center font-semibold">Trend (last {days} days)</th>
             <th className="w-[15%] px-6 py-3.5 text-right font-semibold">Change</th>
