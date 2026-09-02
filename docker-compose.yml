@@ -79,9 +79,7 @@ services:
   # ═══════════════════════════════════════════════════════════
 
   migrate:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: omesh2004/nucleus-python-backend:latest
     depends_on:
       clickhouse:
         condition: service_healthy
@@ -97,9 +95,7 @@ services:
   # ═══════════════════════════════════════════════════════════
 
   ingestion-api:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: omesh2004/nucleus-python-backend:latest
     depends_on:
       broker:
         condition: service_healthy
@@ -119,9 +115,7 @@ services:
     restart: unless-stopped
 
   processor-worker:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: omesh2004/nucleus-python-backend:latest
     depends_on:
       init-kafka:
         condition: service_completed_successfully
@@ -165,9 +159,7 @@ services:
     restart: unless-stopped
 
   intelligence:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: omesh2004/nucleus-python-backend:latest
     depends_on:
       clickhouse:
         condition: service_healthy
@@ -185,7 +177,7 @@ services:
       - EXTRACT_API_URL=http://nexabank-backend:5000/api
       - EXTRACT_API_TOKEN=${EXTRACT_API_TOKEN:-local-dev-extract-token}
       - INTELLIGENCE_LLM=${INTELLIGENCE_LLM:-1}
-      - VLLM_URL=http://vllm-server:8000/v1
+      - VLLM_URL=http://ollama:11434/v1
       - METRIC_API_URL=http://analytics-api:8001
     volumes:
       - ./api:/app/api
@@ -194,9 +186,7 @@ services:
     restart: unless-stopped
 
   analytics-api:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: omesh2004/nucleus-python-backend:latest
     depends_on:
       clickhouse:
         condition: service_healthy
@@ -208,10 +198,11 @@ services:
       - CLICKHOUSE_HOST=clickhouse
       - CLICKHOUSE_USER=default
       - CLICKHOUSE_PASSWORD=clickhouse
-      - VLLM_URL=http://vllm-server:8000/v1
+      - VLLM_URL=http://ollama:11434/v1
       - INTELLIGENCE_LLM=${INTELLIGENCE_LLM:-1}
       - METRIC_API_TENANTS=${METRIC_API_TENANTS:-nexabank}
     volumes:
+      - ./api:/app/api:ro
       # Contracts are configuration, not code: both readers must see the same file.
       - ./contracts:/app/contracts:ro
     # Phase 4: the Metric API is the doorway. Phase 5 folds the dashboard + /intelligence/*
@@ -220,11 +211,31 @@ services:
     restart: unless-stopped
 
   # ═══════════════════════════════════════════════════════════
-  # vLLM High-Throughput Inference Server
+  # Ollama-backed local model server (OpenAI-compatible /v1)
   # ═══════════════════════════════════════════════════════════
 
+  ollama:
+    image: omesh2004/ollama-fininsights:latest
+    container_name: fininsights-ollama
+    ports:
+      - "11434:11434"
+    environment:
+      - OLLAMA_HOST=0.0.0.0
+      - OLLAMA_KEEP_ALIVE=24h
+      - OLLAMA_NUM_PARALLEL=4
+    volumes:
+      - ollama_data:/root/.ollama
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  # Legacy vLLM block kept for reference, but the app default now targets the Ollama service.
   vllm-server:
-    # Opt-in: needs an NVIDIA GPU. `docker compose --profile gpu up vllm-server`
     profiles: ["gpu"]
     image: vllm/vllm-openai:latest
     container_name: fininsights-vllm
@@ -237,19 +248,10 @@ services:
       - .env
     environment:
       - HF_TOKEN=${HF_TOKEN}
-      # Pin the weights instead of letting free VRAM choose a tier. Empty = auto-select.
       - VLLM_MODEL=${VLLM_MODEL:-}
       - VLLM_MAX_LEN=${VLLM_MAX_LEN:-}
       - VLLM_GPU_UTIL=${VLLM_GPU_UTIL:-}
-      # vLLM's CUDA platform disables pinned memory on WSL2 by default. Its V1 GPU model runner
-      # then cannot build a UVA buffer and the engine dies with "UVA is not available" before
-      # loading a single weight. Pinned memory does work on WSL2 kernels >= 4.19.121, which is
-      # every current one; this opts back in. Harmless on native Linux, where the WSL branch is
-      # never taken.
       - VLLM_WSL2_ENABLE_PIN_MEMORY=${VLLM_WSL2_ENABLE_PIN_MEMORY:-1}
-      # huggingface_hub's Xet transfer path fails mid-download behind some networks with
-      # "CAS Client Error: Request middleware error", and the engine dies before loading a weight.
-      # Plain HTTPS is slower on a cold pull and survives a flaky link.
       - HF_HUB_DISABLE_XET=${HF_HUB_DISABLE_XET:-1}
     deploy:
       resources:
@@ -266,9 +268,7 @@ services:
   # ═══════════════════════════════════════════════════════════
 
   dashboard:
-    build:
-      context: ./dashboard
-      dockerfile: Dockerfile
+    image: omesh2004/nucleus-dashboard:latest
     container_name: fininsights-dashboard
     ports:
       - "3001:3001"
@@ -297,9 +297,7 @@ services:
   # ═══════════════════════════════════════════════════════════
 
   nexabank-backend:
-    build:
-      context: ./nexabank/backend
-      dockerfile: Dockerfile
+    image: omesh2004/nexabank-backend:latest
     container_name: nexabank-backend
     ports:
       - "5000:5000"
@@ -323,9 +321,7 @@ services:
     restart: unless-stopped
 
   nexabank-frontend:
-    build:
-      context: ./nexabank/frontend
-      dockerfile: Dockerfile
+    image: omesh2004/nexabank-frontend:latest
     container_name: nexabank-frontend
     ports:
       - "3002:3002"
@@ -349,11 +345,7 @@ services:
   #   docker compose --profile tools run --rm tools python scripts/seed_data.py
   tools:
     profiles: ["tools"]
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        INSTALL_DEV: "1"
+    image: omesh2004/nucleus-python-backend:latest
     depends_on:
       clickhouse:
         condition: service_healthy
@@ -398,4 +390,6 @@ volumes:
   zookeeper_logs:
     driver: local
   vllm_data:
+    driver: local
+  ollama_data:
     driver: local

@@ -15,7 +15,7 @@ from datetime import date, datetime, timedelta
 
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
@@ -24,12 +24,29 @@ from api.metric_api import reads
 from api.contracts_loader import all_kpi_ids, KPI_REGISTRY, load_declared
 from api.middleware import resolve_persona, selectable_personas, filter_revenue, hidden_kpis
 from api.schemas import OutcomeRequest, AskRequest
+from api.websocket_manager import manager, start_websocket_background_tasks
 
 TENANT_DEFAULT = os.environ.get("DASHBOARD_TENANT", "nexabank")
 
 app = FastAPI(title="FinInsights Dashboard API")
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_methods=["*"], allow_headers=["*"])
 app.include_router(metric_router)
+
+
+@app.on_event("startup")
+async def on_startup():
+    await start_websocket_background_tasks()
+
+
+@app.websocket("/ws/dashboard/{tenant_id}")
+async def websocket_endpoint(websocket: WebSocket, tenant_id: str):
+    await manager.connect(websocket, tenant_id)
+    try:
+        while True:
+            await websocket.receive_text()
+    except WebSocketDisconnect:
+        manager.disconnect(websocket, tenant_id)
+
 
 
 def _tenant(tenants: str | None) -> str:

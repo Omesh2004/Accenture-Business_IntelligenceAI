@@ -1,0 +1,6 @@
+FROM ollama/ollama:latest
+
+# Run Ollama in background during docker build and pre-fetch qwen2.5:3b-instruct
+RUN ollama serve & \
+    sleep 5 && \
+    ollama pull qwen2.5:3b-instruct

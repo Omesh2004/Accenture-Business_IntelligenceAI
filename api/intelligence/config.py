@@ -102,6 +102,7 @@ VERIFIER_TOLERANCE = _f("INTEL_VERIFIER_TOLERANCE", 0.01)
 # --- llm (optional; the layer is complete without it) -----------------------
 LLM_ENABLED = _s("INTELLIGENCE_LLM", "0") == "1"
 LLM_BASE_URL = _s("VLLM_URL", "http://vllm-server:8000/v1")
+LLM_API_KEY = _s("LLM_API_KEY", _s("GROQ_API_KEY", ""))
 # Empty means "ask the server what it serves" -- no model name is assumed anywhere.
 LLM_MODEL = _s("INTEL_LLM_MODEL", "")
 LLM_MAX_ATTEMPTS = _i("INTEL_LLM_MAX_ATTEMPTS", 2)

@@ -49,6 +49,13 @@ def _budget(prompt: str, want: int) -> int:
     return max(64, min(want, room))
 
 
+def _headers() -> dict[str, str]:
+    h = {"Content-Type": "application/json"}
+    if getattr(config, "LLM_API_KEY", ""):
+        h["Authorization"] = f"Bearer {config.LLM_API_KEY}"
+    return h
+
+
 def available() -> tuple[bool, str]:
     """(usable, model). Probed once per process; a missing server is a normal state, not an error."""
     global _probe, _context_len
@@ -58,10 +65,10 @@ def available() -> tuple[bool, str]:
         _probe = (False, "")
         return _probe
     try:
-        req = urllib.request.Request(f"{config.LLM_BASE_URL}/models", method="GET")
+        req = urllib.request.Request(f"{config.LLM_BASE_URL}/models", headers=_headers(), method="GET")
         # Short on purpose. This runs on the first request of a fresh process, and a server that
         # is down should cost a moment, not the five seconds the reader sees as the agent thinking.
-        probe_timeout = min(config.LLM_DISCOVERY_TIMEOUT_S, 1.5)
+        probe_timeout = config.LLM_DISCOVERY_TIMEOUT_S
         with urllib.request.urlopen(req, timeout=probe_timeout) as resp:
             models = (json.loads(resp.read().decode("utf-8")) or {}).get("data") or []
         model = config.LLM_MODEL or (models[0].get("id") if models else "")
@@ -105,7 +112,7 @@ def complete_text(prompt: str, max_tokens: int | None = None,
         req = urllib.request.Request(
             f"{config.LLM_BASE_URL}/chat/completions",
             data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"}, method="POST")
+            headers=_headers(), method="POST")
         with urllib.request.urlopen(req, timeout=config.LLM_TIMEOUT_S) as resp:
             body = json.loads(resp.read().decode("utf-8"))
         content = (body.get("choices") or [{}])[0].get("message", {}).get("content", "") or ""
@@ -143,7 +150,7 @@ def complete_json(prompt: str, max_tokens: int | None = None,
         req = urllib.request.Request(
             f"{config.LLM_BASE_URL}/chat/completions",
             data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"}, method="POST")
+            headers=_headers(), method="POST")
         with urllib.request.urlopen(req, timeout=config.LLM_TIMEOUT_S) as resp:
             body = json.loads(resp.read().decode("utf-8"))
         content = (body.get("choices") or [{}])[0].get("message", {}).get("content", "")
