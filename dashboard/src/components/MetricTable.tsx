@@ -134,7 +134,7 @@ export default function MetricTable(
                            hover:bg-slate-50/70"
               >
                 <td className="truncate px-6 py-4 text-[length:var(--step--1)] text-slate-700">{k.label}</td>
-                <td className="num px-3 py-4 text-right text-[length:var(--step--0a)] font-semibold text-slate-900">
+                <td className="num px-3 py-4 text-center text-[length:var(--step--0a)] font-semibold text-slate-900">
                   {pts.length ? fmt(k.unit, now) : '--'}
                 </td>
                 <td className="px-6 py-4 align-middle">

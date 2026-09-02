@@ -77,11 +77,12 @@ REGISTRY: dict[str, Persona] = {
         kpi_preference=("revenue", "loan_approval_volume"),
         # Money broken into its lines, and where it is heading.
         chain_bias=("factor", "forecast", "action"),
-        examples=("Which metric moved most this week?",
-                  "What drove the change in revenue?",
+        # Openers, not follow-ups. Every one names a metric and stands on its own, because on a
+        # fresh conversation there is nothing for "this figure" or "this analysis" to refer to --
+        # and examples[0] is also offered bare as "Try: ..." when a question cannot be answered.
+        examples=("What drove the change in revenue?",
                   "What does the forecast say for revenue?",
-                  "How reliable is the revenue figure?",
-                  "What did this analysis cost to produce?"),
+                  "Which metric moved most this week?"),
         max_tools_per_round=2, max_rounds=2, detail="summary",
     ),
     "ops_manager": Persona(
@@ -106,10 +107,8 @@ REGISTRY: dict[str, Persona] = {
         # Where it leaked, and the lever that closes it.
         chain_bias=("cause", "action"),
         examples=("Why did KYC completion rate fall?",
-                  "Where is the drop concentrated?",
-                  "What action is recommended, and who owns it?",
-                  "Is the loan approval volume reliable enough to act on?",
-                  "How current is the data behind this?"),
+                  "Where is the KYC drop concentrated by segment?",
+                  "What action is recommended for KYC completion, and who owns it?"),
         max_tools_per_round=3, max_rounds=3, detail="standard",
     ),
     "analyst": Persona(
@@ -130,10 +129,7 @@ REGISTRY: dict[str, Persona] = {
         # The path, the attribution and how it was arrived at.
         chain_bias=("trend", "cause", "factor", "trust"),
         examples=("Why did KYC completion rate fall, and where is it concentrated?",
-                  "Was the change price, volume or mix?",
                   "Show the forecast band for transaction failure rate.",
-                  "How reliable is this figure, and which checks passed?",
-                  "What did this analysis cost in tokens and latency?",
                   "Which KPIs do you track?"),
         max_tools_per_round=4, max_rounds=3, detail="full",
     ),
@@ -159,10 +155,8 @@ REGISTRY: dict[str, Persona] = {
         # Exposure, and whether the finding is provable.
         chain_bias=("cause", "trust", "action"),
         examples=("Why did KYC completion rate fall?",
-                  "Is the loan approval rate verified and safe to act on?",
-                  "Where is the KYC drop concentrated by segment?",
-                  "What control action is recommended for loan approvals?",
-                  "How current is the data behind these figures?"),
+                  "Is the loan approval volume verified and safe to act on?",
+                  "What control action is recommended for loan approvals?"),
         max_tools_per_round=3, max_rounds=3, detail="full",
     ),
 }

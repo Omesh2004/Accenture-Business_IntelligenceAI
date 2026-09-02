@@ -662,7 +662,7 @@ function ChatSurface({
               questions sits between the reader and the thing they asked for, and reads as part
               of the answer rather than as a prompt. Follow-ups live under the answer instead. */}
           {messages.length === 0 && !running && suggestions.length > 0 && (
-            <div className="mb-3 flex flex-wrap gap-1.5">
+            <div className="mb-3 flex flex-wrap justify-center gap-1.5">
               {suggestions.map((s, i) => (
                 <motion.button
                   key={s}
@@ -694,7 +694,7 @@ function ChatSurface({
               boxShadow: '0 1px 2px rgba(18,19,26,.04), 0 8px 28px rgba(18,19,26,.06)',
             }}
           >
-           <div className={running ? 'attention-inner !rounded-[22px]' : ''}>
+           <div className={running ? 'attention-plain !rounded-[22px]' : ''}>
             <textarea
               ref={inputRef}
               value={question}

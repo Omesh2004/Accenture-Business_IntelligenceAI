@@ -727,7 +727,6 @@ button:disabled,
    coloured. */
 .attention-inner {
   position: relative;
-  overflow: hidden;
   border-radius: 16px;
   /* Tinted toward the brand rather than plain white, so the card reads as coloured even where
      the wave behind it is faint. */
@@ -740,11 +739,25 @@ button:disabled,
   background-image: image-set(url('/dashboard-card-overlay.png') 1x);
   background-size: cover;
   background-position: center right;
+  border-radius: inherit;    /* clips itself, so the card need not clip its children */
   opacity: 0.22;
   pointer-events: none;
 }
-/* Content sits above the wave. */
-.attention-inner > * { position: relative; z-index: 1; }
+/* Content sits above the wave.
+
+   Deliberately no z-index: setting one made every child its own stacking context, so the persona
+   list's z-50 was trapped inside the header and the input below it painted on top. Positioned
+   children with z-index auto paint in DOM order, which already puts them above the pseudo. */
+.attention-inner > * { position: relative; }
+
+/* Border only, no wave and no tint: what the chat composer wants while the agent is working.
+   The decorated inner turned the field lavender, and a field you are typing into has to stay a
+   plain white ground. */
+.attention-plain {
+  position: relative;
+  border-radius: 16px;
+  background: #fff;
+}
 
 /* The saturated variant: the same card carrying the hero's own gradient rather than a wash of it.
 
