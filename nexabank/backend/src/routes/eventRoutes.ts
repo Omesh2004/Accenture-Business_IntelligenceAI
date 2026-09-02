@@ -30,7 +30,6 @@ const TENANT_ALIAS_MAP: Record<string, string> = { bank_a: "nexabank" };
 const GLOBAL_ANALYTICS_TENANTS = "nexabank";
 const GLOBAL_LOCAL_TENANTS = ["bank_a"];
 
-
 function toAnalyticsTenant(tenantId: string): string {
   const key = String(tenantId || "").toLowerCase();
   return TENANT_ALIAS_MAP[key] || key;
