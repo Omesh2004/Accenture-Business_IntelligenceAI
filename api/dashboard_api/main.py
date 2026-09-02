@@ -120,14 +120,19 @@ def intelligence_personas(request: Request):
 
 @app.get("/intelligence/insight")
 def intelligence_insight(request: Request, tenants: str = Query(None),
-                         kpi_id: str = Query(None), persona: str = Query(None)):
+                         kpi_id: str = Query(None), persona: str = Query(None),
+                         days: int = Query(0, ge=0, le=365)):
     tenant = _tenant(tenants)
     p = resolve_persona(request, persona)
     if kpi_id and kpi_id in hidden_kpis(p):
         raise HTTPException(status_code=403, detail=f"persona {p!r} may not view {kpi_id!r}")
     # Never select a finding this reader may not see. Filtering the response after the
     # fact left the metric's name in the headline and narrative.
-    row = _reader().latest_insight(tenant, p, kpi_id,
+    #
+    # `days` scopes the pick to the window on screen. Without it the reader ranked across every
+    # window at once, and a 90-day finding from June outranked the 30-day one from August on
+    # materiality -- so the evidence page ignored the header dropdown and showed a stale window.
+    row = _reader().latest_insight(tenant, p, kpi_id, days or None,
                                    exclude_kpis=tuple(hidden_kpis(p)))
     body = {"tenant_id": tenant, "persona": p,
             "insight": row or None,

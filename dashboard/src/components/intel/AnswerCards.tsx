@@ -49,6 +49,23 @@ function bullets(section?: AgentSection): string[] {
     .filter(Boolean);
 }
 
+/**
+ * The action text, as one card per proposed action.
+ *
+ * The agent sends the whole recommendation as prose ending in the standing disclaimer, and
+ * splitting that on sentence boundaries turned "Nothing is executed automatically." into an
+ * action card of its own -- sitting beside a real action, under a footer already saying it.
+ * The lead-in goes too: the heading asks what to do and the footer says it is a proposal, so
+ * "Proposed, pending approval:" repeats both.
+ */
+function actions(section?: AgentSection): string[] {
+  return bullets(section)
+    .filter((b) => !/^Nothing is executed automatically\.?$/i.test(b))
+    .map((b) => b.replace(/^Proposed, pending approval:\s*/i, ''))
+    .map((b) => (b ? b[0].toUpperCase() + b.slice(1) : b))
+    .filter(Boolean);
+}
+
 function Card({
   icon: Icon, title, tone = 'brand', children, delay = 0,
 }: {
@@ -183,7 +200,7 @@ export default function AnswerCards(
             <ClipboardCheck className="h-3.5 w-3.5 text-slate-300" />
           </span>
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
-            {bullets(action).map((b, i) => (
+            {actions(action).map((b, i) => (
               <div key={i}
                    className="flex gap-3 rounded-xl border border-slate-100 bg-slate-50/60 p-4">
                 <span className="icon-tile shrink-0"><TrendingUp className="h-[14px] w-[14px]" /></span>

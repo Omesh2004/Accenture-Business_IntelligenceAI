@@ -77,15 +77,20 @@ def latest_insight(tenant_id: str, persona: str = "analyst",
         # was meant to withhold, and the missing id crashed the page that rendered it.
         + ("  AND kpi_id NOT IN %(x)s " if exclude_kpis else "")
         + ") AS i LEFT JOIN ("
-          f"  SELECT anomaly_id, max(materiality) AS materiality, max(detected_at) AS detected_at "
+          f"  SELECT anomaly_id, max(materiality) AS materiality, max(detected_at) AS detected_at, "
+          f"         max(window_start) AS window_start "
           f"  FROM {DB}.anomalies FINAL WHERE tenant_id = %(t)s "
           "  GROUP BY anomaly_id"
           ") AS a USING (anomaly_id) "
           # Liveness first. A re-sweep writes a NEW anomaly id, so the row it supersedes stays in
           # the table; ranked on materiality alone the superseded one could win, and the agent
           # went on quoting the previous run's window after the data had already moved on.
+          # `detected_at` is the sweep time and is day-grain, so every anomaly found in the same
+          # sweep ties on it and materiality decided instead -- which let a June window outrank
+          # an August one. The window's own start is the real recency signal, so it ranks first.
           "ORDER BY (i.anomaly_id != '' AND a.detected_at > toDateTime(0)) DESC, "
-          "i.kpi_id IN %(declared)s DESC, a.detected_at DESC, a.materiality DESC, "
+          "i.kpi_id IN %(declared)s DESC, a.window_start DESC, a.detected_at DESC, "
+          "a.materiality DESC, "
           "i.generated_at DESC, i.confidence DESC, i.insight_id ASC LIMIT 1"
     )
     params = {"t": tenant_id, "p": persona, "declared": declared}

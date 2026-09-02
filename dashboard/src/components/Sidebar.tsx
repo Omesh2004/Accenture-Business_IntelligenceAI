@@ -70,10 +70,19 @@ function Sidebar() {
             nearest positioned ancestor, and an inline span has no box for it to fill. */}
         <Image src="/logo1.png" alt="FinInsights" width={36} height={36} priority
                className="h-9 w-9 shrink-0 object-contain" />
+        {/* The wordmark is painted through the text. The fallback colour matters: if a browser
+            drops background-clip the wordmark would otherwise render fully transparent. */}
         {!sidebarCollapsed && (
           <span className="text-[length:var(--step-1)] font-semibold tracking-[-0.02em]"
-                style={{ color: 'var(--rail-text-strong)' }}>
-            <span style={{ color: 'var(--brand-bright)' }}>Fin</span>Insights
+                style={{
+                  color: 'var(--rail-text-strong)',
+                  backgroundImage:
+                    'linear-gradient(100deg, var(--brand) 0%, #a78bfa 55%, #ffffff 100%)',
+                  WebkitBackgroundClip: 'text',
+                  backgroundClip: 'text',
+                  WebkitTextFillColor: 'transparent',
+                }}>
+                FinInsights
           </span>
         )}
       </Link>

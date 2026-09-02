@@ -125,7 +125,9 @@ def _waterfall(data: dict, claims: list[dict]) -> dict | None:
     return {
         "kind": "waterfall",
         "title": "How the drivers add up",
-        "subtitle": "from the expected level to the observed one",
+        # Says the unit. The rail shows these same contributions as a share of the movement, so
+        # without it the two panels look like two different sets of numbers for one finding.
+        "subtitle": "in the metric's own units, from the expected level to the observed one",
         "unit": data.get("measure") or "",
         "series": steps,
         "source": "root_causes",
