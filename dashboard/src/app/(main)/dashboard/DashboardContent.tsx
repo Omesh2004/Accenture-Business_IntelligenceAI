@@ -49,9 +49,10 @@ export default function DashboardContent() {
       </section>
 
       <section className="rise" id="kpi-trends" aria-label="How each KPI moved">
-        <h3 className="mb-1">How each KPI moved</h3>
-        <p className="mb-3.5 text-[12.5px] text-slate-400">
-          Daily, over the last {rangeDays} days, against the range each was scored on.
+        <h3 className="mb-1">What moved most</h3>
+        <p className="mb-4 text-[12.5px] text-slate-400">
+          The three metrics furthest from where they were expected, daily over the last{' '}
+          {rangeDays} days. Every metric is in the table below.
         </p>
         <KpiTrends series={series} allowed={allowed} loading={seriesLoading} />
       </section>

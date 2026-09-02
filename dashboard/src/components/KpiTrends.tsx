@@ -80,21 +80,32 @@ export default function KpiTrends(
   { series, allowed, loading }:
   { series: Record<string, KpiSeries>; allowed: string[]; loading?: boolean },
 ) {
-  const cards = useMemo(
-    () => KPI_SPECS.filter((k) => allowed.includes(k.id)).map((k) => {
+  // Three charts, not five. Five is a contact sheet a reader scans; three is a story they read,
+  // and the three worth telling are the ones that actually left their range, then the largest
+  // movers. Every metric is still in the table below, so nothing is hidden.
+  const cards = useMemo(() => {
+    const built = KPI_SPECS.filter((k) => allowed.includes(k.id)).map((k) => {
       const s = series[k.id];
       const pts = markWindow(s?.points || [], s?.window);
       return { spec: k, pts, win: s?.window, outside: breachCount(pts) };
-    }),
-    [series, allowed],
-  );
+    });
+    const swing = (c: (typeof built)[number]) => {
+      if (c.pts.length < 2) return 0;
+      const first = c.pts[0].value;
+      const last = c.pts[c.pts.length - 1].value;
+      return first ? Math.abs((last - first) / first) : 0;
+    };
+    return [...built]
+      .sort((a, b) => (b.outside - a.outside) || (swing(b) - swing(a)))
+      .slice(0, 3);
+  }, [series, allowed]);
 
   return (
     <>
       <Legend />
-      {/* Two per row. Four across made every chart too narrow to read a date off, which is the
-          one thing a reader needs from a daily series. */}
-      <div className="rise-stagger grid grid-cols-1 gap-4 xl:grid-cols-2">
+      {/* Three across on a desktop, stacking down to one. Any narrower and the date axis -- the
+          one thing a reader needs from a daily series -- stops being readable. */}
+      <div className="rise-stagger grid grid-cols-1 gap-4 md:grid-cols-2 xl:grid-cols-3">
         {cards.map(({ spec: k, pts, win, outside }) => {
           const last = pts.length ? pts[pts.length - 1].value : 0;
           const lower = win?.lower;

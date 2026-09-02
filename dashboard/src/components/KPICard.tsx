@@ -34,23 +34,24 @@ function Spark({ points, colour }: { points: SeriesPoint[]; colour: string }) {
     const lo = Math.min(...values);
     const hi = Math.max(...values);
     const span = hi - lo || 1;
-    const w = 100;
-    const h = 26;
+    const w = 200;
+    const h = 32;
     return points
       .map((p, i) => {
         const x = (i / (points.length - 1)) * w;
-        const y = h - ((p.value - lo) / span) * h;
+        // Headroom top and bottom so a peak is not clipped by the stroke.
+        const y = h - 3 - ((p.value - lo) / span) * (h - 6);
         return `${i ? 'L' : 'M'}${x.toFixed(2)},${y.toFixed(2)}`;
       })
       .join(' ');
   }, [points]);
 
-  if (!d) return <span className="h-[26px] flex-1" />;
+  if (!d) return <span className="h-8 flex-1" />;
   return (
-    <svg viewBox="0 0 100 26" preserveAspectRatio="none" className="h-[26px] flex-1"
+    <svg viewBox="0 0 200 32" preserveAspectRatio="none" className="h-8 flex-1"
          aria-hidden focusable="false">
       <motion.path
-        d={d} fill="none" stroke={colour} strokeWidth={1.6}
+        d={d} fill="none" stroke={colour} strokeWidth={1.75}
         strokeLinecap="round" strokeLinejoin="round"
         vectorEffect="non-scaling-stroke"
         initial={{ pathLength: 0, opacity: 0 }}
@@ -70,7 +71,7 @@ function KPICard({ metric, spark = [] }: { metric: KPIMetric; spark?: SeriesPoin
 
   return (
     <div id={`kpi-card-${metric.id}`} className="surface lift-card p-5">
-      <div className="mb-4 flex items-center gap-2.5">
+      <div className="mb-3.5 flex items-center gap-2.5">
         <span className="icon-tile"><Icon className="h-[15px] w-[15px]" /></span>
         <span className="min-w-0 flex-1 truncate text-[10.5px] font-semibold uppercase tracking-[0.13em] text-slate-500">
           {metric.label}
@@ -83,12 +84,12 @@ function KPICard({ metric, spark = [] }: { metric: KPIMetric; spark?: SeriesPoin
         )}
       </div>
 
-      <p className="num mb-3 text-slate-900" style={{ fontSize: 'var(--step-3)', fontWeight: 600,
-                                                      letterSpacing: '-0.02em', lineHeight: 1.05 }}>
+      <p className="num mb-4 text-slate-900" style={{ fontSize: 'var(--step-4)', fontWeight: 600,
+                                                      letterSpacing: '-0.03em', lineHeight: 1 }}>
         {metric.value}
       </p>
 
-      <div className="flex items-end gap-3">
+      <div className="flex items-center gap-4">
         <Spark points={spark} colour={good ? 'var(--brand)' : 'var(--fall)'} />
         <span className={`delta shrink-0 text-[12.5px] font-medium ${good ? 'delta-up' : 'delta-down'}`}
               style={{ color: colour }}>

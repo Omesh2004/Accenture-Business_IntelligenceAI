@@ -221,7 +221,7 @@ function AssistantTurn({
       {typed && answer && (
         <>
           <Reveal delay={0}>
-            <AnswerCards answer={answer} visuals={answer.visuals || []} />
+            <AnswerCards answer={answer} visuals={answer.visuals || []} live={live} />
           </Reveal>
           {charts.length > 0 && (
             <Reveal delay={0.34}>
@@ -644,7 +644,7 @@ function ChatSurface({
 
        {/* Only shown once there is something to summarise, and only for the newest answer. */}
        {latestAnswer && !running && (
-         <div className="hidden min-h-0 xl:flex">
+         <div className="hidden min-h-0 lg:flex">
            <InsightRail answer={latestAnswer} />
          </div>
        )}

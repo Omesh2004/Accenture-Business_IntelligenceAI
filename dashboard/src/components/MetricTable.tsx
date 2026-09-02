@@ -25,8 +25,8 @@ const RISE_IS_BAD = new Set(['transaction_failure_rate']);
  * in the next. A fixed box makes every row identical.
  */
 function Path({ points, colour }: { points: { value: number }[]; colour: string }) {
-  const W = 240;
-  const H = 26;
+  const W = 260;
+  const H = 30;
   const d = useMemo(() => {
     if (points.length < 2) return '';
     const values = points.map((p) => p.value);
@@ -36,7 +36,7 @@ function Path({ points, colour }: { points: { value: number }[]; colour: string 
       .map((p, i) => {
         const x = (i / (points.length - 1)) * W;
         // Headroom top and bottom so a peak is not clipped by the stroke width.
-        const y = H - 3 - ((p.value - lo) / span) * (H - 6);
+        const y = H - 4 - ((p.value - lo) / span) * (H - 8);
         return `${i ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)}`;
       })
       .join(' ');
@@ -47,7 +47,7 @@ function Path({ points, colour }: { points: { value: number }[]; colour: string 
     <svg viewBox={`0 0 ${W} ${H}`} width="100%" height={H} preserveAspectRatio="none"
          className="block" aria-hidden>
       <motion.path
-        d={d} fill="none" stroke={colour} strokeWidth={1.75} vectorEffect="non-scaling-stroke"
+        d={d} fill="none" stroke={colour} strokeWidth={1.85} vectorEffect="non-scaling-stroke"
         strokeLinecap="round" strokeLinejoin="round"
         initial={{ pathLength: 0 }} animate={{ pathLength: 1 }}
         transition={{ duration: 0.9, ease: [0.22, 1, 0.36, 1] }}

@@ -14,6 +14,7 @@ import {
   ArrowDownRight, ArrowUpRight, ClipboardCheck, Crosshair, Search, TrendingUp,
 } from 'lucide-react';
 import type { AgentAnswer, AgentSection, AgentVisual } from '@/types';
+import Typed from './Typed';
 
 const EASE = [0.22, 1, 0.36, 1] as const;
 const FALL = '#f82768';
@@ -59,7 +60,7 @@ function Card({
       initial={{ opacity: 0, y: 12 }}
       animate={{ opacity: 1, y: 0 }}
       transition={{ duration: 0.45, delay, ease: EASE }}
-      className="surface flex flex-col p-4"
+      className="surface flex flex-col p-5"
     >
       <span className="mb-2.5 flex items-center gap-2">
         <span className="text-[12.5px] font-semibold"
@@ -74,7 +75,8 @@ function Card({
 }
 
 export default function AnswerCards(
-  { answer, visuals }: { answer: AgentAnswer; visuals: AgentVisual[] },
+  { answer, visuals, live = false }:
+  { answer: AgentAnswer; visuals: AgentVisual[]; live?: boolean },
 ) {
   const bySlot = useMemo(() => {
     const out: Record<string, AgentSection> = {};
@@ -91,6 +93,9 @@ export default function AnswerCards(
   const pct = claims.pct_change;
   const fell = observed != null && baseline != null && observed < baseline;
 
+  // The period the finding covers, taken from the agent's own "when" section rather than
+  // restating the whole opening line underneath it.
+  const window = (bySlot.when?.text || '').replace(/^The movement was measured over /i, 'Measured over ');
   const what = bySlot.what_changed;
   const why = bySlot.why || bySlot.cause;
   // The agent names this slot `what_now`; `action` is accepted so an older payload
@@ -104,8 +109,8 @@ export default function AnswerCards(
   const cols = shown >= 3 ? 'lg:grid-cols-3' : shown === 2 ? 'lg:grid-cols-2' : '';
 
   return (
-    <div className="space-y-3">
-      <div className={`grid grid-cols-1 items-start gap-3 ${cols}`}>
+    <div className="space-y-4">
+      <div className={`grid grid-cols-1 items-stretch gap-4 ${cols}`}>
         {what && (
           <Card icon={fell ? ArrowDownRight : ArrowUpRight} title="What happened?">
             {pct != null && observed != null && baseline != null ? (
@@ -121,11 +126,13 @@ export default function AnswerCards(
               </>
             ) : null}
             {pct == null && (
-              <p className="text-[12.5px] leading-relaxed text-slate-600">{what.text}</p>
+              <p className="text-[13px] leading-relaxed text-slate-600">
+                <Typed text={what.text} active={live} />
+              </p>
             )}
-            {what.text && pct != null && (
-              <p className="mt-3 border-t border-slate-100 pt-2.5 text-[11.5px] text-slate-400">
-                {bullets(what).slice(-1)[0]}
+            {window && pct != null && (
+              <p className="mt-3 border-t border-slate-100 pt-3 text-[12px] text-slate-400">
+                <Typed text={window} active={live} delay={0.2} />
               </p>
             )}
           </Card>
@@ -137,7 +144,7 @@ export default function AnswerCards(
               {bullets(why).map((b, i) => (
                 <li key={i} className="flex gap-2 text-[12.5px] leading-relaxed text-slate-600">
                   <span className="mt-[7px] h-1 w-1 shrink-0 rounded-full bg-slate-300" />
-                  {b}
+                  <Typed text={b} active={live} delay={0.15 + i * 0.12} />
                 </li>
               ))}
             </ul>
@@ -167,20 +174,22 @@ export default function AnswerCards(
           initial={{ opacity: 0, y: 12 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.45, delay: 0.18, ease: EASE }}
-          className="surface p-4"
+          className="surface p-5"
         >
-          <span className="mb-3 flex items-center gap-2">
+          <span className="mb-4 flex items-center gap-2">
             <span className="text-[12.5px] font-semibold" style={{ color: 'var(--brand)' }}>
               What action should you take?
             </span>
             <ClipboardCheck className="h-3.5 w-3.5 text-slate-300" />
           </span>
-          <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2 xl:grid-cols-3">
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
             {bullets(action).map((b, i) => (
               <div key={i}
-                   className="flex gap-2.5 rounded-xl border border-slate-100 bg-slate-50/60 p-3">
+                   className="flex gap-3 rounded-xl border border-slate-100 bg-slate-50/60 p-4">
                 <span className="icon-tile shrink-0"><TrendingUp className="h-[14px] w-[14px]" /></span>
-                <p className="text-[12px] leading-relaxed text-slate-600">{b}</p>
+                <p className="text-[12px] leading-relaxed text-slate-600">
+                  <Typed text={b} active={live} delay={0.25 + i * 0.15} />
+                </p>
               </div>
             ))}
           </div>
