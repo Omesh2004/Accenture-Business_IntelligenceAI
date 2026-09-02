@@ -81,9 +81,11 @@ function UserTurn({ text }: { text: string }) {
       transition={{ duration: 0.3, ease: EASE }}
       className="flex justify-end"
     >
+      {/* Same size as the answer beneath it. A question set smaller than its reply reads as a
+          caption on someone else's text. */}
       <div
-        className="max-w-[78%] rounded-2xl px-4 py-2.5 text-[14.5px] leading-[1.6]"
-        style={{ background: INK.sunken, color: INK.text }}
+        className="max-w-[78%] rounded-2xl px-4 py-2.5 leading-[1.62]"
+        style={{ background: INK.sunken, color: INK.text, fontSize: 'var(--step-0)' }}
       >
         {text}
       </div>
@@ -196,8 +198,8 @@ function AssistantTurn({
           reader is not chasing a moving layout while a table renders beneath it. */}
       {/* The lead sentence is the one passage a reader reads rather than scans, so it takes the
           serif. Everything structural around it stays in the grotesque. */}
-      <div data-testid="agent-answer-text" className="text-[15.5px] leading-[1.62]"
-           style={{ color: INK.text, fontFamily: FONT.prose }}>
+      <div data-testid="agent-answer-text" className="leading-[1.62]"
+           style={{ color: INK.text, fontFamily: FONT.prose, fontSize: 'var(--step-0)' }}>
         {live && !typed ? (
           <TextType
             as="p"

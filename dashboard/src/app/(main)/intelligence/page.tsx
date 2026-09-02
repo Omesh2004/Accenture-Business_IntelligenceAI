@@ -67,12 +67,12 @@ function Eyebrow({ children }: { children: React.ReactNode }) {
 function SectionHeader({ title, description }: { title: string; description: string }) {
   return (
     <div className="max-w-3xl">
-      <h2 className="text-[24px] leading-tight" style={{ color: INK.text, fontFamily: FONT.display }}>
-        {title}
-      </h2>
-      <p className="mt-1.5 text-[13.5px] leading-[1.65]" style={{ color: INK.textSoft }}>
-        {description}
-      </p>
+      {/* Both take the shared scale rather than a hardcoded pixel size. The heading was pinned at
+          24px and the description at 13.5px, so the same kind of sentence was set two steps
+          apart depending on which part of the page it appeared in. `.lead` is the one prose
+          treatment; every explanatory paragraph now uses it. */}
+      <h2 style={{ color: INK.text, fontFamily: FONT.display }}>{title}</h2>
+      <p className="lead mt-2">{description}</p>
     </div>
   );
 }
@@ -289,11 +289,7 @@ export default function IntelligencePage() {
               </h1>
               {/* The narrative is the one passage on this page a reader reads rather than scans,
                   so it takes the serif and a size that invites reading. */}
-              <p className="mt-4 max-w-[62ch]"
-                 style={{ color: INK.textSoft, fontFamily: FONT.prose,
-                          fontSize: 'var(--step-0)', lineHeight: 1.62 }}>
-                {insight.narrative}
-              </p>
+              <p className="lead mt-4 max-w-[62ch]">{insight.narrative}</p>
               <div className="mt-5 flex flex-wrap items-center gap-2">
                 <Pill>{(insight.kpi_id || 'metric').replace(/_/g, ' ')}</Pill>
                 <Pill tone={VERDICT_TONE[insight.trust_verdict] || VERDICT_TONE.ambiguous}>
