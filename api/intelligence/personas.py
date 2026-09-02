@@ -91,8 +91,11 @@ REGISTRY: dict[str, Persona] = {
         greeting="Good to see you. I report on where operations moved and what can be done.",
         intents=frozenset({"cause", "action", "trust", "freshness", "status",
                            "catalog", "definition", "ranking", "trend", "greeting", "help"}),
-        owner_roles=frozenset({"lending_ops", "digital_channels", "growth_analytics",
-                               "retail_banking", "analytics"}),
+        # `onboarding_ops` owns every KYC lever in contracts/levers.yaml, and this persona IS the
+        # onboarding manager. Leaving it out meant the one reader who can fix a KYC leak was told
+        # "no lever here is yours to pull" and handed their own action to someone else.
+        owner_roles=frozenset({"onboarding_ops", "lending_ops", "digital_channels",
+                               "growth_analytics", "retail_banking", "analytics"}),
         lead_in={
             "cause": "Operational position:",
             "action": "Recommended action:",
@@ -141,7 +144,10 @@ REGISTRY: dict[str, Persona] = {
         greeting="Good to see you. I report on onboarding and credit exposure, and what is provable.",
         intents=frozenset({"cause", "action", "trust", "forecast", "freshness", "status",
                            "catalog", "definition", "ranking", "trend", "greeting", "help"}),
-        owner_roles=frozenset({"lending_ops", "retail_banking", "growth_analytics"}),
+        # Risk owns the controls on onboarding integrity and on payments failures, which is what
+        # its remit names. Without these it could describe an exposure and never act on one.
+        owner_roles=frozenset({"onboarding_ops", "payments_ops", "lending_ops",
+                               "retail_banking", "growth_analytics"}),
         lead_in={
             "cause": "Risk position:",
             "action": "Required control action:",

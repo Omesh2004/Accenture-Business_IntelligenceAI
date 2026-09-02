@@ -239,7 +239,10 @@ def recommendations(tenant_id: str, limit: int = 20, anomaly_id: str | None = No
     rows = _ch().query(
         f"SELECT rec_id, anomaly_id, action, lever, owner_role, expected_impact, status "
         f"FROM {DB}.recommendations FINAL WHERE {where} "
-        "ORDER BY rec_id ASC LIMIT %(n)s",
+        # `investigate` is the declared fallback: what Decide proposes when it has no localized
+        # driver to act on. Ordering by rec_id let that outrank a real lever written for the same
+        # anomaly, so a reader was told to go and look into it while a repair sat one row below.
+        "ORDER BY lever = 'investigate' ASC, rec_id ASC LIMIT %(n)s",
         params,
     )
     out = []
