@@ -67,11 +67,39 @@ def _statements(sql: str) -> list[str]:
     return out
 
 
+def _bootstrap_client():
+    """A client bound to no database in particular.
+
+    The shared client connects to `settings.CLICKHOUSE_DATABASE`, and clickhouse_connect verifies
+    that database exists while constructing. On a fresh warehouse it does not, so the very call
+    meant to CREATE the databases could not open a connection to make them -- migrate failed on
+    an empty ClickHouse and only on an empty one, which is exactly the path a rebuild takes.
+    """
+    import clickhouse_connect
+    from warehouse.config import settings
+    return clickhouse_connect.get_client(
+        host=settings.CLICKHOUSE_HOST, port=settings.CLICKHOUSE_PORT,
+        username=settings.CLICKHOUSE_USER, password=settings.CLICKHOUSE_PASSWORD,
+        database="default", connect_timeout=10, send_receive_timeout=30)
+
+
 def _ensure_databases() -> None:
-    client = ch_client._get_client()
-    for db in DATABASES:
-        client.command(f"CREATE DATABASE IF NOT EXISTS {db}")
-    client.command(LEDGER_DDL)
+    client = _bootstrap_client()
+    try:
+        for db in DATABASES:
+            client.command(f"CREATE DATABASE IF NOT EXISTS {db}")
+        # The legacy single-database name is still what the shared client connects to, so it has
+        # to exist before anything else opens a connection.
+        from warehouse.config import settings
+        if settings.CLICKHOUSE_DATABASE:
+            client.command(
+                f"CREATE DATABASE IF NOT EXISTS {settings.CLICKHOUSE_DATABASE}")
+        client.command(LEDGER_DDL)
+    finally:
+        try:
+            client.close()
+        except Exception:                                           # noqa: BLE001
+            pass
 
 
 def _migration_files() -> list[tuple[str, str]]:

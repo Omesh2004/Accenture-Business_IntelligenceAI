@@ -1,29 +1,29 @@
 {
-  "generated_at": "2026-09-02T05:01:33.932Z",
+  "generated_at": "2026-09-02T07:25:21.371Z",
   "plan": {
     "tenantId": "bank_a",
     "customers": 4000,
     "days": 55,
     "seed": 20260831,
     "templates": [
-      "spend_slump_region"
+      "kyc_leak_single_region"
     ]
   },
   "written": {
     "customers": 4000,
     "accounts": 4000,
-    "transactions": 141052,
-    "applications": 1383
+    "transactions": 154333,
+    "applications": 1373
   },
   "planted": [
     {
       "tenant_id": "bank_a",
-      "scenario": "spend_slump_region",
-      "kpi_id": "revenue",
-      "anomaly_days": 14,
+      "scenario": "kyc_leak_single_region",
+      "kpi_id": "kyc_completion_rate",
+      "anomaly_days": 9,
       "planted_segment": {
         "region": [
-          "Asia"
+          "Europe"
         ]
       },
       "expected_direction": "down",

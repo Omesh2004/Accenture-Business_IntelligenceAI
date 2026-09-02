@@ -62,6 +62,24 @@ export const TEMPLATES: Record<string, Template> = {
     expect: { direction: "down", rank1Dimension: "region", verdict: "pass" },
   },
 
+  /**
+   * The same onboarding leak, concentrated in ONE region and cut harder.
+   *
+   * `kyc_leak_region` spreads across Europe and North America, which together are about half the
+   * bank. Detect fires on it, but every cell then moves roughly in proportion to its share of the
+   * population, so Localize correctly refuses to name a driver and the attribution comes back
+   * empty. A leak the engine can localise has to be concentrated as well as large: one region,
+   * cut far enough that the aggregate still clears the band.
+   */
+  kyc_leak_single_region: {
+    name: "kyc_leak_single_region",
+    kpi: "kyc_completion_rate",
+    lastDays: 9,
+    segment: { region: ["Europe"] },
+    effect: { kycCompletion: 0.08 },
+    expect: { direction: "down", rank1Dimension: "region", verdict: "pass" },
+  },
+
   /** A payments incident: failures rise sharply, dragging fee revenue with them. */
   failure_burst: {
     name: "failure_burst",

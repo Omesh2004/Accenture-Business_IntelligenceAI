@@ -139,7 +139,13 @@ export async function generateFacts(plan: FactPlan) {
   const r = mulberry32(plan.seed);
   const now = new Date();
   const dayMs = 86400000;
-  const startMs = now.getTime() - plan.days * dayMs;
+  // Anchored to UTC midnight, not to the clock. Starting from `now` made every generated day
+  // run 06:00 to 06:00, so each one straddled two calendar days and the first and last calendar
+  // day each received a fraction of a bucket. Every chart then ended in a cliff -- a KPI card
+  // reading 582 above a line that fell to 21 -- which looked like a collapse and was an artefact
+  // of the bucketing. Day `days - 1` is today, and today alone is legitimately partial.
+  const midnightUtc = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  const startMs = midnightUtc - (plan.days - 1) * dayMs;
   const dayStart = (d: number) => new Date(startMs + d * dayMs);
 
   const branches = await prisma.branch.findMany({
