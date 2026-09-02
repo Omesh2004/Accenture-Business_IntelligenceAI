@@ -283,7 +283,8 @@ def intelligence_ask_stream(request: Request, req: AskRequest):
 
         try:
             res = loop.run(tenant, question, p, emit=emit,
-                           window_days=int(req.days or 0), history=req.history or [])
+                           window_days=int(req.days or 0), history=req.history or [],
+                           provider=req.provider)
         except Exception as exc:
             yield frame("error", {"detail": str(exc)})
             return
@@ -309,7 +310,7 @@ def intelligence_ask(request: Request, req: AskRequest):
     if not question:
         raise HTTPException(status_code=400, detail="question is required")
     res = loop.run(tenant, question, p, window_days=int(req.days or 0),
-                   history=req.history or [])
+                   history=req.history or [], provider=req.provider)
     # Entitlement is applied inside the agent before assembly; this is belt and braces at the
     # boundary, so a new field can never leak a hidden KPI.
     return filter_revenue(p, res.as_dict())
