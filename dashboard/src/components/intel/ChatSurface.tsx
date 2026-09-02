@@ -251,7 +251,7 @@ function AssistantTurn({
                     style={{ background: 'var(--brand)' }} />
               How this answer was derived
             </summary>
-            <div className="border-t border-slate-100">
+            <div className="border-t border-slate-100 pb-1">
           <AgentConsole
             gates={answer.rail || []}
             steps={answer.trace || []}

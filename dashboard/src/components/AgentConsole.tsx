@@ -921,7 +921,10 @@ function AgentConsole({
   useEffect(() => setShowCalls(running), [running]);
 
   const hasWorkspace = datasets.length > 0 || visuals.length > 0 || Boolean(chart);
-  const pad = embedded ? 'px-0' : 'px-6';
+  // Embedded used to strip horizontal padding entirely, so inside the derivation panel every
+  // figure and heading sat flush against the card edge. It is inset either way now; only the
+  // amount differs, because the embedded panel is already inside a padded surface.
+  const pad = embedded ? 'px-5' : 'px-6';
 
   return (
     <div
