@@ -282,8 +282,8 @@ export default function IntelligencePage() {
               <h1
                 className="mt-3"
                 style={{ color: INK.text, fontFamily: FONT.display,
-                         fontSize: 'var(--step-4)', fontWeight: 700,
-                         letterSpacing: '-0.032em', lineHeight: 1.06 }}
+                         fontSize: 'var(--step-3)', fontWeight: 700,
+                         letterSpacing: '-0.026em', lineHeight: 1.14 }}
               >
                 {insight.headline}
               </h1>
@@ -291,7 +291,7 @@ export default function IntelligencePage() {
                   so it takes the serif and a size that invites reading. */}
               <p className="mt-4 max-w-[62ch]"
                  style={{ color: INK.textSoft, fontFamily: FONT.prose,
-                          fontSize: 'var(--step-1)', lineHeight: 1.55 }}>
+                          fontSize: 'var(--step-0)', lineHeight: 1.62 }}>
                 {insight.narrative}
               </p>
               <div className="mt-5 flex flex-wrap items-center gap-2">

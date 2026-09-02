@@ -211,6 +211,14 @@ body {
   scrollbar-color: #E5E7EB transparent;
 }
 
+/* One family. `--font-display` and `--font-prose` are kept as aliases so existing call sites
+   keep resolving, but they are deliberately the same face: a product surface that changes
+   letterform between a heading and the sentence under it does not read as one product. */
+:root {
+  --font-display: var(--font-ui);
+  --font-prose: var(--font-ui);
+}
+
 /* ─────────────── Type scale ───────────────
    Accenture's system: one grotesque does the structural work, a serif takes the prose.
 
@@ -237,10 +245,10 @@ h4 {
    400 with default tracking reads as a caption blown up; at 700 with the tracking pulled in it
    reads as a statement. Tracking opens back up as the type gets smaller, because the same
    negative value that steadies a 42px line closes up a 20px one. */
-h1 { font-weight: 700; letter-spacing: -0.032em; }
-h2 { font-weight: 700; letter-spacing: -0.026em; }
-h3 { font-weight: 600; letter-spacing: -0.018em; }
-h4 { font-weight: 600; letter-spacing: -0.010em; }
+h1 { font-weight: 700; letter-spacing: -0.026em; }
+h2 { font-weight: 700; letter-spacing: -0.021em; }
+h3 { font-weight: 600; letter-spacing: -0.014em; }
+h4 { font-weight: 600; letter-spacing: -0.006em; }
 
 /* Golden-ratio scale. φ = 1.618 between major steps, √φ = 1.272 between minor ones, off a
    16px base. Every size below is a step on it, so nothing is chosen by eye. Line height runs
@@ -259,19 +267,23 @@ h4 { font-weight: 600; letter-spacing: -0.010em; }
   --leading-tight: 1.272;
 }
 
-h1 { font-size: var(--step-4); line-height: 1.06; }
-h2 { font-size: var(--step-3); line-height: 1.12; }
-h3 { font-size: var(--step-2); line-height: 1.20; }
-h4 { font-size: var(--step-1); line-height: 1.35; }
+/* Each level sits one step lower than it did. At --step-4 a page title took two lines and
+   dominated the finding underneath it, which is the wrong emphasis on a page whose job is the
+   finding. Still the same golden-ratio scale -- the whole set shifted down one rung, so the
+   intervals between levels are unchanged. */
+h1 { font-size: var(--step-3); line-height: 1.14; }
+h2 { font-size: var(--step-2); line-height: 1.22; }
+h3 { font-size: var(--step-1); line-height: 1.32; }
+h4 { font-size: var(--step-0); line-height: 1.45; }
 
-.hero-title { font-size: var(--step-5); line-height: 1.00; letter-spacing: -0.038em; font-weight: 700; }
+.hero-title { font-size: var(--step-4); line-height: 1.06; letter-spacing: -0.030em; font-weight: 700; }
 
 /* Prose. The serif, one step up from body and looser, because it is meant to be read at length
    rather than scanned. This is the only place the serif appears. */
 .lead, .prose {
-  font-family: var(--font-prose), Georgia, 'Times New Roman', serif;
-  font-size: var(--step-1);
-  line-height: 1.55;
+  font-family: var(--font-ui), 'Helvetica Neue', Helvetica, Arial, sans-serif;
+  font-size: var(--step-0);
+  line-height: 1.62;
   letter-spacing: 0;
   color: var(--color-text-secondary);
   font-weight: 400;

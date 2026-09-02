@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
-import { Archivo, Source_Serif_4 } from "next/font/google";
+import { Archivo } from "next/font/google";
 import "./globals.css";
 import StoreProvider from "@/lib/StoreProvider";
 import AuthProvider from "@/components/AuthProvider";
@@ -9,35 +9,25 @@ import { Toaster } from "sonner";
 import QueryProvider from "@/lib/QueryProvider";
 
 /**
- * The Accenture system: one grotesque doing the structural work, a serif for prose.
+ * One family, everywhere.
  *
- * Accenture set headings, navigation and UI in Graphik and reserve a serif for editorial body
- * copy. Graphik is licensed, so Archivo stands in: a neutral American grotesque with the same
- * closed apertures and sturdy, slightly narrow forms, which is what makes Graphik read as
- * confident rather than decorative at display sizes.
+ * Accenture set headings, navigation, UI and body in a single grotesque; the serif appears only
+ * in long editorial passages on marketing pages, and a product surface has none of those.
+ * Carrying two families here meant a reader met a different letterform every time they moved
+ * from a heading to the sentence under it.
  *
- * Source Serif takes the prose -- the narrative, the lead paragraphs, the passages a reader
- * actually reads rather than scans. It does NOT take labels, tables or figures: a serif at 12px
- * in a dense table is decoration, and Accenture do not use it that way either.
+ * Graphik is licensed, so Archivo stands in: a neutral American grotesque with the same closed
+ * apertures and sturdy, slightly narrow forms, which is what makes Graphik read as confident
+ * rather than decorative. Hierarchy comes from weight, size and tracking -- the more durable
+ * system, and the only one available once the family is fixed.
+ *
+ * Three variables point at it so existing call sites keep working; they are deliberately the
+ * same face.
  */
-const display = Archivo({
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
-  variable: "--font-display",
-  display: "swap",
-});
-
-const ui = Archivo({
+const archivo = Archivo({
   subsets: ["latin"],
   weight: ["300", "400", "500", "600", "700"],
   variable: "--font-ui",
-  display: "swap",
-});
-
-const prose = Source_Serif_4({
-  subsets: ["latin"],
-  weight: ["300", "400", "600"],
-  variable: "--font-prose",
   display: "swap",
 });
 
@@ -65,7 +55,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${ui.variable} ${display.variable} ${prose.variable} h-full antialiased`}
+      className={`${archivo.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col font-sans bg-gray-100/50 selection:bg-purple-400 selection:text-white">
         <AuthProvider>

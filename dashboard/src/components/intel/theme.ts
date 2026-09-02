@@ -68,8 +68,8 @@ export const FONT = {
   // different face from the rest of the product.
   sans: 'var(--font-ui), system-ui, sans-serif',
   display: 'var(--font-display), system-ui, sans-serif',
-  // The serif, for the passages a reader reads at length rather than scans.
-  prose: 'var(--font-prose), Georgia, serif',
+  // Kept so call sites resolve; deliberately the same face as the rest.
+  prose: 'var(--font-ui), system-ui, sans-serif',
   // No monospace family is loaded; the stack's own fallbacks are the real face here.
   mono: 'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
 } as const;
