@@ -13,7 +13,7 @@ logs/
 # Environment / secrets
 .env
 .env.*
-!.env.example
+.env.example
 **/.env
 **/.env.*
 
@@ -68,3 +68,7 @@ ENV/
 
 # Bytecode written back into a bind-mounted source tree; a stale .pyc can outlive an edit.
 api/**/__pycache__/
+
+# Internal working documents. Kept on disk, deliberately not published.
+CLAUDE.md
+docs/
