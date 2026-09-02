@@ -58,19 +58,21 @@ export function breachCount(points: Marked[]): number {
 
 function Legend() {
   return (
-    <div className="mb-3.5 flex flex-wrap items-center gap-x-6 gap-y-2 text-[length:var(--step--1a)] text-slate-500">
+    <div className="mb-4 flex flex-wrap items-center gap-x-7 gap-y-2
+                    text-[length:var(--step--1)] text-slate-500">
       <span className="inline-flex items-center gap-2">
         <span className="inline-block h-3 w-6 rounded border"
-              style={{ background: 'rgb(91 33 224 / 0.08)', borderColor: 'rgb(91 33 224 / 0.28)' }} />
-        The expected range
+              style={{ background: 'rgb(91 33 224 / 0.08)',
+                       borderColor: 'rgb(91 33 224 / 0.28)' }} />
+        Expected range
       </span>
       <span className="inline-flex items-center gap-2">
         <span className="inline-block h-0.5 w-6 rounded" style={{ background: INSIDE }} />
-        Inside it
+        Within range
       </span>
       <span className="inline-flex items-center gap-2">
         <span className="inline-block h-0.5 w-6 rounded" style={{ background: OUTSIDE }} />
-        Outside it
+        Outside range
       </span>
     </div>
   );
@@ -125,7 +127,7 @@ export default function KpiTrends(
               <p className="mb-3 text-[length:var(--step--1a)]"
                  style={{ color: outside ? OUTSIDE : 'var(--color-slate-400)' }}>
                 {!hasBand
-                  ? 'No expected range on record for this window'
+                  ? 'No forecast band recorded for this range yet'
                   : outside === 0
                     ? `Every day inside ${fmt(k.unit, lower!)} to ${fmt(k.unit, upper!)}`
                     : `${outside} of ${pts.length} days outside `

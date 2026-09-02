@@ -230,9 +230,10 @@ function AssistantTurn({
           </Reveal>
           {charts.length > 0 && (
             <Reveal delay={0.34}>
+              {/* Two per row at most. Three across left each chart about 220px, which is not
+                  enough for an axis label or a driver's name, so every one of them truncated. */}
               <div className={`grid grid-cols-1 gap-3 ${
-                charts.length === 1 ? '' : charts.length === 2 ? 'lg:grid-cols-2'
-                                                              : 'lg:grid-cols-2 xl:grid-cols-3'}`}>
+                charts.length === 1 ? '' : 'lg:grid-cols-2'}`}>
                 {charts.map((v, i) => (
                   <Chart key={`${v.tool}-${v.kind}-${i}`} visual={v} />
                 ))}
@@ -678,18 +679,22 @@ function ChatSurface({
             </div>
           )}
 
+          {/* While the agent is working the composer takes the running border, so the wait has a
+              visible owner. A spinner in the corner says something is happening; a border around
+              the box the question went into says THIS is what is happening. */}
           <form
             onSubmit={(e) => {
               e.preventDefault();
               submit(question);
             }}
-            className="rounded-3xl border"
-            style={{
+            className={running ? 'attention !rounded-3xl' : 'rounded-3xl border'}
+            style={running ? undefined : {
               borderColor: INK.hairlineStrong,
               background: INK.surface,
               boxShadow: '0 1px 2px rgba(18,19,26,.04), 0 8px 28px rgba(18,19,26,.06)',
             }}
           >
+           <div className={running ? 'attention-inner !rounded-[22px]' : ''}>
             <textarea
               ref={inputRef}
               value={question}
@@ -733,6 +738,7 @@ function ChatSurface({
                 )}
               </motion.button>
             </div>
+           </div>
           </form>
           <p className="mt-2 text-center text-[length:var(--step--2)]" style={{ color: INK.textFaint }}>
             Answers come from recorded findings only. Where the evidence does not support one, the

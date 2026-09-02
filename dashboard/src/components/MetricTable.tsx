@@ -11,10 +11,19 @@ import React, { useMemo } from 'react';
 import { motion } from 'framer-motion';
 import { TrendingDown, TrendingUp } from 'lucide-react';
 import { KPI_SPECS, type KpiSeries } from '@/hooks/useKpiSeries';
-import { fmt } from './KpiTrends';
+import { breachCount, fmt, markWindow } from './KpiTrends';
 
-/** A rise is the bad direction here, so colour follows meaning rather than sign. */
+/** A rise is the bad direction here, so the CHANGE figure follows meaning rather than sign. */
 const RISE_IS_BAD = new Set(['transaction_failure_rate']);
+
+/* One meaning per colour, shared with the charts above:
+     purple  the metric stayed inside its expected range
+     crimson some day in the window fell outside it
+   The line used to be coloured by DIRECTION instead, so the same KPI came out purple in its
+   chart and red in this row -- two colour systems on one page, neither of them stated. Direction
+   is carried by the change figure on the right, which is the only place it belongs. */
+const INSIDE = 'var(--brand)';
+const OUTSIDE = 'var(--fall)';
 
 /**
  * The path, drawn into a fixed box at a fixed ratio.
@@ -75,6 +84,9 @@ export default function MetricTable(
       // zero. Against the first day that HAS data it read 3575%, because that day is the
       // ramp-up edge and four accounts is not a baseline. Averaging both ends is stable and
       // says what a reader means by "how much has this moved".
+      // Same band test the chart applies, so a row and its chart cannot disagree.
+      const marked = markWindow(pts, series[k.id]?.window);
+      const outside = breachCount(marked) > 0;
       const live = pts.filter((p) => p.value !== 0);
       const mean = (xs: typeof live) =>
         (xs.length ? xs.reduce((a, p) => a + p.value, 0) / xs.length : 0);
@@ -83,7 +95,7 @@ export default function MetricTable(
       const later = mean(live.slice(-slice));
       const change = then ? ((later - then) / Math.abs(then)) * 100 : 0;
       const rose = change >= 0;
-      return { spec: k, pts, now, change: Math.abs(change), rose,
+      return { spec: k, pts, now, change: Math.abs(change), rose, outside,
                good: RISE_IS_BAD.has(k.id) ? !rose : rose };
     }),
     [series, allowed],
@@ -106,7 +118,7 @@ export default function MetricTable(
           </tr>
         </thead>
         <tbody>
-          {rows.map(({ spec: k, pts, now, change, rose, good }, i) => {
+          {rows.map(({ spec: k, pts, now, change, rose, good, outside }, i) => {
             const Arrow = rose ? TrendingUp : TrendingDown;
             const colour = good ? 'var(--rise)' : 'var(--fall)';
             return (
@@ -123,9 +135,9 @@ export default function MetricTable(
                   {pts.length ? fmt(k.unit, now) : '--'}
                 </td>
                 <td className="px-6 py-4 align-middle">
-                  <Path points={pts} colour={good ? 'var(--brand)' : 'var(--fall)'} />
+                  <Path points={pts} colour={outside ? OUTSIDE : INSIDE} />
                 </td>
-                <td className="px-6 py-4 text-right text-[length:var(--step--1)] font-medium"
+                <td className="px-4 py-4 text-right text-[length:var(--step--1)] font-medium"
                     style={{ color: colour }}>
                   <span className="inline-flex items-center justify-end gap-1">
                     <Arrow className="h-3.5 w-3.5" />

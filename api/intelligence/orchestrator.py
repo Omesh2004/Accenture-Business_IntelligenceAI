@@ -67,7 +67,15 @@ class Orchestrator:
 
     # -- stage 04, scheduled batch ------------------------------------------
     def run_forecast_batch(self, tenant_id: str, contracts: dict[str, Contract],
-                           window: Window, as_of: datetime) -> int:
+                           window: Window, as_of: datetime,
+                           horizon_days: int | None = None) -> int:
+        """`horizon_days` is the length of the window this band will be SCORED against.
+
+        It used to come from the contract, a fixed 7 whatever was being swept. Every sweep then
+        wrote to the same row, so the 30 and 90 day windows had no band of their own: the charts
+        for those ranges reported "no expected range on record" and nothing could be marked as
+        outside anything. A band belongs to the window it was fitted for.
+        """
         written = 0
         for kpi_id, contract in sorted(contracts.items()):
             if not contract.forecast_cfg.get("enabled", True):
@@ -83,7 +91,7 @@ class Orchestrator:
             result = forecast.run(kpi_id, series.values(), contract, as_of, tenant_id)
             store.write_forecast(forecast.to_row(
                 result, tenant_id, kpi_id, as_of,
-                int(contract.forecast_cfg.get("horizon_days", 7))))
+                int(horizon_days or contract.forecast_cfg.get("horizon_days", 7))))
             written += 1
         return written
 
@@ -277,7 +285,8 @@ class Orchestrator:
             # History must END where the scored window BEGINS, or the band centres on the
             # movement it is meant to detect.
             hist = Window(window.start - timedelta(days=config.BASELINE_DAYS), window.start)
-            self.run_forecast_batch(tenant_id, contracts, hist, window.start)
+            span = max(1, (window.end - window.start).days)
+            self.run_forecast_batch(tenant_id, contracts, hist, window.start, span)
 
         # Upstream KPIs first, so propagation can explain their dependents for free.
         ordered = sorted(contracts.values(), key=lambda c: (c.driven_by is not None, c.id))

@@ -241,47 +241,53 @@ function Band({ visual }: { visual: AgentVisual }) {
 
 function Waterfall({ visual }: { visual: AgentVisual }) {
   const steps = visual.series;
+
+  // Horizontal, one row per step.
+  //
+  // Drawn as vertical columns the labels had a card-width divided by eight to live in, so every
+  // one of them truncated to "aut..." and the chart said nothing at all. A driver's NAME is the
+  // finding; a bar that cannot be labelled is decoration. Rows give the name a full line, and the
+  // running level reads down the page the way the arithmetic does.
   const levels = steps.map((s) => (s.role === 'start' || s.role === 'end' ? s.value : s.at ?? 0));
-  const lo = Math.min(...levels, ...steps.map((s) => s.at ?? s.value));
-  const hi = Math.max(...levels, ...steps.map((s) => s.at ?? s.value));
-  const pad = (hi - lo) * 0.14 || 1;
-  const min = lo - pad;
-  const span = hi + pad - min || 1;
-  const y = (v: number) => 100 - ((v - min) / span) * 100;
+  const lo = Math.min(...levels);
+  const hi = Math.max(...levels);
+  const span = (hi - lo) || 1;
+  const x = (v: number) => ((v - lo) / span) * 100;
 
   return (
     <div className="space-y-1.5">
-      <div className="relative flex h-[132px] items-end gap-1.5">
-        {steps.map((s, i) => {
-          const anchor = s.role === 'start' || s.role === 'end';
-          const top = anchor ? y(s.value) : y(Math.max(s.at ?? 0, (s.at ?? 0) - s.value));
-          const bottom = anchor ? 100 : y(Math.min(s.at ?? 0, (s.at ?? 0) - s.value));
-          const colour = anchor ? BRAND
-            : s.role === 'rest' ? '#cbc4dd'
-            : s.value < 0 ? FALL : RISE;
-          return (
-            <div key={`${s.label}-${i}`} className="relative h-full flex-1"
-                 title={`${s.label}: ${fmt(visual.unit, s.value)}`}>
+      {steps.map((s, i) => {
+        const anchor = s.role === 'start' || s.role === 'end';
+        const to = anchor ? s.value : s.at ?? 0;
+        const from = anchor ? lo : to - s.value;
+        const left = Math.min(x(from), x(to));
+        const width = Math.max(1.5, Math.abs(x(to) - x(from)));
+        const colour = anchor ? BRAND
+          : s.role === 'rest' ? '#cbc4dd'
+          : s.value < 0 ? FALL : RISE;
+        return (
+          <div key={`${s.label}-${i}`} className="flex items-center gap-3">
+            <span className="w-[40%] shrink-0 truncate text-[length:var(--step--1a)] text-slate-600"
+                  title={s.label}>
+              {s.label}
+            </span>
+            <span className="relative h-4 flex-1 rounded bg-slate-50">
               <motion.span
-                className="absolute left-0 right-0 rounded-[3px]"
-                style={{ background: colour, opacity: anchor ? 1 : 0.85 }}
-                initial={{ top: `${bottom}%`, height: 0 }}
-                animate={{ top: `${top}%`, height: `${Math.max(1.5, bottom - top)}%` }}
-                transition={{ duration: 0.55, delay: 0.05 + i * 0.07, ease: EASE }}
+                className="absolute inset-y-[3px] rounded-[3px]"
+                style={{ background: colour, opacity: anchor ? 1 : 0.9 }}
+                initial={{ left: `${left}%`, width: 0 }}
+                animate={{ left: `${left}%`, width: `${width}%` }}
+                transition={{ duration: 0.5, delay: 0.04 + i * 0.06, ease: EASE }}
               />
-            </div>
-          );
-        })}
-      </div>
-      <div className="flex gap-1.5">
-        {steps.map((s, i) => (
-          <span key={`${s.label}-l-${i}`}
-                className="flex-1 truncate text-center text-[length:var(--step--2)] leading-tight text-slate-400"
-                title={s.label}>
-            {shorten(s.label, 14)}
-          </span>
-        ))}
-      </div>
+            </span>
+            <span className="num w-20 shrink-0 text-right text-[length:var(--step--1)]"
+                  style={{ color: anchor ? 'var(--color-slate-700)' : colour }}>
+              {anchor ? fmt(visual.unit, s.value)
+                      : `${s.value > 0 ? '+' : ''}${fmt(visual.unit, s.value)}`}
+            </span>
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -293,26 +299,34 @@ function Donut({ visual }: { visual: AgentVisual }) {
   const r = 42;
   const c = 2 * Math.PI * r;
   return (
-    <div className="flex items-center gap-5">
-      <svg viewBox="0 0 110 110" className="h-[112px] w-[112px] shrink-0 -rotate-90">
-        <circle cx="55" cy="55" r={r} fill="none" stroke="#efecf7" strokeWidth={12} />
-        <motion.circle
-          cx="55" cy="55" r={r} fill="none" stroke={BRAND} strokeWidth={12} strokeLinecap="round"
-          strokeDasharray={c}
-          initial={{ strokeDashoffset: c }}
-          animate={{ strokeDashoffset: c - (share / 100) * c }}
-          transition={{ duration: 0.9, ease: EASE }}
-        />
-      </svg>
-      <div>
-        <p className="num text-slate-900" style={{ fontSize: 'var(--step-2)', fontWeight: 600 }}>
-          {share.toFixed(1)}%
-        </p>
-        <p className="mt-1 max-w-[190px] text-[length:var(--step--1a)] leading-snug text-slate-500">
-          of the movement sits in the segments named above. The rest is spread too thin across the
-          cube to attribute.
-        </p>
+    // Stacks under the ring on a narrow card. Side by side in 220px the sentence wrapped to one
+    // word a line, which is how "of the movement sits in the segments named above" ended up
+    // reading as a column of fragments.
+    <div className="flex flex-col items-center gap-4 sm:flex-row sm:items-center">
+      <div className="relative shrink-0">
+        <svg viewBox="0 0 110 110" className="h-[104px] w-[104px] -rotate-90">
+          <circle cx="55" cy="55" r={r} fill="none" stroke="#efecf7" strokeWidth={12} />
+          <motion.circle
+            cx="55" cy="55" r={r} fill="none" stroke={BRAND} strokeWidth={12}
+            strokeLinecap="round" strokeDasharray={c}
+            initial={{ strokeDashoffset: c }}
+            animate={{ strokeDashoffset: c - (share / 100) * c }}
+            transition={{ duration: 0.9, ease: EASE }}
+          />
+        </svg>
+        {/* The figure belongs in the ring it describes, not beside it. */}
+        <span className="absolute inset-0 grid place-items-center">
+          <span className="num text-slate-900"
+                style={{ fontSize: 'var(--step-1)', fontWeight: 600 }}>
+            {share.toFixed(0)}%
+          </span>
+        </span>
       </div>
+      <p className="text-center text-[length:var(--step--1)] leading-relaxed text-slate-500
+                    sm:text-left">
+        of the movement sits in the segments named above. The rest is spread too thin across the
+        cube to attribute to any one of them.
+      </p>
     </div>
   );
 }
