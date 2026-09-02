@@ -44,13 +44,16 @@ function Path({ points, colour }: { points: { value: number }[]; colour: string 
 
   if (!d) return <span className="block" style={{ height: H }} />;
   return (
-    <svg viewBox={`0 0 ${W} ${H}`} height={H} preserveAspectRatio="none"
-         className="block w-full" aria-hidden>
-      <motion.path
+    // `width: 100%` as a style rather than a class, so the SVG fills the cell whatever the
+    // breakpoint. An animated `pathLength` used to draw these: on a re-render the tween
+    // restarted from zero, and with five rows re-rendering as the series loaded the line was
+    // routinely left part-drawn, which read as a chart that stopped halfway through the window.
+    // The path is static now and the row itself carries the entrance.
+    <svg viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" aria-hidden
+         style={{ width: '100%', height: H, display: 'block' }}>
+      <path
         d={d} fill="none" stroke={colour} strokeWidth={1.85} vectorEffect="non-scaling-stroke"
         strokeLinecap="round" strokeLinejoin="round"
-        initial={{ pathLength: 0 }} animate={{ pathLength: 1 }}
-        transition={{ duration: 0.9, ease: [0.22, 1, 0.36, 1] }}
       />
     </svg>
   );
@@ -64,9 +67,21 @@ export default function MetricTable(
     () => KPI_SPECS.filter((k) => allowed.includes(k.id)).map((k) => {
       const pts = series[k.id]?.points || [];
       const now = pts.length ? pts[pts.length - 1].value : 0;
-      // Against the start of the window on screen, which is the period the header names.
-      const then = pts.length ? pts[0].value : 0;
-      const change = then ? ((now - then) / Math.abs(then)) * 100 : 0;
+      // The end of the window against the start of it, each averaged over a third of the days
+      // that actually carry data.
+      //
+      // Two single days cannot do this job. Against day one of a 90-day range every row read
+      // 0.0%, because the range reaches back before the bank existed and day one was a real
+      // zero. Against the first day that HAS data it read 3575%, because that day is the
+      // ramp-up edge and four accounts is not a baseline. Averaging both ends is stable and
+      // says what a reader means by "how much has this moved".
+      const live = pts.filter((p) => p.value !== 0);
+      const mean = (xs: typeof live) =>
+        (xs.length ? xs.reduce((a, p) => a + p.value, 0) / xs.length : 0);
+      const slice = Math.max(1, Math.floor(live.length / 3));
+      const then = mean(live.slice(0, slice));
+      const later = mean(live.slice(-slice));
+      const change = then ? ((later - then) / Math.abs(then)) * 100 : 0;
       const rose = change >= 0;
       return { spec: k, pts, now, change: Math.abs(change), rose,
                good: RISE_IS_BAD.has(k.id) ? !rose : rose };
@@ -77,15 +92,17 @@ export default function MetricTable(
   if (!rows.length) return null;
 
   return (
-    <div className="surface overflow-hidden">
-      <table className="w-full table-fixed border-collapse">
+    // Scrolls inside its own card on a narrow screen rather than forcing the page sideways.
+    <div className="surface overflow-x-auto">
+      <table className="w-full min-w-[620px] table-fixed border-collapse">
         <thead>
           <tr className="border-b border-slate-100 text-[10.5px] font-semibold uppercase
                          tracking-[0.13em] text-slate-500">
-            <th className="w-[30%] px-6 py-3.5 text-left font-semibold">Metric</th>
-            <th className="w-[16%] px-3 py-3.5 text-right font-semibold">Current</th>
-            <th className="px-8 py-3.5 text-center font-semibold">Trend (last {days} days)</th>
-            <th className="w-[14%] px-6 py-3.5 text-right font-semibold">Change</th>
+            <th className="w-[32%] px-6 py-3.5 text-left font-semibold">Metric</th>
+            <th className="w-[15%] px-3 py-3.5 text-right font-semibold">Current</th>
+            {/* The trend column takes whatever is left, so the line always spans the cell. */}
+            <th className="px-6 py-3.5 text-center font-semibold">Trend (last {days} days)</th>
+            <th className="w-[15%] px-6 py-3.5 text-right font-semibold">Change</th>
           </tr>
         </thead>
         <tbody>
@@ -105,7 +122,7 @@ export default function MetricTable(
                 <td className="num px-3 py-4 text-right text-[15px] font-semibold text-slate-900">
                   {pts.length ? fmt(k.unit, now) : '--'}
                 </td>
-                <td className="px-8 py-4 align-middle">
+                <td className="px-6 py-4 align-middle">
                   <Path points={pts} colour={good ? 'var(--brand)' : 'var(--fall)'} />
                 </td>
                 <td className="px-6 py-4 text-right text-[13px] font-medium"
