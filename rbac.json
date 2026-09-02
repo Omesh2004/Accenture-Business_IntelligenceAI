@@ -1,13 +1,13 @@
 {
   "_comment": "Round 2: one bank, one tenant (nexabank). No super_admin / app_admin / license scoping. A persona is a RENDER LENS over the same verified numbers (CLAUDE.md \u00a77) \u2014 it never widens what is readable. The only KPI-level entitlement is: the ops_manager persona does not see revenue, and cannot back-compute it (`ops_hides`). selectable is the server-side allowlist; a ?persona= / X-User-Persona request is honoured only if it is in it.",
   "super_admins": [
-    "omeshmehta70@gmail.com",
+    "omeshmehta03@gmail.com",
     "baranwalswapnil84@gmail.com"
   ],
   "app_admins": {
     "nexabank": [
       "abhishekkumawat1008@gmail.com",
-      "omeshmehta03@gmail.com",
+      "omeshmehta70@gmail.com",
       "vinodrathore2107@gmail.com"
     ]
   },
