@@ -115,7 +115,7 @@ export default function InsightRail({ answer }: { answer: AgentAnswer }) {
                       <stop offset="100%" stopColor={BRAND} stopOpacity={0} />
                     </linearGradient>
                   </defs>
-                  <XAxis dataKey="date" tick={{ fontSize: 9, fill: '#b3adc2' }} minTickGap={30}
+                  <XAxis dataKey="date" tick={{ fontSize: 10, fill: '#b3adc2' }} minTickGap={30}
                          tickFormatter={(d: string) => d.slice(5)} axisLine={false}
                          tickLine={false} />
                   <YAxis hide domain={['dataMin', 'dataMax']} />
