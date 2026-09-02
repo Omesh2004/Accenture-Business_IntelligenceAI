@@ -194,7 +194,10 @@ function AssistantTurn({
 
       {/* The opening line types; everything structured below it appears once typing is done, so a
           reader is not chasing a moving layout while a table renders beneath it. */}
-      <div data-testid="agent-answer-text" className="text-[14.5px] leading-[1.7]" style={{ color: INK.text }}>
+      {/* The lead sentence is the one passage a reader reads rather than scans, so it takes the
+          serif. Everything structural around it stays in the grotesque. */}
+      <div data-testid="agent-answer-text" className="text-[15.5px] leading-[1.62]"
+           style={{ color: INK.text, fontFamily: FONT.prose }}>
         {live && !typed ? (
           <TextType
             as="p"

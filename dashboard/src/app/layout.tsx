@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import { Suspense } from "react";
-import { Geologica, Roboto_Flex } from "next/font/google";
+import { Archivo, Source_Serif_4 } from "next/font/google";
 import "./globals.css";
 import StoreProvider from "@/lib/StoreProvider";
 import AuthProvider from "@/components/AuthProvider";
@@ -9,31 +9,35 @@ import { Toaster } from "sonner";
 import QueryProvider from "@/lib/QueryProvider";
 
 /**
- * Two roles, no more.
+ * The Accenture system: one grotesque doing the structural work, a serif for prose.
  *
- * Geologica sets headings: a variable grotesque with enough weight range to carry a page title
- * without shouting, and enough character at large sizes to read as a statement rather than a
- * bigger label.
+ * Accenture set headings, navigation and UI in Graphik and reserve a serif for editorial body
+ * copy. Graphik is licensed, so Archivo stands in: a neutral American grotesque with the same
+ * closed apertures and sturdy, slightly narrow forms, which is what makes Graphik read as
+ * confident rather than decorative at display sizes.
  *
- * Roboto Flex sets everything a reader uses -- labels, body, controls and every FIGURE. Its
- * optical sizing keeps small labels legible at 10px and long prose comfortable at 16, and its
- * tabular numerals keep a column of numbers aligned, which matters on every table here.
- *
- * Both are loaded through next/font, so the files are self-hosted and there is no render-blocking
- * request to Google on first paint.
+ * Source Serif takes the prose -- the narrative, the lead paragraphs, the passages a reader
+ * actually reads rather than scans. It does NOT take labels, tables or figures: a serif at 12px
+ * in a dense table is decoration, and Accenture do not use it that way either.
  */
-const display = Geologica({
+const display = Archivo({
   subsets: ["latin"],
-  weight: ["300", "400", "500", "600", "700"],
+  weight: ["400", "500", "600", "700"],
   variable: "--font-display",
   display: "swap",
 });
 
-const ui = Roboto_Flex({
+const ui = Archivo({
   subsets: ["latin"],
-  // A variable axis, so one file covers every weight the scale asks for.
   weight: ["300", "400", "500", "600", "700"],
   variable: "--font-ui",
+  display: "swap",
+});
+
+const prose = Source_Serif_4({
+  subsets: ["latin"],
+  weight: ["300", "400", "600"],
+  variable: "--font-prose",
   display: "swap",
 });
 
@@ -61,7 +65,7 @@ export default function RootLayout({
   return (
     <html
       lang="en"
-      className={`${ui.variable} ${display.variable} h-full antialiased`}
+      className={`${ui.variable} ${display.variable} ${prose.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col font-sans bg-gray-100/50 selection:bg-purple-400 selection:text-white">
         <AuthProvider>

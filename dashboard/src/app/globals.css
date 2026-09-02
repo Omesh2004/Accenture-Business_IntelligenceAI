@@ -212,51 +212,35 @@ body {
 }
 
 /* ─────────────── Type scale ───────────────
-   One typographic system for the whole dashboard, so a heading means the same thing on every
-   page. Two faces, each with a job:
+   Accenture's system: one grotesque does the structural work, a serif takes the prose.
 
-     --font-display  Geologica. Headings only. A variable grotesque with real weight range, so a
-                     title carries by WEIGHT rather than by size alone.
-     --font-ui       Roboto Flex. Everything a reader uses: labels, body, controls and every
-                     FIGURE. Optical sizing keeps a 10px label legible and 16px prose comfortable
-                     off the same file; tabular numerals keep columns of numbers aligned.
+     --font-display  Archivo, standing in for Graphik. Headings.
+     --font-ui       Archivo. Navigation, labels, controls, tables and every FIGURE.
+     --font-prose    Source Serif. The passages a reader READS rather than scans -- the
+                     narrative, the lead paragraph, a section's opening explanation.
 
-   Both are grotesques, so hierarchy cannot lean on a serif/sans contrast the way it did before.
-   It comes from weight, size, tracking and colour instead -- which is the more durable system,
-   and the reason headings are set here rather than reinvented per page. */
-
-/* The variable axes, stated once. Left to their defaults these faces render noticeably lighter
-   and looser than the scale assumes. */
-:root {
-  --geologica-axes: "slnt" 0, "CRSV" 0, "SHRP" 0;
-  --roboto-axes: "slnt" 0, "wdth" 100, "GRAD" 0, "XOPQ" 96, "XTRA" 468, "YOPQ" 79,
-                 "YTAS" 750, "YTDE" -203, "YTFI" 738, "YTLC" 514, "YTUC" 712;
-}
+   Headings and UI share a family on purpose: that is what makes Accenture's pages feel like one
+   surface rather than a title sitting on top of an interface. The contrast a reader needs comes
+   from the serif in the prose, and from weight and tracking everywhere else. */
 
 h1, h2, h3 {
   font-family: var(--font-display), 'Helvetica Neue', Helvetica, Arial, sans-serif;
-  font-optical-sizing: auto;
-  font-variation-settings: var(--geologica-axes);
   color: var(--color-text-primary);
 }
-/* h4 is a card title, not a statement -- it stays in the text face. */
 h4 {
   font-family: var(--font-ui), 'Helvetica Neue', Helvetica, Arial, sans-serif;
-  font-optical-sizing: auto;
-  font-variation-settings: var(--roboto-axes);
   font-weight: 600;
   color: var(--color-text-primary);
 }
 
-/* Weight carries the hierarchy now that both faces are grotesques: a page title is heavier than
-   a section, which is heavier than a card. Tracking runs the other way -- large type tightens,
-   small type opens up -- because a single family only reads as a system when the optical size is
-   corrected by hand. Geologica is a wide face, so the large steps tighten further than a
-   narrower grotesque would need. */
-h1 { font-weight: 600; letter-spacing: -0.028em; }
-h2 { font-weight: 600; letter-spacing: -0.022em; }
-h3 { font-weight: 500; letter-spacing: -0.014em; }
-h4 { letter-spacing: -0.008em; }
+/* Accenture set headlines heavy and TIGHT -- that density is most of the voice. A page title at
+   400 with default tracking reads as a caption blown up; at 700 with the tracking pulled in it
+   reads as a statement. Tracking opens back up as the type gets smaller, because the same
+   negative value that steadies a 42px line closes up a 20px one. */
+h1 { font-weight: 700; letter-spacing: -0.032em; }
+h2 { font-weight: 700; letter-spacing: -0.026em; }
+h3 { font-weight: 600; letter-spacing: -0.018em; }
+h4 { font-weight: 600; letter-spacing: -0.010em; }
 
 /* Golden-ratio scale. φ = 1.618 between major steps, √φ = 1.272 between minor ones, off a
    16px base. Every size below is a step on it, so nothing is chosen by eye. Line height runs
@@ -275,20 +259,25 @@ h4 { letter-spacing: -0.008em; }
   --leading-tight: 1.272;
 }
 
-h1 { font-size: var(--step-4); line-height: 1.10; }
-h2 { font-size: var(--step-3); line-height: 1.16; }
-h3 { font-size: var(--step-2); line-height: var(--leading-tight); }
+h1 { font-size: var(--step-4); line-height: 1.06; }
+h2 { font-size: var(--step-3); line-height: 1.12; }
+h3 { font-size: var(--step-2); line-height: 1.20; }
 h4 { font-size: var(--step-1); line-height: 1.35; }
 
-.hero-title { font-size: var(--step-5); line-height: 1.02; letter-spacing: -0.036em; font-weight: 700; }
-.lead       { font-size: var(--step-1); line-height: 1.45; color: var(--color-text-secondary); }
+.hero-title { font-size: var(--step-5); line-height: 1.00; letter-spacing: -0.038em; font-weight: 700; }
 
-body {
-  font-size: var(--step-0);
-  line-height: var(--leading-body);
-  font-optical-sizing: auto;
-  font-variation-settings: var(--roboto-axes);
+/* Prose. The serif, one step up from body and looser, because it is meant to be read at length
+   rather than scanned. This is the only place the serif appears. */
+.lead, .prose {
+  font-family: var(--font-prose), Georgia, 'Times New Roman', serif;
+  font-size: var(--step-1);
+  line-height: 1.55;
+  letter-spacing: 0;
+  color: var(--color-text-secondary);
+  font-weight: 400;
 }
+
+body { font-size: var(--step-0); line-height: var(--leading-body); }
 
 /* An opt-out for headings that are really labels — a card title inside a dense panel, where a
    serif at 13px reads as decoration rather than hierarchy. */
@@ -304,7 +293,6 @@ h1.ui-label, h2.ui-label, h3.ui-label, h4.ui-label,
   font-family: var(--font-ui), -apple-system, 'Helvetica Neue', Helvetica, Arial, sans-serif;
   /* A touch heavier and slightly wider than body: a figure a reader compares should hold its
      own against the label beside it without becoming a heading. */
-  font-variation-settings: var(--roboto-axes), "wdth" 102;
   font-variant-numeric: tabular-nums;
   font-feature-settings: 'tnum' 1, 'cv01' 1;
   font-feature-settings: 'tnum' 1;
@@ -321,7 +309,6 @@ h1.ui-label, h2.ui-label, h3.ui-label, h4.ui-label,
   font-family: var(--font-ui), -apple-system, 'Helvetica Neue', Helvetica, Arial, sans-serif;
   /* Small caps carry poorly at 12px on a variable face left at its defaults; grading it up a
      little restores the weight the tracking takes away. */
-  font-variation-settings: var(--roboto-axes), "GRAD" 40;
   font-size: var(--step--1);
   font-weight: 600;
   letter-spacing: 0.08em;
