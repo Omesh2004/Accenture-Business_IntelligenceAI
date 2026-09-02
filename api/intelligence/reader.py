@@ -76,6 +76,21 @@ def latest_insight(tenant_id: str, persona: str = "analyst",
         # headline and narrative still naming Revenue: the restriction leaked the very thing it
         # was meant to withhold, and the missing id crashed the page that rendered it.
         + ("  AND kpi_id NOT IN %(x)s " if exclude_kpis else "")
+        # A superseded finding must never be served.
+        #
+        # `investigation_id` is deterministic, so re-running a sweep reuses it. When a re-run
+        # finds no anomaly it writes a row with an empty anomaly_id -- and because anomaly_id is
+        # part of the table's sort key, the previous anomaly-bearing row is NOT replaced. Both
+        # survive, and the liveness rule below then actively prefers the stale one. That is how
+        # the page came to show a finding whose own narrative admitted "the range it was judged
+        # against no longer holds", with an empty attribution card underneath it.
+        #
+        # The investigations table carries the current verdict for that exact investigation, so
+        # an anomaly-bearing insight is dropped when its own investigation now says there is no
+        # anomaly. Nothing is deleted; the superseded row simply stops being selected.
+        + ("  AND (anomaly_id = '' OR investigation_id NOT IN ("
+           f"    SELECT investigation_id FROM {DB}.investigations FINAL "
+           "     WHERE tenant_id = %(t)s AND termination_reason = 'no_anomaly')) ")
         + ") AS i LEFT JOIN ("
           f"  SELECT anomaly_id, max(materiality) AS materiality, max(detected_at) AS detected_at, "
           f"         max(window_start) AS window_start "
@@ -153,6 +168,12 @@ def list_insights(tenant_id: str, persona: str = "analyst", limit: int = 20,
         f"             GROUP BY kpi_id, horizon_days) AS f "
         f"    ON f.kpi_id = i.kpi_id AND f.horizon_days = i.window_days "
         f"  WHERE i.tenant_id = %(t)s AND i.persona = %(p)s"
+        # Same supersession rule as latest_insight: a re-run reuses the investigation id and
+        # writes an empty-anomaly row beside the old one instead of replacing it, so an insight
+        # whose own investigation now reports no anomaly is stale and must not be listed.
+        + (" AND (i.anomaly_id = '' OR i.investigation_id NOT IN ("
+           f"   SELECT investigation_id FROM {DB}.investigations FINAL "
+           "    WHERE tenant_id = %(t)s AND termination_reason = 'no_anomaly')) ")
         + ("  AND i.window_days = %(w)s " if window_days else "")
         + f") ORDER BY kpi_id ASC, live DESC, generated_at DESC, insight_id ASC "
         f"LIMIT 1 BY kpi_id LIMIT %(n)s",

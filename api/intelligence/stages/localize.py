@@ -199,10 +199,10 @@ def run(ctx, metric_layer, anomaly: dict, dims: list[str], baseline_window) -> L
         margin = 1.0 + config.LOCALIZE_BASE_RATE_MARGIN
         if not any(abs(delta) > total_move * _population_share(delta, base_v) * margin
                    for _, _, delta, base_v in ranked):
-            return LocalizeResult(
-                inconclusive=True,
-                note="every cell moved in proportion to its share of the population, so no "
-                     "segment is concentrated enough to be called a driver")
+            return _declined(
+                ctx,
+                "every cell moved in proportion to its share of the population, so no "
+                "segment is concentrated enough to be called a driver")
 
     # Every tie is broken, so rank-1 cannot flip between identical runs. PSqueeze already
     # ordered by explanatory power; re-sorting on raw delta would throw that away and hand the
