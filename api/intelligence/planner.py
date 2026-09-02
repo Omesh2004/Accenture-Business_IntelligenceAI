@@ -679,9 +679,19 @@ def ensure_chain(plan, ctx, observations):
     by_intent: dict[str, tools.ToolSpec] = {}
     for spec in tools.catalogue(ctx.persona):
         by_intent.setdefault(spec.intent, spec)
-    for intent in reading.chain:
+    # What the question asked for, plus what this reader always wants. The bias is what makes
+    # one question produce a different answer per persona: same verified numbers, a different
+    # account of them.
+    wanted_intents = list(reading.chain)
+    for intent in ctx.profile.chain_bias:
+        if intent not in wanted_intents:
+            wanted_intents.append(intent)
+
+    for intent in wanted_intents:
         slot = understanding.slot_for(intent)
-        if slot and slot not in reading.wants:
+        # A biased capability is wanted whether or not the question named its slot; that is the
+        # whole point of a persona having standing interests.
+        if slot and slot not in reading.wants and intent in reading.chain:
             continue
         spec = by_intent.get(intent)
         if spec is None or spec.name in ran:
@@ -706,8 +716,16 @@ def drop_meta_calls(plan, ctx):
     reading = comprehend(ctx)
     if not reading.is_investigation:
         return plan
-    kept = [c for c in plan.calls
-            if getattr(tools.REGISTRY.get(c.tool), "intent", "") not in _META_INTENTS]
+    # Anything the reading itself asked for stays. A portfolio ranking is a real answer to "what
+    # moved"; appended to "why did it move" it is a list of other metrics between the reader and
+    # the cause they asked about.
+    asked_for = set(reading.chain) | set(ctx.profile.chain_bias)
+    kept = []
+    for call in plan.calls:
+        intent = getattr(tools.REGISTRY.get(call.tool), "intent", "")
+        if intent in _META_INTENTS and intent not in asked_for:
+            continue
+        kept.append(call)
     if len(kept) == len(plan.calls):
         return plan
     plan.calls = kept
@@ -716,7 +734,7 @@ def drop_meta_calls(plan, ctx):
 
 #: Capabilities about the platform itself. Answers to their own questions, noise inside an
 #: investigation about a metric.
-_META_INTENTS = frozenset({"catalog", "greeting", "help", "cost"})
+_META_INTENTS = frozenset({"catalog", "greeting", "help", "cost", "ranking"})
 
 
 def choose(engine: str = "auto"):

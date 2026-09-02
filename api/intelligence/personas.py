@@ -33,6 +33,12 @@ class Persona:
     lead_in: dict[str, str] = field(default_factory=dict)
     # When no metric is named, prefer these ids in order before falling back to the ranking.
     kpi_preference: tuple[str, ...] = ()
+    # Capabilities this reader always wants on an investigation, on top of what the question
+    # explicitly asked for. This is what makes one question produce four different answers: a CFO
+    # asking "why did it move" wants the money broken down and the outlook, an analyst wants the
+    # path and the method, an ops manager wants the segment and the lever. Same verified numbers,
+    # different account of them.
+    chain_bias: tuple[str, ...] = ()
     # Examples offered by the help intent and by the dashboard's suggestion chips.
     examples: tuple[str, ...] = ()
     # How far to pursue a question. A CFO wants the position and the outlook; an analyst wants the
@@ -69,6 +75,8 @@ REGISTRY: dict[str, Persona] = {
             "action": "Commercial consequence:",
         },
         kpi_preference=("revenue", "loan_approval_volume"),
+        # Money broken into its lines, and where it is heading.
+        chain_bias=("factor", "forecast", "action"),
         examples=("Which metric moved most this week?",
                   "What drove the change in revenue?",
                   "What does the forecast say for revenue?",
@@ -92,6 +100,8 @@ REGISTRY: dict[str, Persona] = {
         },
         kpi_preference=("kyc_completion_rate", "signups",
                         "loan_approval_volume", "transaction_failure_rate"),
+        # Where it leaked, and the lever that closes it.
+        chain_bias=("cause", "action"),
         examples=("Why did KYC completion rate fall?",
                   "Where is the drop concentrated?",
                   "What action is recommended, and who owns it?",
@@ -114,6 +124,8 @@ REGISTRY: dict[str, Persona] = {
             "ranking": "Ranked by materiality:",
         },
         kpi_preference=(),
+        # The path, the attribution and how it was arrived at.
+        chain_bias=("trend", "cause", "factor", "trust"),
         examples=("Why did KYC completion rate fall, and where is it concentrated?",
                   "Was the change price, volume or mix?",
                   "Show the forecast band for transaction failure rate.",
@@ -138,6 +150,8 @@ REGISTRY: dict[str, Persona] = {
         },
         kpi_preference=("transaction_failure_rate", "kyc_completion_rate",
                         "loan_approval_volume"),
+        # Exposure, and whether the finding is provable.
+        chain_bias=("cause", "trust", "action"),
         examples=("Why did KYC completion rate fall?",
                   "Is the loan approval rate verified and safe to act on?",
                   "Where is the KYC drop concentrated by segment?",

@@ -71,11 +71,16 @@ def latest_insight(tenant_id: str, persona: str = "analyst",
         + ("  AND window_days = %(w)s " if window_days else "")
         + ("  AND kpi_id = %(k)s " if kpi_id else "")
         + ") AS i LEFT JOIN ("
-          f"  SELECT anomaly_id, max(materiality) AS materiality FROM {DB}.anomalies FINAL "
+          f"  SELECT anomaly_id, max(materiality) AS materiality, max(detected_at) AS detected_at "
+          f"  FROM {DB}.anomalies FINAL WHERE tenant_id = %(t)s "
           "  GROUP BY anomaly_id"
           ") AS a USING (anomaly_id) "
-          "ORDER BY i.anomaly_id != '' DESC, i.kpi_id IN %(declared)s DESC, "
-          "a.materiality DESC, i.generated_at DESC, i.confidence DESC, i.insight_id ASC LIMIT 1"
+          # Liveness first. A re-sweep writes a NEW anomaly id, so the row it supersedes stays in
+          # the table; ranked on materiality alone the superseded one could win, and the agent
+          # went on quoting the previous run's window after the data had already moved on.
+          "ORDER BY (i.anomaly_id != '' AND a.detected_at > toDateTime(0)) DESC, "
+          "i.kpi_id IN %(declared)s DESC, a.detected_at DESC, a.materiality DESC, "
+          "i.generated_at DESC, i.confidence DESC, i.insight_id ASC LIMIT 1"
     )
     params = {"t": tenant_id, "p": persona, "declared": declared}
     if kpi_id:
